@@ -215,6 +215,99 @@
     transition: opacity 0.2s;
   }
   .copied.shown { opacity: 1; }
+  .vods {
+    margin-top: 36px;
+  }
+  .vods-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .vods-title {
+    color: var(--muted);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .vods-count {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .vod {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .vod-head {
+    padding: 12px 14px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .vod-head:active { background: #1e1e22; }
+  .vod-title {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .vod-meta {
+    margin-top: 5px;
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .lock { color: #ffcc4d; }
+  .vod-actions {
+    display: none;
+    gap: 8px;
+    padding: 0 14px 12px;
+    flex-wrap: wrap;
+  }
+  .vod.open .vod-actions { display: flex; }
+  .vod-actions a, .vod-actions button {
+    flex: 1;
+    min-width: 0;
+    background: #26262c;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    text-align: center;
+    cursor: pointer;
+    font-family: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .vod-actions a.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .vod-actions a:active, .vod-actions button:active { background: #36363e; }
+  .vod-actions a.primary:active { background: var(--accent-hover); }
+  .vods-msg {
+    font-size: 14px;
+    color: var(--muted);
+    padding: 4px 0;
+  }
+  .vods-msg.error { color: #ff8080; }
+  .vods-retry {
+    margin-left: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+    font-family: inherit;
+  }
 </style>
 </head>
 <body>
@@ -233,6 +326,14 @@
   <div class="recent">
     <div class="recent-label">Recent</div>
     <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="vods" id="vods">
+    <div class="vods-head">
+      <span class="vods-title">Ikumi · ASMR VODs</span>
+      <span class="vods-count" id="vodsCount"></span>
+    </div>
+    <div id="vodsList"><div class="vods-msg"><span class="spinner"></span> Loading…</div></div>
   </div>
 
 <script>
@@ -360,6 +461,88 @@ async function buildLink(channel) {
   }
 }
 
+// ── Ikumi ASMR VOD library ──────────────────────────────
+// Her ASMR streams archive as Twitch VODs, many flipped to sub-only ("members").
+// The CloudFront CDN serves the segments with zero auth, so we list every VOD and
+// build its index-dvr.m3u8 straight from the seekPreviewsURL path — no sub needed.
+const IKUMI = 'ikumi';
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function fmtDur(sec) {
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function cleanTitle(t) {
+  // strip her trailing brand boilerplate: chat commands (!Patreon !yt !gg), ⭐, and a dangling "ASMR"
+  let s = t.replace(/!\S+/g, '').replace(/⭐/g, '').replace(/\s+/g, ' ').trim();
+  return s.replace(/\s*ASMR\s*$/i, '').trim() || t;
+}
+
+function vodM3u8(seek) {
+  // seekPreviewsURL: https://{cf}.cloudfront.net/{path}/storyboards/{id}-info.json
+  const m = seek && seek.match(/https:\/\/([^.]+)\.cloudfront\.net\/([^/]+)\/storyboards\//);
+  return m ? `https://${m[1]}.cloudfront.net/${m[2]}/chunked/index-dvr.m3u8` : null;
+}
+
+async function loadVods(login) {
+  const list = $('vodsList');
+  list.innerHTML = `<div class="vods-msg"><span class="spinner"></span> Loading…</div>`;
+  try {
+    const r = await gql(`{ user(login: "${login}") { videos(first: 100, sort: TIME) { edges { node { id title lengthSeconds createdAt resourceRestriction { type } seekPreviewsURL } } } } }`);
+    const vods = (r?.data?.user?.videos?.edges || [])
+      .map(e => ({ ...e.node, m3u8: vodM3u8(e.node.seekPreviewsURL) }))
+      .filter(v => v.m3u8);
+    if (!vods.length) { list.innerHTML = `<div class="vods-msg">No VODs found.</div>`; return; }
+    $('vodsCount').textContent = vods.length;
+    list.innerHTML = vods.map(v => {
+      const vlc = `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(v.m3u8)}`;
+      const lock = v.resourceRestriction ? ` · <span class="lock">🔒 sub-only</span>` : '';
+      return `<div class="vod">
+        <div class="vod-head">
+          <div class="vod-title">${esc(cleanTitle(v.title))}</div>
+          <div class="vod-meta">${fmtDate(v.createdAt)} · ${fmtDur(v.lengthSeconds)}${lock}</div>
+        </div>
+        <div class="vod-actions">
+          <a class="primary" href="${v.m3u8}">Play</a>
+          <a href="${vlc}">VLC</a>
+          <button class="secondary" type="button" data-copy="${v.m3u8}">Copy</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    list.innerHTML = `<div class="vods-msg error">Couldn't load VODs.<button class="vods-retry" id="vodsRetry">Retry</button></div>`;
+    const rt = $('vodsRetry'); if (rt) rt.onclick = () => loadVods(login);
+  }
+}
+
+$('vodsList').addEventListener('click', e => {
+  const copyUrl = e.target.dataset.copy;
+  if (copyUrl) {
+    e.stopPropagation();
+    const b = e.target, old = b.textContent;
+    const done = () => { b.textContent = 'Copied ✓'; setTimeout(() => { b.textContent = old; }, 1500); };
+    if (navigator.clipboard) navigator.clipboard.writeText(copyUrl).then(done).catch(() => {});
+    else {
+      const ta = document.createElement('textarea');
+      ta.value = copyUrl; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch {}
+      ta.remove();
+    }
+    return;
+  }
+  if (e.target.closest('.vod-actions')) return;
+  const head = e.target.closest('.vod-head');
+  if (head) head.parentElement.classList.toggle('open');
+});
+
 $('f').addEventListener('submit', e => {
   e.preventDefault();
   buildLink($('ch').value);
@@ -373,6 +556,7 @@ $('chips').addEventListener('click', e => {
 });
 
 recent.render();
+loadVods(IKUMI);
 
 const params = new URLSearchParams(location.search);
 const initial = params.get('c') || params.get('channel');
