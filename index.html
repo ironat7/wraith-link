@@ -261,7 +261,6 @@
     gap: 8px;
     flex-wrap: wrap;
   }
-  .lock { color: #ffcc4d; }
   .vod-actions {
     display: none;
     gap: 8px;
@@ -330,7 +329,7 @@
 
   <div class="vods" id="vods">
     <div class="vods-head">
-      <span class="vods-title">Ikumi · ASMR VODs</span>
+      <span class="vods-title">Ikumi · sub-only VODs</span>
       <span class="vods-count" id="vodsCount"></span>
     </div>
     <div id="vodsList"><div class="vods-msg"><span class="spinner"></span> Loading…</div></div>
@@ -499,16 +498,15 @@ async function loadVods(login) {
     const r = await gql(`{ user(login: "${login}") { videos(first: 100, sort: TIME) { edges { node { id title lengthSeconds createdAt resourceRestriction { type } seekPreviewsURL } } } } }`);
     const vods = (r?.data?.user?.videos?.edges || [])
       .map(e => ({ ...e.node, m3u8: vodM3u8(e.node.seekPreviewsURL) }))
-      .filter(v => v.m3u8);
-    if (!vods.length) { list.innerHTML = `<div class="vods-msg">No VODs found.</div>`; return; }
+      .filter(v => v.m3u8 && v.resourceRestriction);  // sub-only ("members") VODs only
+    if (!vods.length) { list.innerHTML = `<div class="vods-msg">No sub-only VODs right now.</div>`; return; }
     $('vodsCount').textContent = vods.length;
     list.innerHTML = vods.map(v => {
       const vlc = `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(v.m3u8)}`;
-      const lock = v.resourceRestriction ? ` · <span class="lock">🔒 sub-only</span>` : '';
       return `<div class="vod">
         <div class="vod-head">
           <div class="vod-title">${esc(cleanTitle(v.title))}</div>
-          <div class="vod-meta">${fmtDate(v.createdAt)} · ${fmtDur(v.lengthSeconds)}${lock}</div>
+          <div class="vod-meta">${fmtDate(v.createdAt)} · ${fmtDur(v.lengthSeconds)}</div>
         </div>
         <div class="vod-actions">
           <a class="primary" href="${v.m3u8}">Play</a>
