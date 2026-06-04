@@ -307,6 +307,206 @@
     cursor: pointer;
     font-family: inherit;
   }
+  .tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 4px;
+    margin-bottom: 20px;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    color: var(--muted);
+    border: none;
+    border-radius: 9px;
+    padding: 10px 8px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tab.active { background: var(--accent); color: #fff; }
+  .tab:not(.active):active { background: #26262c; }
+  .tabcount {
+    font-size: 12px;
+    font-weight: 700;
+    opacity: 0.85;
+    margin-left: 4px;
+  }
+  .view { display: none; }
+  .view.shown { display: block; }
+  .live-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .live-htitle {
+    color: var(--muted);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .live-refresh {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 999px;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    font-size: 17px;
+    line-height: 1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .live-refresh:active { background: #26262c; }
+  .live-refresh:disabled { opacity: 0.5; }
+  .live-refresh.spinning { animation: spin 0.7s linear infinite; }
+  .live-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 10px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .live-card:active { background: #1e1e22; }
+  .live-thumb {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    background: #000;
+  }
+  .live-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .live-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: var(--live);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 3px 7px;
+    border-radius: 4px;
+  }
+  .live-viewers {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(0, 0, 0, 0.78);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .live-viewers .vdot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--live);
+  }
+  .live-uptime {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    background: rgba(0, 0, 0, 0.78);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .live-body {
+    display: flex;
+    gap: 10px;
+    padding: 12px 14px 0;
+  }
+  .live-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--border);
+    object-fit: cover;
+  }
+  .live-info { min-width: 0; flex: 1; }
+  .live-name {
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .live-rerun {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    vertical-align: 1px;
+  }
+  .live-title {
+    font-size: 13px;
+    color: var(--text);
+    margin-top: 3px;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .live-game {
+    font-size: 12px;
+    color: var(--accent);
+    margin-top: 4px;
+    font-weight: 600;
+  }
+  .live-actions {
+    display: flex;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+  .live-actions button, .live-actions a {
+    flex: 1;
+    min-width: 0;
+    background: #26262c;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    text-align: center;
+    cursor: pointer;
+    font-family: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .live-actions button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .live-actions button:active, .live-actions a:active { background: #36363e; }
+  .live-actions button.primary:active { background: var(--accent-hover); }
 </style>
 </head>
 <body>
@@ -315,25 +515,43 @@
     <span class="sub">Twitch CDN bypass</span>
   </header>
 
-  <form id="f">
-    <input type="text" id="ch" placeholder="channel" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url">
-    <button type="submit" id="go">Go</button>
-  </form>
-
-  <div class="result" id="result"></div>
-
-  <div class="recent">
-    <div class="recent-label">Recent</div>
-    <div class="chips" id="chips"></div>
+  <div class="tabs">
+    <button class="tab active" type="button" data-tab="live">Live<span class="tabcount" id="liveCount"></span></button>
+    <button class="tab" type="button" data-tab="link">Link</button>
+    <button class="tab" type="button" data-tab="vods">VODs</button>
   </div>
 
-  <div class="vods" id="vods">
-    <div class="vods-head">
-      <span class="vods-title">Ikumi · sub-only VODs</span>
-      <span class="vods-count" id="vodsCount"></span>
+  <section class="view shown" data-view="live">
+    <div class="live-head">
+      <span class="live-htitle">Following · live now</span>
+      <button class="live-refresh" type="button" id="liveRefresh" aria-label="Refresh">↻</button>
     </div>
-    <div id="vodsList"><div class="vods-msg"><span class="spinner"></span> Loading…</div></div>
-  </div>
+    <div id="liveList"><div class="vods-msg"><span class="spinner"></span> Checking who's live…</div></div>
+  </section>
+
+  <section class="view" data-view="link">
+    <form id="f">
+      <input type="text" id="ch" placeholder="channel" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="url">
+      <button type="submit" id="go">Go</button>
+    </form>
+
+    <div class="result" id="result"></div>
+
+    <div class="recent">
+      <div class="recent-label">Recent</div>
+      <div class="chips" id="chips"></div>
+    </div>
+  </section>
+
+  <section class="view" data-view="vods">
+    <div class="vods" id="vods">
+      <div class="vods-head">
+        <span class="vods-title">Ikumi · sub-only VODs</span>
+        <span class="vods-count" id="vodsCount"></span>
+      </div>
+      <div id="vodsList"><div class="vods-msg"><span class="spinner"></span> Loading…</div></div>
+    </div>
+  </section>
 
 <script>
 const CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
@@ -553,12 +771,157 @@ $('chips').addEventListener('click', e => {
   if (ch) buildLink(ch);
 });
 
+// ── Following · live now ────────────────────────────────
+// Static snapshot of the account's Twitch follows (login + display name).
+// Live status is checked anonymously per load via the public GQL endpoint —
+// no auth needed here. To refresh the roster, re-run the ChannelFollows
+// persisted query while logged in and replace this array.
+const FOLLOWS = [
+  {l:"mirunemochi",n:"MiruneMochi"},{l:"meltymim",n:"meltymim"},{l:"menmakiii",n:"menmakiii"},
+  {l:"squchan",n:"SquChan"},{l:"nanasanada",n:"NanaSanada"},{l:"akemikuraii",n:"AkemiKuraii"},
+  {l:"powdur",n:"Powdur"},{l:"ruiasaka",n:"RuiAsaka"},{l:"jellyhoshiumi",n:"JellyHoshiumi"},
+  {l:"emiru",n:"Emiru"},{l:"sinonsinfonia",n:"SinonSinfonia"},{l:"filian",n:"filian"},
+  {l:"maliceevermore",n:"MaliceEvermore"},{l:"kanekolumi",n:"KanekoLumi"},{l:"smugalana",n:"SmugAlana"},
+  {l:"zenyahima",n:"ZenyaHima"},{l:"gmhikaru",n:"GMHikaru"},{l:"halo_sweety",n:"HalO_Sweety"},
+  {l:"ririgaki",n:"ririgaki"},{l:"leaflit",n:"Leaflit"},{l:"zackrawrr",n:"zackrawrr"},
+  {l:"xqc",n:"xQc"},{l:"kiskachan",n:"kiskachan"},{l:"amano_nene",n:"amano_nene"},
+  {l:"pillowdearasmr",n:"PillowDearASMR"},{l:"marimari_en",n:"marimari_en"},{l:"sera_promisu",n:"sera_promisu"},
+  {l:"kirsche",n:"Kirsche"},{l:"fallenshadow",n:"fallenshadow"},{l:"tenma",n:"Tenma"},
+  {l:"asmongold",n:"Asmongold"},{l:"madisonbeer",n:"madisonbeer"},{l:"asmrcham",n:"asmrCham"},
+  {l:"sakae_izumi",n:"Sakae_Izumi"},{l:"senzawa",n:"senzawa"},{l:"watsonamelia_hololiveen",n:"watsonAMElia_hololiveen"},
+  {l:"darling",n:"darling"},{l:"animeexpo",n:"AnimeExpo"},{l:"ikumi",n:"Ikumi"},
+  {l:"jinnytty",n:"Jinnytty"},{l:"nintendo",n:"Nintendo"},{l:"arrumieshanon",n:"ArrumieShanon"},
+  {l:"nasa",n:"NASA"},{l:"offlinetv",n:"OfflineTV"},
+];
+
+let liveLoadedAt = 0;
+let liveLoading = false;
+
+function uptime(iso) {
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function chunk(arr, n) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+async function fetchLive() {
+  const parts = await Promise.all(chunk(FOLLOWS, 20).map(async batch => {
+    const q = '{' + batch.map((c, i) =>
+      `u${i}: user(login:"${c.l}"){ login displayName profileImageURL(width:70) broadcastSettings { title } stream { id type viewersCount createdAt game { displayName } previewImageURL(width:440,height:248) } }`
+    ).join(' ') + '}';
+    const r = await gql(q);
+    return batch.map((c, i) => ({ c, u: r?.data?.['u' + i] }));
+  }));
+  return parts.flat()
+    .filter(x => x.u && x.u.stream)
+    .map(x => ({
+      login: x.u.login,
+      name: x.u.displayName || x.c.n,
+      pfp: x.u.profileImageURL,
+      title: x.u.broadcastSettings?.title || '',
+      game: x.u.stream.game?.displayName || '',
+      viewers: x.u.stream.viewersCount || 0,
+      since: x.u.stream.createdAt,
+      type: x.u.stream.type,
+      preview: x.u.stream.previewImageURL,
+    }))
+    .sort((a, b) => b.viewers - a.viewers);
+}
+
+function renderLive(live) {
+  const el = $('liveList');
+  $('liveCount').textContent = live.length || '';
+  if (!live.length) {
+    el.innerHTML = `<div class="vods-msg">Nobody you follow is live right now.</div>`;
+    return;
+  }
+  const bust = Date.now();
+  el.innerHTML = live.map(s => {
+    const thumb = s.preview ? s.preview + (s.preview.includes('?') ? '&' : '?') + 't=' + bust : '';
+    const rerun = s.type && s.type !== 'live' ? `<span class="live-rerun">${esc(s.type)}</span>` : '';
+    return `<div class="live-card" data-ch="${esc(s.login)}">
+      <div class="live-thumb">
+        ${thumb ? `<img src="${thumb}" alt="">` : ''}
+        <span class="live-badge">Live</span>
+        <span class="live-viewers"><span class="vdot"></span>${s.viewers.toLocaleString()}</span>
+        <span class="live-uptime">${uptime(s.since)}</span>
+      </div>
+      <div class="live-body">
+        ${s.pfp ? `<img class="live-avatar" src="${esc(s.pfp)}" alt="">` : `<div class="live-avatar"></div>`}
+        <div class="live-info">
+          <div class="live-name">${esc(s.name)}${rerun}</div>
+          ${s.title ? `<div class="live-title">${esc(s.title)}</div>` : ''}
+          ${s.game ? `<div class="live-game">${esc(s.game)}</div>` : ''}
+        </div>
+      </div>
+      <div class="live-actions">
+        <button class="primary" type="button" data-wraith="${esc(s.login)}">Wraith Link</button>
+        <a href="https://www.twitch.tv/${esc(s.login)}" target="_blank" rel="noopener">Twitch ↗</a>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadLive(force) {
+  if (liveLoading) return;
+  if (!force && liveLoadedAt && Date.now() - liveLoadedAt < 45000) return;
+  liveLoading = true;
+  const el = $('liveList');
+  if (force || !liveLoadedAt) el.innerHTML = `<div class="vods-msg"><span class="spinner"></span> Checking who's live…</div>`;
+  $('liveRefresh').disabled = true;
+  $('liveRefresh').classList.add('spinning');
+  try {
+    renderLive(await fetchLive());
+    liveLoadedAt = Date.now();
+  } catch (e) {
+    el.innerHTML = `<div class="vods-msg error">Couldn't load live channels.<button class="vods-retry" id="liveRetry">Retry</button></div>`;
+    const rt = $('liveRetry'); if (rt) rt.onclick = () => loadLive(true);
+  } finally {
+    liveLoading = false;
+    $('liveRefresh').disabled = false;
+    $('liveRefresh').classList.remove('spinning');
+  }
+}
+
+$('liveRefresh').onclick = () => loadLive(true);
+$('liveList').addEventListener('click', e => {
+  if (e.target.closest('a')) return;            // let "Twitch ↗" open normally
+  const card = e.target.closest('.live-card');
+  if (!card) return;
+  switchTab('link');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  buildLink(card.dataset.ch);
+});
+
+// ── Tabs ────────────────────────────────────────────────
+let currentTab = 'live';
+let vodsLoaded = false;
+function switchTab(name) {
+  currentTab = name;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('shown', v.dataset.view === name));
+  if (name === 'live') loadLive(false);
+  if (name === 'vods' && !vodsLoaded) { vodsLoaded = true; loadVods(IKUMI); }
+}
+document.querySelector('.tabs').addEventListener('click', e => {
+  const t = e.target.closest('.tab');
+  if (t) switchTab(t.dataset.tab);
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && currentTab === 'live') loadLive(false);
+});
+
 recent.render();
-loadVods(IKUMI);
 
 const params = new URLSearchParams(location.search);
 const initial = params.get('c') || params.get('channel');
-if (initial) buildLink(initial);
+if (initial) { switchTab('link'); buildLink(initial); }
+else switchTab('live');
 </script>
 </body>
 </html>
