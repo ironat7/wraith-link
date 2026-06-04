@@ -368,12 +368,15 @@
   .live-refresh:disabled { opacity: 0.5; }
   .live-refresh.spinning { animation: spin 0.7s linear infinite; }
   .live-card {
+    display: block;
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 12px;
     overflow: hidden;
     margin-bottom: 10px;
     cursor: pointer;
+    text-decoration: none;
+    color: inherit;
     -webkit-tap-highlight-color: transparent;
   }
   .live-card:active { background: #1e1e22; }
@@ -435,7 +438,7 @@
   .live-body {
     display: flex;
     gap: 10px;
-    padding: 12px 14px 0;
+    padding: 12px 14px;
   }
   .live-avatar {
     width: 40px;
@@ -479,34 +482,6 @@
     margin-top: 4px;
     font-weight: 600;
   }
-  .live-actions {
-    display: flex;
-    gap: 8px;
-    padding: 12px 14px;
-  }
-  .live-actions button, .live-actions a {
-    flex: 1;
-    min-width: 0;
-    background: #26262c;
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 11px;
-    font-size: 14px;
-    font-weight: 600;
-    text-decoration: none;
-    text-align: center;
-    cursor: pointer;
-    font-family: inherit;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .live-actions button.primary {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-  }
-  .live-actions button:active, .live-actions a:active { background: #36363e; }
-  .live-actions button.primary:active { background: var(--accent-hover); }
 </style>
 </head>
 <body>
@@ -812,12 +787,12 @@ function chunk(arr, n) {
 async function fetchLive() {
   const parts = await Promise.all(chunk(FOLLOWS, 20).map(async batch => {
     const q = '{' + batch.map((c, i) =>
-      `u${i}: user(login:"${c.l}"){ login displayName profileImageURL(width:70) broadcastSettings { title } stream { id type viewersCount createdAt game { displayName } previewImageURL(width:440,height:248) } }`
+      `u${i}: user(login:"${c.l}"){ login displayName profileImageURL(width:70) broadcastSettings { title } stream { id type viewersCount createdAt game { displayName } previewImageURL(width:440,height:248) } videos(first:1, sort:TIME){ edges { node { seekPreviewsURL } } } }`
     ).join(' ') + '}';
     const r = await gql(q);
     return batch.map((c, i) => ({ c, u: r?.data?.['u' + i] }));
   }));
-  return parts.flat()
+  const live = parts.flat()
     .filter(x => x.u && x.u.stream)
     .map(x => ({
       login: x.u.login,
@@ -829,8 +804,26 @@ async function fetchLive() {
       since: x.u.stream.createdAt,
       type: x.u.stream.type,
       preview: x.u.stream.previewImageURL,
+      streamId: x.u.stream.id,
+      seek: x.u.videos?.edges?.[0]?.node?.seekPreviewsURL || null,
     }))
     .sort((a, b) => b.viewers - a.viewers);
+  // pre-build each channel's VLC deep-link so a tap on the card opens instantly
+  await Promise.all(live.map(async s => { s.vlc = await buildVlc(s); }));
+  return live;
+}
+
+// VLC x-callback link straight to the channel's sub-free CDN stream. Reuses the
+// live stream id/createdAt already in hand; the CloudFront distribution comes
+// from the channel's latest VOD (seekPreviewsURL). Null if it can't be built.
+async function buildVlc(s) {
+  const m = s.seek && s.seek.match(/https:\/\/([^.]+)\.cloudfront\.net\//);
+  const cfDist = m ? m[1] : null;
+  if (!cfDist || !s.streamId || !s.since) return null;
+  const ts = Math.floor(new Date(s.since).getTime() / 1000);
+  const hash = (await sha1hex(`${s.login}_${s.streamId}_${ts}`)).substring(0, 20);
+  const m3u8 = `https://${cfDist}.cloudfront.net/${hash}_${s.login}_${s.streamId}_${ts}/chunked/index-dvr.m3u8`;
+  return `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(m3u8)}`;
 }
 
 function renderLive(live) {
@@ -844,7 +837,9 @@ function renderLive(live) {
   el.innerHTML = live.map(s => {
     const thumb = s.preview ? s.preview + (s.preview.includes('?') ? '&' : '?') + 't=' + bust : '';
     const rerun = s.type && s.type !== 'live' ? `<span class="live-rerun">${esc(s.type)}</span>` : '';
-    return `<div class="live-card" data-ch="${esc(s.login)}">
+    const href = s.vlc || `https://www.twitch.tv/${esc(s.login)}`;
+    const ext = s.vlc ? '' : ' target="_blank" rel="noopener"';
+    return `<a class="live-card" href="${href}"${ext} data-ch="${esc(s.login)}">
       <div class="live-thumb">
         ${thumb ? `<img src="${thumb}" alt="">` : ''}
         <span class="live-badge">Live</span>
@@ -859,11 +854,7 @@ function renderLive(live) {
           ${s.game ? `<div class="live-game">${esc(s.game)}</div>` : ''}
         </div>
       </div>
-      <div class="live-actions">
-        <button class="primary" type="button" data-wraith="${esc(s.login)}">Wraith Link</button>
-        <a href="https://www.twitch.tv/${esc(s.login)}" target="_blank" rel="noopener">Twitch ↗</a>
-      </div>
-    </div>`;
+    </a>`;
   }).join('');
 }
 
@@ -890,12 +881,8 @@ async function loadLive(force) {
 
 $('liveRefresh').onclick = () => loadLive(true);
 $('liveList').addEventListener('click', e => {
-  if (e.target.closest('a')) return;            // let "Twitch ↗" open normally
   const card = e.target.closest('.live-card');
-  if (!card) return;
-  switchTab('link');
-  window.scrollTo({ top: 0, behavior: 'smooth' });
-  buildLink(card.dataset.ch);
+  if (card) recent.add(card.dataset.ch);   // keep Recent fresh; the VLC link opens via the anchor itself
 });
 
 // ── Tabs ────────────────────────────────────────────────
