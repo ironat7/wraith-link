@@ -1040,23 +1040,31 @@ $('chips').addEventListener('click', e => {
 });
 
 // ── Following · live now ────────────────────────────────
-// Static snapshot of the account's Twitch follows (login + display name).
-// Live status is checked anonymously per load via the public GQL endpoint —
-// no auth needed here. To refresh the roster, re-run the ChannelFollows
-// persisted query while logged in and replace this array.
+// Static snapshot of the account's Twitch follows (login + display name),
+// newest follow first. Live status is checked anonymously per load via the
+// public GQL endpoint — no auth needed here.
+//
+// To refresh: on a logged-in twitch.tv tab, POST to gql.twitch.tv/gql with
+// Client-Id kimne78kx3ncx6brgo4mv6wki5h0ko + `Authorization: OAuth <auth-token
+// cookie>` and the ChannelFollows persisted query:
+//   sha256Hash eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907
+//   variables  {limit:100, order:"ASC", cursor}   → data.user.follows.edges
+// The raw (non-persisted) `follows` field is service-blocked, and the Following
+// grid only paginates on trusted scroll events, so this query is the only
+// reliable route.
 const FOLLOWS = [
-  {l:"mirunemochi",n:"MiruneMochi"},{l:"meltymim",n:"meltymim"},{l:"menmakiii",n:"menmakiii"},
-  {l:"squchan",n:"SquChan"},{l:"nanasanada",n:"NanaSanada"},{l:"powdur",n:"Powdur"},
-  {l:"ruiasaka",n:"RuiAsaka"},{l:"jellyhoshiumi",n:"JellyHoshiumi"},{l:"emiru",n:"Emiru"},
-  {l:"sinonsinfonia",n:"SinonSinfonia"},{l:"filian",n:"filian"},{l:"maliceevermore",n:"MaliceEvermore"},
-  {l:"kanekolumi",n:"KanekoLumi"},{l:"smugalana",n:"SmugAlana"},{l:"zenyahima",n:"ZenyaHima"},
-  {l:"halo_sweety",n:"HalO_Sweety"},{l:"leaflit",n:"Leaflit"},{l:"zackrawrr",n:"zackrawrr"},
-  {l:"xqc",n:"xQc"},{l:"kiskachan",n:"kiskachan"},{l:"amano_nene",n:"amano_nene"},
-  {l:"pillowdearasmr",n:"PillowDearASMR"},{l:"marimari_en",n:"marimari_en"},{l:"sera_promisu",n:"sera_promisu"},
-  {l:"kirsche",n:"Kirsche"},{l:"fallenshadow",n:"fallenshadow"},{l:"tenma",n:"Tenma"},
-  {l:"asmongold",n:"Asmongold"},{l:"sakae_izumi",n:"Sakae_Izumi"},{l:"senzawa",n:"senzawa"},
-  {l:"watsonamelia_hololiveen",n:"watsonAMElia_hololiveen"},{l:"ikumi",n:"Ikumi"},{l:"jinnytty",n:"Jinnytty"},
-  {l:"nintendo",n:"Nintendo"},{l:"nasa",n:"NASA"},
+  {l:"kaise",n:"Kaise"},{l:"meltymim",n:"meltymim"},{l:"menmakiii",n:"menmakiii"},
+  {l:"nanasanada",n:"NanaSanada"},{l:"powdur",n:"Powdur"},{l:"ruiasaka",n:"RuiAsaka"},
+  {l:"jellyhoshiumi",n:"JellyHoshiumi"},{l:"emiru",n:"Emiru"},{l:"sinonsinfonia",n:"SinonSinfonia"},
+  {l:"filian",n:"filian"},{l:"maliceevermore",n:"MaliceEvermore"},{l:"kanekolumi",n:"KanekoLumi"},
+  {l:"smugalana",n:"SmugAlana"},{l:"zenyahima",n:"ZenyaHima"},{l:"halo_sweety",n:"HalO_Sweety"},
+  {l:"leaflit",n:"Leaflit"},{l:"zackrawrr",n:"zackrawrr"},{l:"xqc",n:"xQc"},
+  {l:"kiskachan",n:"kiskachan"},{l:"amano_nene",n:"amano_nene"},{l:"pillowdearasmr",n:"PillowDearASMR"},
+  {l:"marimari_en",n:"marimari_en"},{l:"sera_promisu",n:"sera_promisu"},{l:"kirsche",n:"Kirsche"},
+  {l:"fallenshadow",n:"fallenshadow"},{l:"tenma",n:"Tenma"},{l:"asmongold",n:"Asmongold"},
+  {l:"sakae_izumi",n:"Sakae_Izumi"},{l:"senzawa",n:"senzawa"},{l:"watsonamelia_hololiveen",n:"watsonAMElia_hololiveen"},
+  {l:"ikumi",n:"Ikumi"},{l:"jinnytty",n:"Jinnytty"},{l:"nintendo",n:"Nintendo"},
+  {l:"nasa",n:"NASA"},
 ];
 
 let liveLoadedAt = 0;
