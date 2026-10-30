@@ -551,12 +551,14 @@ function unlock() {
 const P = {
   gen: 0, login: null, user: null, hls: null, tokenP: null,
   feed: null,                        // what's on screen: 'live' | 'cdn' | 'vod'
-  pref: store.get('feed', 'live'),   // the feed Jerry picked: 'live' | 'cdn'
+  pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
   groups: [], base: null, start: 0, subOnly: false,
   ad: false, adEnd: 0, cover: false, skipped: 0,
   rate: 'normal', stalls: [], retries: 0, fixes: 0, vod: null, timer: 0,
   liveT: TARGET.live, calm: 0,       // current live target, and since when playback has been smooth
+  quietUntil: 0,                     // stalls before this are the player starting up, not the network
+  errs: {},                          // player errors this stream, for the stats panel
 
   open(login, gesture, cached) {
     this.close();
@@ -643,6 +645,7 @@ const P = {
       maxBufferLength: 8, maxMaxBufferLength: 12, backBufferLength: 10,
       abrEwmaDefaultEstimate: 8e6,
       startFragPrefetch: true,
+      preserveManualLevelOnError: true,   // a failed load on Source shouldn't quietly switch to Auto
     });
     hls.on(Hls.Events.MANIFEST_PARSED, () => this.onManifest());
     hls.on(Hls.Events.FRAG_BUFFERED, () => { this.retries = 0; });
@@ -656,6 +659,7 @@ const P = {
   onManifest() {
     this.groups = this.hls.levels.map((l, i) => ({ i, id: l.attrs?.VIDEO || `${l.height}p`, h: l.height || 0, fps: Math.round(l.frameRate || 0), br: l.bitrate }));
     this.applyQuality();
+    if (document.hidden) BG.start();   // the stream (re)started while the app was in the background
   },
 
   qualities() {
@@ -663,13 +667,17 @@ const P = {
     return g.map(x => ({ id: x.id, label: x.id === 'chunked' ? `${x.h}p${x.fps > 30 ? x.fps : ''} · source` : x.id }));
   },
 
+  levelIndex() {   // the hls.js level for the picked quality
+    const top = this.groups.reduce((a, b) => (b.br > a.br ? b : a));
+    return (this.q === 'source' ? top : this.groups.find(x => x.id === this.q) || top).i;
+  },
+
   applyQuality() {
     const hls = this.hls;
     if (!hls || !this.groups.length) return;
     if (this.q === 'auto') { hls.currentLevel = -1; return; }
-    const top = this.groups.reduce((a, b) => (b.br > a.br ? b : a));
-    const g = this.q === 'source' ? top : this.groups.find(x => x.id === this.q) || top;
-    if (hls.currentLevel !== g.i) hls.currentLevel = g.i;
+    const i = this.levelIndex();
+    if (hls.currentLevel !== i) hls.currentLevel = i;
   },
 
   setQuality(id) {
@@ -687,6 +695,7 @@ const P = {
 
   onError(d) {
     const Hls = window.Hls;
+    this.noteErr(d);
     if (!d.fatal) return;
     if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) return this.hls.recoverMediaError();
     const text = String(d.response?.text || d.error?.message || '');
@@ -804,6 +813,8 @@ const P = {
     UI.lat();
     const v = this.active();
     if (!v || this.feed === 'vod' || v.paused) return;
+    // a picked quality stays picked, whatever hls.js decides after an error
+    if (this.feed === 'live' && this.q !== 'auto' && this.hls?.autoLevelEnabled && this.groups.length) this.hls.loadLevel = this.levelIndex();
     if (v.readyState < 3) {   // stalled: hop the hole a cut-out ad leaves if picture is buffered past it
       const b = v.buffered;
       for (let i = 0; i < b.length; i++) if (b.start(i) > v.currentTime + 0.1) { v.currentTime = b.start(i) + 0.05; break; }
@@ -830,8 +841,14 @@ const P = {
     if (v.playbackRate !== r) v.playbackRate = r;
   },
 
+  noteErr(d, where = '') {   // routine stall notices and the page's own aborts left out
+    if (/^(buffer(StalledError|NudgeOnStall|SeekOverHole)|aborted)$/.test(d.details)) return;
+    const k = where + d.details + (d.fatal ? ' (fatal)' : '');
+    this.errs[k] = (this.errs[k] || 0) + 1;
+  },
+
   noteStall() {
-    if (this.feed !== 'live' || this.ad || !this.hls) return;
+    if (this.feed !== 'live' || this.ad || !this.hls || Date.now() < this.quietUntil) return;
     const now = Date.now();
     this.liveT = Math.min(TARGET.liveMax, this.liveT + 0.5); this.calm = now;   // more cushion next time
     if (this.q === 'auto') return;
@@ -879,7 +896,7 @@ const P = {
     vC.controls = false; vL.pause(); vL.removeAttribute('src'); vL.load();
     Object.assign(this, { login: null, user: null, feed: null, groups: [], base: null, subOnly: false, ad: false, adEnd: 0,
       cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, vod: null, tokenP: null, seekPending: false,
-      liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null });
+      liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null, quietUntil: 0, errs: {} });
     primed = null;
     stage.classList.remove('vod');
     Chat.close(); UI.clear();
@@ -890,21 +907,28 @@ const P = {
 // playback carry on. So while the page is hidden the sound moves to an audio element: Twitch's
 // audio_only feed through the relay for live (fetched directly, it would get ads), or the CDN copy's
 // audio_only playlist for sub-only streams and past broadcasts.
+// iOS gives Control Center to the page's biggest player even while it sits paused, and never to a
+// muted one, so the pictures are muted while away and the buttons there drive the sound.
 const BG = {
   ios, on: false, hls: null, srcs: null,
+  held: false,   // paused from the lock screen or Control Center: stays paused on return
   start() {
     const v = P.active();
-    if (!this.ios || this.on || !v || v.muted || P.userPaused) return;
+    if (!this.ios || this.on || !v || Sound.muted || P.userPaused) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
-    this.on = true;
+    this.on = true; this.held = false;
     aBG.muted = false;
     if (P.feed === 'live') {
-      P.hls.stopLoad();   // the video player stays quiet while away, so the relay isn't polled twice
+      // the picture's player lets go of its stream while away: the relay isn't polled twice, iOS gets
+      // the memory back, and on return it starts clean at the live edge
+      P.hls.stopLoad();
+      P.hls.detachMedia();
       // it takes ~2.5 s to start, so it starts ~2.5 s further back: the sound resumes where the
       // picture stopped, with more cushion for the slower timers of a backgrounded page
       const h = this.hls = new window.Hls({ pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12 });
       h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly
+        P.noteErr(d, 'background ');
         if (!d.fatal || this.hls !== h) return;
         if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) h.recoverMediaError();
         else setTimeout(() => { if (this.hls === h) h.startLoad(-1); }, 2000);
@@ -919,6 +943,7 @@ const BG = {
     }
     const p = aBG.play(); if (p) p.catch(() => {});
     v.pause();
+    vL.muted = vC.muted = true;
   },
   next() {
     const u = this.srcs?.shift();
@@ -930,14 +955,22 @@ const BG = {
   stop(silent) {
     if (!this.on) return;
     this.on = false;
-    const playing = !aBG.paused, at = aBG.currentTime;
+    const at = aBG.currentTime;
     if (this.hls) { this.hls.destroy(); this.hls = null; }
     aBG.pause(); aBG.removeAttribute('src'); aBG.load(); this.srcs = null;
+    vL.muted = vC.muted = Sound.muted;
     if (silent) return;
-    if (P.feed === 'live' && P.hls) P.hls.startLoad(-1);
+    if (P.feed === 'live' && P.hls) {
+      P.quietUntil = Date.now() + 6000;   // the restart's own buffering isn't a bad connection
+      if (!P.hls.media) P.hls.attachMedia(vL);
+      P.hls.once(window.Hls.Events.LEVEL_UPDATED, () => P.toLiveEdge());   // to the edge once the playlist is fresh
+      P.hls.startLoad(-1);
+      if (!this.held) UI.spin(true);
+    }
     else if (P.feed === 'vod' && at) vC.currentTime = at;
     else if (P.feed === 'cdn') P.cdnSeek();
-    if (playing) P.play(P.active()); else P.userPaused = true;   // paused from the lock screen: stay paused
+    if (this.held) P.userPaused = true;
+    else { P.play(P.active()); if (!Sound.muted) UI.unmute(false); }
     UI.playIcon();
   },
 };
@@ -950,12 +983,22 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const ms = navigator.mediaSession;
   ms.setActionHandler('play', () => {
     if (BG.on) {
-      const p = BG.hls?.liveSyncPosition;   // back from a long pause: rejoin live
-      if (Number.isFinite(p) && p > aBG.currentTime + 3) aBG.currentTime = p;
+      BG.held = false;
+      const h = BG.hls;
+      if (h) {   // live: back at the edge as soon as the playlist has reloaded
+        h.once(window.Hls.Events.LEVEL_UPDATED, () => {
+          const p = h.liveSyncPosition;
+          if (BG.hls === h && Number.isFinite(p) && p > aBG.currentTime + 3) aBG.currentTime = p;
+        });
+        h.startLoad(-1);
+      }
       aBG.play().catch(() => {});
     } else if (P.active()?.paused) togglePlay();
   });
-  ms.setActionHandler('pause', () => { if (BG.on) aBG.pause(); else if (P.active() && !P.active().paused) togglePlay(); });
+  ms.setActionHandler('pause', () => {
+    if (BG.on) { BG.held = true; aBG.pause(); BG.hls?.stopLoad(); }   // stopped: no relay polling while paused
+    else if (P.active() && !P.active().paused) togglePlay();
+  });
 }
 
 const Sound = {
@@ -1444,6 +1487,8 @@ const Sheet = {
     if (v && v.videoHeight) lines.push(`Picture: ${v.videoWidth}×${v.videoHeight}${v.playbackRate !== 1 ? ` · speed ${v.playbackRate}×` : ''}`);
     if (v) lines.push(`Buffered: ${bufAhead(v).toFixed(1)} s`);
     if (P.skipped) lines.push(`Ad breaks skipped: ${P.skipped}`);
+    const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
     s.textContent = '';
     for (const x of lines) s.append(el('div', null, x));
   },
