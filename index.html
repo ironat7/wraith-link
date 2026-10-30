@@ -1420,7 +1420,8 @@ $('bigPlay').onclick = () => { UI.big(false); unlock(); P.userPaused = false; P.
 $('bMute').onclick = () => { unlock(); Sound.set(!Sound.muted); };
 $('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); };
 $('bBack').onclick = $('bBack2').onclick = () => back();
-$('bChat').onclick = () => $('watch').classList.toggle('nochat');
+$('watch').classList.toggle('nochat', !store.get('sideChat', false));   // side chat: hidden until you show it, then as you left it
+$('bChat').onclick = () => store.set('sideChat', !$('watch').classList.toggle('nochat'));
 $('bLat').onclick = $('bSet').onclick = () => Sheet.open();
 $('bFull').onclick = () => {
   const v = P.active();
@@ -1606,7 +1607,7 @@ function route(gesture) {
   else if (/^\d+$/.test(v || '')) P.openVod(v, gesture);
   else {
     P.close();
-    $('watch').hidden = true; $('home').hidden = false; $('watch').classList.remove('nochat');
+    $('watch').hidden = true; $('home').hidden = false;
     document.title = 'Wraith';
     Home.load();
   }
