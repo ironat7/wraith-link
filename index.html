@@ -908,15 +908,26 @@ const P = {
 // audio_only feed through the relay for live (fetched directly, it would get ads), or the CDN copy's
 // audio_only playlist for sub-only streams and past broadcasts.
 // iOS gives Control Center to the page's biggest player even while it sits paused, and never to a
-// muted one, so the pictures are muted while away and the buttons there drive the sound.
+// muted one, so the pictures are muted while away and the buttons there drive the sound. WebKit
+// makes that choice as the app leaves, before the sound has started, finds no player it can use and
+// drops the page; nothing makes it look again, so Control Center stays on whatever app played last.
+// Setting the track details again once the sound is playing makes it look again.
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
+  log: store.get('bglog', []),   // what happened while away, for the stats panel
+  note(s) { this.log = [...this.log, `${new Date().toTimeString().slice(0, 8)} ${s}`].slice(-8); store.set('bglog', this.log); },
+  claim() {
+    const ms = navigator.mediaSession, m = ms?.metadata;
+    if (!ms) return;
+    try { ms.metadata = m ? new MediaMetadata({ title: m.title, artist: m.artist, album: m.album, artwork: [...m.artwork] }) : null; } catch {}
+  },
   start() {
     const v = P.active();
     if (!this.ios || this.on || !v || Sound.muted || P.userPaused) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
     this.on = true; this.held = false;
+    this.note('left: sound starting');
     aBG.muted = false;
     if (P.feed === 'live') {
       // the picture's player lets go of its stream while away: the relay isn't polled twice, iOS gets
@@ -960,6 +971,7 @@ const BG = {
     aBG.pause(); aBG.removeAttribute('src'); aBG.load(); this.srcs = null;
     vL.muted = vC.muted = Sound.muted;
     if (silent) return;
+    this.note(this.held ? 'back, held paused' : 'back');
     if (P.feed === 'live' && P.hls) {
       P.quietUntil = Date.now() + 6000;   // the restart's own buffering isn't a bad connection
       if (!P.hls.media) P.hls.attachMedia(vL);
@@ -975,6 +987,12 @@ const BG = {
   },
 };
 aBG.addEventListener('error', () => { if (BG.on && BG.srcs) BG.next(); });
+aBG.addEventListener('playing', () => {
+  if (!BG.on) return;
+  BG.note('sound playing');
+  BG.claim();
+  setTimeout(() => { if (BG.on) BG.claim(); }, 2000);   // and again, in case it wasn't ready for the first
+});
 document.addEventListener('visibilitychange', () => {
   if ($('watch').hidden) return;
   if (document.hidden) BG.start(); else BG.stop();
@@ -982,6 +1000,7 @@ document.addEventListener('visibilitychange', () => {
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const ms = navigator.mediaSession;
   ms.setActionHandler('play', () => {
+    BG.note('control: play');
     if (BG.on) {
       BG.held = false;
       const h = BG.hls;
@@ -996,6 +1015,7 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
     } else if (P.active()?.paused) togglePlay();
   });
   ms.setActionHandler('pause', () => {
+    BG.note('control: pause');
     if (BG.on) { BG.held = true; aBG.pause(); BG.hls?.stopLoad(); }   // stopped: no relay polling while paused
     else if (P.active() && !P.active().paused) togglePlay();
   });
@@ -1018,7 +1038,13 @@ for (const v of [vL, vC]) {
     UI.playIcon();
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
-  v.addEventListener('pause', () => UI.playIcon());
+  let pausedAt = 0;
+  v.addEventListener('pause', () => { pausedAt = performance.now(); UI.playIcon(); });
+  // the iPhone's fullscreen player pauses the video when you close it: play on, unless it was
+  // already paused before that
+  v.addEventListener('webkitendfullscreen', () => {
+    if (v.paused && P.active() === v && performance.now() - pausedAt < 1500) { P.userPaused = false; P.play(v); }
+  });
   v.addEventListener('waiting', () => {
     if (P.active() !== v) return;
     UI.spin(true);
@@ -1330,6 +1356,9 @@ const UI = {
     $('iSub').textContent = [day(v.createdAt), dur(v.lengthSeconds), v.game?.displayName].filter(Boolean).join(' · ');
     $('twLink').href = `https://www.twitch.tv/videos/${v.id}`;
     document.title = (v.title || 'Video') + ' · Wraith';
+    if ('mediaSession' in navigator) {
+      try { navigator.mediaSession.metadata = new MediaMetadata({ title: v.title || 'Past broadcast', artist: v.owner?.displayName || '', artwork: v.owner?.profileImageURL ? [{ src: v.owner.profileImageURL, sizes: '150x150' }] : [] }); } catch {}
+    }
   },
   offline(u, ended) {
     this.spin(false);
@@ -1493,6 +1522,7 @@ const Sheet = {
     if (P.skipped) lines.push(`Ad breaks skipped: ${P.skipped}`);
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
+    if (BG.log.length) lines.push(`Away: ${BG.log.slice(-6).join(' · ')}`);
     s.textContent = '';
     for (const x of lines) s.append(el('div', null, x));
   },
