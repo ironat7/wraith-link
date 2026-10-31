@@ -1116,12 +1116,15 @@ const Chat = {
     if (this.queue.length > 800) this.queue.splice(0, this.queue.length - 800);
   },
 
+  // Out of sight (app in the background, side chat hidden, Videos tab) nothing is drawn: lines
+  // wait in the queue and only the newest screenful is drawn once chat is back in view.
   flush() {
-    if (!this.queue.length) return;
+    if (!this.queue.length || document.hidden || !this.box.offsetParent) return;
     const cut = Date.now() - P.chatDelay(), frag = document.createDocumentFragment();
     let n = 0;
-    while (this.queue.length && this.queue[0].ts <= cut) { frag.appendChild(this.render(this.queue.shift().m)); n++; }
+    while (n < this.queue.length && this.queue[n].ts <= cut) n++;
     if (!n) return;
+    for (const q of this.queue.splice(0, n).slice(-220)) frag.appendChild(this.render(q.m));
     this.box.appendChild(frag);
     if (this.stick) {
       const extra = this.box.children.length - 220;
