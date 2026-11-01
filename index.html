@@ -149,6 +149,8 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .tw { display: flex; align-items: center; gap: 5px; height: 32px; padding: 0 6px; color: var(--fg-3); font-size: 13px; }
 .tw svg { width: 15px; height: 15px; }
 .pane { position: relative; flex: 1; min-height: 0; }
+#paneChat { display: flex; flex-direction: column; }
+.log { position: relative; flex: 1; min-height: 0; }
 .chat { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 0 calc(10px + var(--sab)); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .m { padding: 2px max(14px, var(--sar)) 2px max(14px, var(--sal)); }
 .m .n { font-weight: 700; }
@@ -159,8 +161,22 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .m.sys { margin: 5px 0; padding-top: 6px; padding-bottom: 6px; color: var(--fg-2); background: rgba(255,255,255,.035); box-shadow: inset 2px 0 var(--fg-3); }
 .m.sys .tx { display: block; color: var(--fg); margin-top: 2px; }
 .m.note { color: var(--fg-3); font-size: 13px; }
+.m.note.err { color: var(--warn); }
 .m.gone { opacity: .3; }
 .more { position: absolute; left: 50%; bottom: calc(14px + var(--sab)); transform: translateX(-50%); height: 34px; padding: 0 14px; border-radius: 999px; background: var(--fg); color: #000; font-size: 13px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+/* the box for sending (see Talk), under a channel's chat */
+.say { display: none; align-items: center; gap: 8px; padding: 8px max(10px, var(--sar)) calc(8px + var(--sab)) max(10px, var(--sal)); border-top: 1px solid var(--line); }
+#paneChat.talk .say { display: flex; }
+#paneChat.talk .chat { padding-bottom: 10px; }
+#paneChat.talk .more { bottom: 14px; }
+.say input { flex: 1; min-width: 0; height: 40px; padding: 0 15px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); outline: 0; font-size: 16px; -webkit-appearance: none; appearance: none; }
+.say input:focus { border-color: var(--line-2); }
+.say input::placeholder { color: var(--fg-3); }
+.send { width: 40px; height: 40px; display: grid; place-items: center; flex: none; border-radius: 50%; background: var(--fg); color: #000; }
+.send svg { width: 20px; height: 20px; }
+.send:disabled { opacity: .3; cursor: default; }
+.signin { flex: 1; height: 40px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--fg-2); font-size: 14px; font-weight: 600; }
+.signin:active { background: var(--bg-3); }
 .vods { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px max(14px, var(--sar)) calc(16px + var(--sab)) max(14px, var(--sal)); }
 .vod { display: grid; grid-template-columns: 136px minmax(0, 1fr); gap: 12px; padding: 6px 0; }
 .vod:active { opacity: .7; }
@@ -185,6 +201,9 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; max-height: none; aspect-ratio: auto; }
 #watch.full .hud { padding: var(--sat) 0 var(--sab); }
 #watch.full #bChat { display: none; }
+/* typing, with the on-screen keyboard up: picture, chat and the box share the space above it (see fitKeyboard) */
+#watch.kb .info, #watch.kb .tabs { display: none; }
+#watch.kb .say { padding-bottom: 8px; }
 
 /* ── settings sheet ───────────────────────────────── */
 .sheet { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
@@ -263,7 +282,14 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
       <span class="sp"></span>
       <a class="tw" id="twLink" target="_blank" rel="noopener">Twitch <span data-i="ext"></span></a>
     </nav>
-    <div class="pane" id="paneChat"><div class="chat" id="chat"></div><button class="more" id="more" type="button" hidden>New messages</button></div>
+    <div class="pane" id="paneChat">
+      <div class="log"><div class="chat" id="chat"></div><button class="more" id="more" type="button" hidden>New messages</button></div>
+      <form class="say" id="say" autocomplete="off">
+        <input id="sayTx" type="text" enterkeyhint="send" maxlength="500" placeholder="Send a message" aria-label="Chat message" autocomplete="off" hidden>
+        <button class="send" id="sayGo" type="submit" aria-label="Send" data-i="send" hidden disabled></button>
+        <button class="signin" id="signin" type="button">Sign in with Twitch to chat</button>
+      </form>
+    </div>
     <div class="pane" id="paneVods" hidden><div class="vods" id="vods"></div></div>
   </aside>
 </main>
@@ -281,6 +307,9 @@ const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 // "Wraith relay" Apps Script. Twitch's playlist servers turn away browsers on other
 // sites, so playlists come through it; the video itself loads straight from Twitch's CDN.
 const RELAY = 'https://script.google.com/macros/s/AKfycbyXQaL8s2_Vo-DTpCZhQCaPvHPF6hSbW4W3-RcmzgicJVtYTP9rCJfzdP5gViglpEIJZA/exec';
+// Client ID of the "Wraith link" app registered at dev.twitch.tv, which signing in to chat goes
+// through. Its redirect URLs are this page and http://localhost:8765/. No ID, no chat box.
+const CHAT_APP = '';
 // ironat___'s follows, newest first. Refresh from Twitch's ChannelFollows query.
 const FOLLOWS = ('forsen redify kaise meltymim menmakiii powdur ruiasaka jellyhoshiumi emiru filian maliceevermore '
   + 'smugalana zenyahima halo_sweety leaflit zackrawrr xqc kiskachan amano_nene pillowdearasmr marimari_en sera_promisu '
@@ -313,6 +342,7 @@ const PATHS = {
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   chat: '<path d="M5 5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
+  send: '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
 };
 const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[n]}</svg>`;
 function setIcon(node, n) {
@@ -1092,16 +1122,18 @@ const Chat = {
   open(login) {
     this.close();
     this.login = login; this.stick = true; this.box.textContent = ''; $('more').hidden = true;
-    this.note('Connecting to chat…');
+    this.note('Connecting to chat…').classList.add('wait');
     this.connect();
     this.timer = setInterval(() => this.flush(), 120);
     this.loadGlobal();
+    Talk.show();
   },
 
   note(text) {
     const d = el('div', 'm note', text);
     this.box.appendChild(d);
     if (this.stick) this.box.scrollTop = this.box.scrollHeight;
+    return d;
   },
 
   connect() {
@@ -1126,8 +1158,12 @@ const Chat = {
     switch (m.cmd) {
       case 'PING': this.ws?.send('PONG :' + (m.text || 'tmi.twitch.tv')); break;
       case 'RECONNECT': this.ws?.close(); break;
-      case 'ROOMSTATE': if (this.retry || this.box.querySelector('.note')) { this.retry = 0; this.box.querySelectorAll('.m.note').forEach(n => n.remove()); } break;
-      case 'PRIVMSG': case 'USERNOTICE': this.queue.push({ ts: +m.tags['tmi-sent-ts'] || Date.now(), m }); break;
+      case 'ROOMSTATE': if (this.retry || this.box.querySelector('.wait')) { this.retry = 0; this.box.querySelectorAll('.wait').forEach(n => n.remove()); } break;
+      case 'PRIVMSG': case 'USERNOTICE':
+        // what you send shows at once, rather than waiting with everyone else's for the picture
+        if (m.cmd === 'PRIVMSG' && Talk.me && m.tags['user-id'] === Talk.me.id) this.queue.unshift({ ts: 0, m });
+        else this.queue.push({ ts: +m.tags['tmi-sent-ts'] || Date.now(), m });
+        break;
       case 'CLEARCHAT': if (m.text) this.box.querySelectorAll(`[data-l="${CSS.escape(m.text)}"]`).forEach(n => n.classList.add('gone')); break;
       case 'CLEARMSG': if (m.tags['target-msg-id']) this.box.querySelector(`[data-id="${CSS.escape(m.tags['target-msg-id'])}"]`)?.classList.add('gone'); break;
     }
@@ -1250,6 +1286,7 @@ const Chat = {
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
     this.login = null; this.uid = null; this.queue = []; this.retry = 0;
     this.badges = new Map(); this.emotes = new Map(this.global || []);
+    Talk.show();
   },
 };
 let chatResized = 0;   // turning the phone or unfolding moves the scroll position; that isn't you scrolling up
@@ -1260,6 +1297,110 @@ Chat.box.addEventListener('scroll', () => {
   if (Chat.stick) $('more').hidden = true;
 }, { passive: true });
 $('more').onclick = () => { Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true; };
+
+// ── sending chat ────────────────────────────────────
+// Signing in is a trip to Twitch and back: Twitch hands the page a token for CHAT_APP that can only
+// send chat messages. Messages go out through Twitch's API; reading chat stays anonymous.
+const Talk = {
+  me: store.get('me', null),   // { token, id, login } once signed in
+  at: 0,                       // when Twitch last vouched for the token (it wants that checked hourly)
+  busy: false, tx: $('sayTx'), go: $('sayGo'),
+
+  show() {
+    $('paneChat').classList.toggle('talk', !!CHAT_APP && !!Chat.login);
+    this.tx.hidden = this.go.hidden = !this.me;
+    $('signin').hidden = !!this.me;
+    this.go.disabled = this.busy || !this.tx.value.trim();
+  },
+
+  signIn() {
+    const state = rid(16);
+    store.set('signin', { state, back: location.search });
+    location.href = 'https://id.twitch.tv/oauth2/authorize?' + new URLSearchParams({
+      client_id: CHAT_APP, redirect_uri: location.origin + location.pathname, response_type: 'token', scope: 'user:write:chat', state });
+  },
+
+  // Back from Twitch: the token arrives in the address's #fragment (a refusal in the query). Take it
+  // out of the address and return to the channel.
+  arrive() {
+    const h = new URLSearchParams(location.hash.slice(1)), q = new URLSearchParams(location.search);
+    const state = h.get('state') || q.get('state');
+    if (!state || !(h.has('access_token') || q.has('error'))) return;
+    const sent = store.get('signin', null);
+    store.set('signin', null);
+    history.replaceState(null, '', location.pathname + (sent?.back || ''));
+    if (sent?.state === state && h.get('access_token')) this.check(h.get('access_token'));
+  },
+
+  async check(token = this.me?.token) {
+    if (!token) return;
+    try {
+      const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + token } });
+      if (r.status === 401) return this.out(token === this.me?.token ? 'Twitch signed you out of chat.' : 'Twitch didn’t sign you in. Try again.');
+      const j = await r.json();
+      if (!r.ok || j.client_id !== CHAT_APP) return;
+      this.me = { token, id: j.user_id, login: j.login };
+      this.at = Date.now();
+      store.set('me', this.me);
+      this.show();
+    } catch {}
+  },
+
+  out(why) {
+    this.me = null; store.set('me', null);
+    this.show();
+    if (why && Chat.login) Chat.note(why).classList.add('err');
+  },
+
+  signOut() {
+    const token = this.me?.token;
+    if (token) fetch('https://id.twitch.tv/oauth2/revoke', { method: 'POST', body: new URLSearchParams({ client_id: CHAT_APP, token }) }).catch(() => {});
+    this.out();
+  },
+
+  async send() {
+    const text = this.tx.value.trim(), me = this.me, room = Chat.uid;
+    if (!text || !me || !room || this.busy) return;
+    this.busy = true; this.show();
+    let r = null, j = null;
+    try {
+      r = await fetch('https://api.twitch.tv/helix/chat/messages', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + me.token, 'Client-Id': CHAT_APP, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ broadcaster_id: room, sender_id: me.id, message: text }),
+      });
+      j = await r.json().catch(() => null);
+    } catch {}
+    this.busy = false;
+    const d = j?.data?.[0];
+    if (r?.status === 401) return this.out('Twitch signed you out of chat. Sign in again to send messages.');
+    if (r?.ok && d?.is_sent) {
+      if (this.tx.value.trim() === text) this.tx.value = '';
+      Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true;
+    } else Chat.note('Not sent: ' + (d?.drop_reason?.message || j?.message || (r ? `Twitch answered ${r.status}` : 'couldn’t reach Twitch'))).classList.add('err');
+    this.show();
+  },
+};
+$('say').addEventListener('submit', e => { e.preventDefault(); Talk.send(); });
+Talk.tx.addEventListener('input', () => Talk.show());
+Talk.go.addEventListener('mousedown', e => e.preventDefault());   // tapping send leaves the keyboard up
+$('signin').onclick = () => Talk.signIn();
+
+// iPhone's keyboard covers the page instead of shrinking it, and slides the page up to keep the box
+// in view, which takes the picture off the top. While it's up, the watch screen fits the part of the
+// screen above it, the channel row and tabs making room for chat.
+const vv = window.visualViewport;
+function fitKeyboard() {
+  const w = $('watch'), up = !!vv && document.activeElement === Talk.tx && vv.scale < 1.05
+    && vv.height < document.documentElement.clientHeight - 80;
+  w.classList.toggle('kb', up);
+  w.style.height = up ? vv.height + 'px' : '';
+  w.style.transform = up && vv.offsetTop ? `translateY(${vv.offsetTop}px)` : '';
+}
+vv?.addEventListener('resize', fitKeyboard);
+vv?.addEventListener('scroll', fitKeyboard);
+Talk.tx.addEventListener('blur', () => setTimeout(fitKeyboard, 100));
+$('watch').addEventListener('click', e => { if (!e.target.closest('#say')) Talk.tx.blur(); });   // a tap elsewhere puts the keyboard away
 
 // ── videos tab ──────────────────────────────────────
 const Vods = {
@@ -1503,6 +1644,9 @@ const Sheet = {
       ...qs.slice(1).map(x => ({ label: x.label, on: P.q === x.id, pick: () => P.setQuality(x.id) })),
       ...(P.hls ? [{ label: 'Auto', desc: 'Lets the player drop quality on a weak connection.', on: P.q === 'auto', pick: () => P.setQuality('auto') }] : []),
     ]);
+    if (CHAT_APP && Talk.me) group('Chat', [
+      { label: `Sign out ${Talk.me.login}`, desc: 'Messages you send go out as this Twitch account.', pick: () => Talk.signOut() },
+    ]);
     body.append(el('div', 'stats'));
     this.stats();
   },
@@ -1647,7 +1791,10 @@ function back() {
 window.addEventListener('popstate', () => { depth = Math.max(0, depth - 1); route(false); });
 
 Sound.set(Sound.muted);
-window.wraith = { P, Chat, Home, BG };   // for poking at playback from devtools
+Talk.arrive();
+if (Talk.me) Talk.check();
+setInterval(() => { if (Talk.me && !document.hidden && Date.now() - Talk.at > 3600e3) Talk.check(); }, 60e3);
+window.wraith = { P, Chat, Home, BG, Talk };   // for poking at playback from devtools
 route(false);
 })();
 </script>
