@@ -31,7 +31,7 @@ async function open({ iphone = false, init, initArg, w = 900, h = 1000 } = {}) {
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
   // stages ad breaks by kind of session, and counts what goes through the relay
-  const ads = { on: NONE, masters: [], relay: 0 };
+  const ads = { on: NONE, masters: [], relay: 0, slow: null, ms: 0 };
   const kindOf = new Map();
   await page.route(/script\.google/, async route => {
     const u = new URL(route.request().url()).searchParams.get('u');
@@ -43,6 +43,7 @@ async function open({ iphone = false, init, initArg, w = 900, h = 1000 } = {}) {
     if (u.includes('usher.ttvnw.net')) {
       const kind = JSON.parse(new URL(u).searchParams.get('token') || '{}').player_type || '?';
       ads.masters.push(kind);
+      if (ads.slow === kind) await sleep(ads.ms);
       for (const l of b.split('\n')) if (l.startsWith('https://')) kindOf.set(l.trim(), kind);
       const cut = b.indexOf('\n#WRAITH-MEDIA:');   // the first media playlist comes along with the master
       if (cut >= 0) { const rest = b.slice(cut + 15), eol = rest.indexOf('\n'), url = rest.slice(0, eol).split(' ')[1]; kindOf.set(url, kind); if (ads.on.has(kind)) b = b.replace(/(#EXTINF:[\d.]+),live/g, '$1,Amazon|1'); }
@@ -98,9 +99,24 @@ if (want('cover')) {
   await playing(page);
   s = await st(page); ok('the break over: back on low latency', !s.ad && !s.cover && s.feed === 'live' && !s.paused && !s.banner, JSON.stringify(s));
 
+  // the search taking a while: the cover comes up meanwhile, and a clean session found later takes over from it
+  ads.on = new Set(['site']); ads.slow = 'popout'; ads.ms = 7000;
+  await page.evaluate(() => wraith.P.dodged.clear());
+  await covered();
+  s = await st(page);
+  ok('a slow search gets the cover meanwhile', s.cover && s.ad && await page.evaluate(() => wraith.P.dodging), JSON.stringify(s));
+  await page.waitForFunction(() => !wraith.P.cover && !wraith.P.ad && wraith.P.feed === 'live', null, { timeout: 25000 }).catch(() => {});
+  await playing(page);
+  s = await st(page);
+  ok('and the clean session it finds takes over', s.type === 'popout' && s.feed === 'live' && !s.cover && !s.ad && !s.paused && await page.evaluate(() => !document.getElementById('vCDN').dataset.url), JSON.stringify(s));
+  ads.slow = null;
+  await page.evaluate(() => { wraith.P.playerType = 'site'; localStorage.removeItem('wraith.playerType'); wraith.P.playLive(); });
+  ads.on = NONE; await playing(page);
+
   // picking the CDN during a cover sticks; picking low latency during one starts a fresh session with no orphan
   ads.on = ALL; await page.evaluate(() => wraith.P.dodged.clear()); await covered();
   await page.evaluate(() => wraith.P.setPref('cdn')); await sleep(800);
+  await page.waitForFunction(() => document.getElementById('spin').hidden, null, { timeout: 10000 }).catch(() => {});
   s = await st(page); ok('picking the CDN during a cover sticks', s.feed === 'cdn' && !s.cover && !s.ad && !s.hls && !s.banner && !s.spin, JSON.stringify(s));
   ads.on = NONE;
   await page.evaluate(() => wraith.P.setPref('live'));
@@ -178,6 +194,16 @@ if (want('misc')) {
   ok('segments arriving don’t count as recovered', await page.evaluate(() => wraith.P.retries === 2 && wraith.P.fixes === 1));
   await sleep(6500);
   ok('a picture that keeps moving does', await page.evaluate(() => wraith.P.retries === 0 && wraith.P.fixes === 0));
+
+  // a media error that keeps coming back ends in a restart, not a loop of recoveries
+  const mediaError = () => page.evaluate(() => wraith.P.hls.trigger('hlsError', { type: 'mediaError', details: 'bufferAppendError', fatal: true }));
+  await page.evaluate(() => { wraith.P.fixes = 0; wraith.P.retries = 0; window.__old = wraith.P.hls; });
+  for (let i = 0; i < 3; i++) { await mediaError(); await sleep(i < 2 ? 2500 : 200); }
+  ok('recoveries that don’t hold end in a restart', await page.evaluate(() => wraith.P.fixes === 3 && wraith.P.retries === 1), JSON.stringify(await page.evaluate(() => [wraith.P.fixes, wraith.P.retries])));
+  await sleep(2500); await playing(page);
+  ok('which plays', await page.evaluate(() => wraith.P.hls !== window.__old) && !(await st(page)).paused);
+  await sleep(9500);
+  ok('and once it’s held, the slate is clean', await page.evaluate(() => wraith.P.fixes === 0 && wraith.P.retries === 0));
 
   // a slow answer about the channel you just left
   let slow = true;

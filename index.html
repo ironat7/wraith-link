@@ -946,7 +946,7 @@ const P = {
     this.noteErr(d);
     if (/too many times/i.test(String(d.response?.text || ''))) return this.fallback('The relay hit Google’s daily limit');
     if (!d.fatal) return;
-    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) return this.hls.recoverMediaError();
+    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) { this.began = Date.now(); return this.hls.recoverMediaError(); }
     if (d.response?.code === 403 && d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) { this.subOnly = true; return this.fallback('Sub-only stream'); }
     this.restart();
   },
@@ -1001,7 +1001,10 @@ const P = {
       this.ad = false; this.adEnd = 0; this.dodged.clear();
       if (this.cover) { this.cover = false; this.stopCdn(); this.show('live'); }
       if (BG.on) this.hls?.stopLoad();   // away, on the CDN's sound: it all comes back with the picture
-      else if (this.feed === 'live') { this.toLiveEdge(); this.play(vL); }
+      else if (this.feed === 'live') {   // to the edge now, and again once the playlist that said so is in
+        this.toLiveEdge(); this.play(vL);
+        this.hls?.once(window.Hls.Events.LEVEL_UPDATED, () => this.toLiveEdge());
+      }
       UI.banner();
     }
   },
