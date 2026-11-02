@@ -516,8 +516,11 @@ async function getUsers(logins) {
   return out.flat();
 }
 
-async function getToken(login) {
-  const d = await gql(`query($l: String!) { streamPlaybackAccessToken(channelName: $l, params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) { value signature authorization { isForbidden forbiddenReasonCode } } }`, { l: login });
+// The kind of player a stream is asked for as. Through the relay a "site" session gets no preroll as long as the
+// request carries a device ID (gql always sends one); the others are for when an ad turns up anyway (see P.dodge).
+const PLAYER_TYPES = ['site', 'popout', 'embed', 'frontpage'];
+async function getToken(login, type = P.playerType) {
+  const d = await gql(`query($l: String!, $t: String!) { streamPlaybackAccessToken(channelName: $l, params: { platform: "web", playerBackend: "mediaplayer", playerType: $t }) { value signature authorization { isForbidden forbiddenReasonCode } } }`, { l: login, t: type });
   return d.streamPlaybackAccessToken;
 }
 
@@ -746,7 +749,9 @@ function unlock() {
 if (!store.get('qualityReset', false)) { store.set('quality', 'source'); store.set('qualityReset', true); }   // old builds saved their own step-downs as your pick
 
 const P = {
-  gen: 0, login: null, user: null, hls: null, tokenP: null,
+  gen: 0, login: null, user: null, hls: null, tokenP: null, liveRun: 0,
+  playerType: PLAYER_TYPES.includes(store.get('playerType', '')) ? store.get('playerType', '') : PLAYER_TYPES[0],
+  dodged: new Set(), dodging: false,  // kinds of session already tried on this ad break
   feed: null,                        // what's on screen: 'live' | 'cdn' | 'vod' | 'clip'
   pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
@@ -851,22 +856,22 @@ const P = {
   },
 
   async playLive() {
-    const gen = this.gen;
+    const gen = this.gen, run = ++this.liveRun, stale = () => gen !== this.gen || run !== this.liveRun;   // a newer start takes over
     this.stopCdn();
     this.feed = 'live'; UI.feed(); UI.spin(true);
     this.moved = Date.now();
     let tok = await (this.tokenP || getToken(this.login).catch(e => e));
     this.tokenP = null;
-    if (gen !== this.gen) return;
+    if (stale()) return;
     if (!tok || tok instanceof Error) return this.fallback('Couldn’t get the live feed');
     if (tok.authorization?.isForbidden) {   // sub-only, but your account may be in
       tok = await Me.streamToken(this.login);
-      if (gen !== this.gen) return;
+      if (stale()) return;
       if (!tok || tok.authorization?.isForbidden) { this.subOnly = true; return this.fallback('Sub-only stream'); }
     }
     let Hls;
     try { Hls = await hlsReady; } catch { return this.fallback('The player didn’t load'); }
-    if (gen !== this.gen) return;
+    if (stale()) return;
     if (!Hls.isSupported()) return this.fallback('This browser can’t run the low-latency player');
     const hls = this.hls = new Hls({
       ...LOADING,
@@ -982,15 +987,43 @@ const P = {
       if (end) this.adEnd = end;
       if (this.ad) return;
       this.ad = true; this.skipped++;
-      // Safari can show the ad-free CDN feed through the break; elsewhere the picture holds.
-      if (this.feed === 'live' && cdnLive && this.base) { this.cover = true; this.playCdn({ cover: true }); }
+      this.dodge();
       UI.banner();
     } else if (this.ad) {
-      this.ad = false; this.adEnd = 0;
+      this.ad = false; this.adEnd = 0; this.dodged.clear();
       if (this.cover) { this.cover = false; this.stopCdn(); this.show('live'); }
       if (this.feed === 'live') { this.toLiveEdge(); this.play(vL); }
       UI.banner();
     }
+  },
+
+  // An ad on this session. Another kind of session usually isn't getting it (your account's Turbo never is),
+  // so look for one that comes back clean and move to it. Only if all have ads does the break play out.
+  async dodge() {
+    if (this.dodging) return;
+    this.dodging = true;
+    const gen = this.gen, login = this.login;
+    try {
+      for (const kind of [...PLAYER_TYPES, 'account']) {
+        if (kind === this.playerType || this.dodged.has(kind)) continue;
+        this.dodged.add(kind);
+        const tok = kind === 'account' ? await Me.streamToken(login) : await getToken(login, kind).catch(() => null);
+        if (gen !== this.gen || !this.ad) return;
+        if (!tok || tok.authorization?.isForbidden) continue;
+        const master = await relayText(usherUrl(login, tok)), media = master && master.match(/#EXT-X-STREAM-INF[^\n]*\n(\S+)/)?.[1];
+        const text = media && await relayText(media);
+        if (gen !== this.gen || !this.ad) return;
+        if (!text?.includes('#EXTINF') || /stitched-ad|X-TV-TWITCH-AD|,Amazon/.test(text)) continue;
+        if (kind !== 'account') { this.playerType = kind; store.set('playerType', kind); }
+        this.ad = false; this.adEnd = 0; this.dodged.clear();
+        this.destroyHls();
+        this.tokenP = Promise.resolve(tok);
+        UI.banner();
+        return this.playLive();
+      }
+      // Safari can show the ad-free CDN feed through the break; elsewhere the picture holds.
+      if (this.feed === 'live' && cdnLive && this.base) { this.cover = true; this.playCdn({ cover: true }); UI.banner(); }
+    } finally { if (gen === this.gen) this.dodging = false; }
   },
 
   playCdn({ cover = false, reload = false } = {}) {
@@ -1108,8 +1141,8 @@ const P = {
     if (v.playbackRate !== r) v.playbackRate = r;
   },
 
-  noteErr(d, where = '') {   // routine stall notices and the page's own aborts left out
-    if (/^(buffer(StalledError|NudgeOnStall|SeekOverHole)|aborted)$/.test(d.details)) return;
+  noteErr(d, where = '') {   // routine stall notices, the page's own aborts and cut-out ads left out
+    if (/^(buffer(StalledError|NudgeOnStall|SeekOverHole)|aborted|fragGap)$/.test(d.details)) return;
     const k = where + d.details + (d.fatal ? ' (fatal)' : '');
     this.errs[k] = (this.errs[k] || 0) + 1;
   },
@@ -1191,7 +1224,8 @@ const P = {
     Object.assign(this, { login: null, user: null, feed: null, groups: [], base: null, subOnly: false, ad: false, adEnd: 0,
       cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, vod: null, tokenP: null, seekPending: false,
       liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null, quietUntil: 0, errs: {},
-      cap: 0, capWait: 180e3, lastStall: 0, pos: -1, moved: 0, gone: 0 });
+      cap: 0, capWait: 180e3, lastStall: 0, pos: -1, moved: 0, gone: 0, dodging: false });
+    this.dodged = new Set();
     primed = null; shownSegs.clear();
     stage.classList.remove('vod'); $('watch').classList.remove('vodw');
     Replay.close();
@@ -1939,7 +1973,7 @@ const Me = {
     Chat.box.querySelectorAll(`[data-u="${CSS.escape(uid)}"]`).forEach(n => n.remove());
     return true;
   },
-  // Sub-only stream: Twitch decides by account, so this asks as you.
+  // A sub-only stream, or an ad break Turbo skips: Twitch decides by account, so this asks as you.
   async streamToken(login) {
     if (!this.acct) return null;
     try {
@@ -2750,7 +2784,7 @@ const Home = {
     }
   },
   renderRecent() {
-    const list = Recent.list(), box = $('recent');
+    const roster = this.roster(), list = Recent.list().filter(r => !roster.includes(r.l)), box = $('recent');
     $('secRecent').hidden = !list.length;
     box.textContent = '';
     for (const r of list) {
@@ -2912,6 +2946,26 @@ setInterval(() => { if (!document.hidden && !$('home').hidden) Home.load(); }, 6
 $('search').addEventListener('submit', e => { e.preventDefault(); Search.submit(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('home').hidden) Home.load(); });
 
+// The Home Screen app can sit suspended for days, still running the version it started with. Coming back
+// to it checks for a newer page, which loads the next time you're on the home screen with nothing open.
+const Update = {
+  tag: null, at: 0, ready: false,
+  async check() {
+    if (Date.now() - this.at < 18e5) return;
+    this.at = Date.now();
+    try {
+      const r = await fetch(location.pathname, { method: 'HEAD', cache: 'no-cache' });
+      const tag = r.headers.get('etag') || r.headers.get('last-modified');
+      if (!r.ok || !tag) return;
+      if (this.tag && tag !== this.tag) this.ready = true;
+      this.tag ||= tag;
+      this.apply();
+    } catch {}
+  },
+  apply() { if (this.ready && !$('home').hidden && $('sheet').hidden && !$('q').value) location.reload(); },
+};
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Update.check(); });
+
 // ── routing ─────────────────────────────────────────
 let depth = 0;
 history.scrollRestoration = 'manual';
@@ -2929,6 +2983,7 @@ function route(gesture) {
     Browse.game = g || null;
     Home.setView(g ? 'browse' : Home.view);
     Home.load();
+    Update.apply();
   }
 }
 function go(url, gesture) {
@@ -2944,6 +2999,7 @@ window.addEventListener('popstate', () => { depth = Math.max(0, depth - 1); rout
 
 Sound.setLevel(Sound.level);
 Sound.set(Sound.muted);
+Update.check();
 Me.save(Me.acct);
 Me.check();
 Me.sync();

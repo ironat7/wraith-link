@@ -1,0 +1,5 @@
+test/node_modules/
+test/*.png
+test/*.json
+!test/package.json
+test/package-lock.json
