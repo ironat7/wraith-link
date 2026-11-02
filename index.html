@@ -59,8 +59,32 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: 0; font-size: 16px; -webkit-appearance: none; appearance: none; }
 .search input::placeholder { color: var(--fg-3); }
 .search input::-webkit-search-cancel-button { display: none; }
-.search button { height: 38px; padding: 0 16px; border-radius: 10px; background: var(--fg); color: #000; font-size: 14px; font-weight: 600; }
-.search button:active { opacity: .8; }
+.searchw { position: relative; z-index: 6; }
+.sgl { position: absolute; left: 0; right: 0; top: 48px; max-height: 62dvh; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 16px 44px rgba(0,0,0,.65); }
+.sg { display: flex; align-items: center; gap: 11px; min-height: 52px; padding: 7px 13px; }
+.sg + .sg { border-top: 1px solid var(--line); }
+.sg.on, .sg:active { background: var(--bg-3); }
+.sg img { flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--bg-2); object-fit: cover; }
+.sg img.art { width: 27px; height: 36px; margin: 0 4.5px; border-radius: 4px; }
+.sg .gm { margin-top: 1px; }
+.dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--live); vertical-align: 1px; }
+.seg { display: flex; gap: 6px; margin: -16px 0 22px; }
+.seg button { height: 34px; padding: 0 15px; border-radius: 999px; color: var(--fg-2); font-size: 14px; font-weight: 600; }
+.seg button.on { background: var(--bg-2); color: var(--fg); }
+.brh { display: flex; align-items: center; gap: 8px; margin: -8px 0 16px -8px; }
+.brh .nm { font-size: 18px; font-weight: 700; }
+.lng { height: 26px; margin-top: -6px; padding: 0 10px; border-radius: 999px; background: var(--bg-2); color: var(--fg-2); font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.h .sp { flex: 1; }
+.cats { display: flex; gap: 10px; margin: 0 calc(-1 * max(16px, var(--sar))) 0 calc(-1 * max(16px, var(--sal))); padding: 0 max(16px, var(--sar)) 4px max(16px, var(--sal)); overflow-x: auto; scrollbar-width: none; }
+.cats::-webkit-scrollbar { display: none; }
+.cat { flex: none; width: 96px; min-width: 0; }
+.cat:active { opacity: .7; }
+.cat img { width: 96px; height: 128px; border-radius: 8px; background: var(--bg-2); object-fit: cover; }
+.cat .nm { margin-top: 6px; font-size: 12.5px; }
+.cat .gm { margin-top: 1px; font-size: 11.5px; }
+#acct.me { padding: 0; }
+#acct.me svg { display: none; }
+#acct.me img { width: 28px; height: 28px; border-radius: 50%; }
 .sec + .sec { margin-top: 32px; }
 .h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; font-size: 12.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-3); }
 .h b { color: var(--fg-2); font-weight: 600; }
@@ -87,12 +111,14 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .chip a { display: flex; align-items: center; gap: 8px; height: 100%; min-width: 0; }
 .chip a span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chip img { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-3); }
+.chip.on img { box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 3.5px var(--live); }
 .chip .x { width: 34px; height: 36px; display: grid; place-items: center; color: var(--fg-3); }
 .chip .x svg { width: 15px; height: 15px; }
 .offl { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 18px 6px; }
 .offl a { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; }
 .offl img { width: 52px; height: 52px; border-radius: 50%; background: var(--bg-2); filter: grayscale(.4); opacity: .85; }
 .offl span { max-width: 100%; font-size: 12px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.offl small { margin-top: -5px; font-size: 11px; color: var(--fg-3); white-space: nowrap; }
 .note { color: var(--fg-3); font-size: 14px; line-height: 1.5; }
 .note button { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
 .sk { background: linear-gradient(90deg, var(--bg-2) 0, #202026 50%, var(--bg-2) 100%); background-size: 200% 100%; animation: sk 1.3s ease infinite; border-radius: 6px; }
@@ -102,7 +128,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 /* ── watch ────────────────────────────────────────── */
 #watch { position: fixed; inset: 0; display: flex; flex-direction: column; padding-top: var(--sat); background: #000; }
 .main { display: flex; flex-direction: column; flex: none; min-width: 0; }
-.stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; }
+.stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .stage video.off { visibility: hidden; }
 .hud { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; opacity: 0; transition: opacity .18s; pointer-events: none;
@@ -113,6 +139,11 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .bar { display: flex; align-items: center; gap: 2px; padding: 4px max(6px, var(--sar)) 4px max(6px, var(--sal)); }
 .cb { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; color: #fff; }
 .cb:active { background: rgba(255,255,255,.14); }
+.hudt { flex: 1; min-width: 0; margin: 0 4px; color: #fff; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 3px rgba(0,0,0,.7); }
+.hudt b { font-weight: 600; }
+.hudt span { opacity: .8; font-size: 12.5px; }
+.vol { width: 84px; margin: 0 4px; accent-color: #fff; cursor: pointer; }
+@media (hover: none), (pointer: coarse) { .vol { display: none; } }
 .lat { display: flex; align-items: center; gap: 7px; height: 30px; margin: 0 4px; padding: 0 11px; border-radius: 999px; background: rgba(24,24,28,.6); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); color: #fff; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lat i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
 .lat.cdn i { background: var(--warn); }
@@ -127,6 +158,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .stage.ui .banner { opacity: 0; }
 .unmute { position: absolute; right: max(12px, var(--sar)); bottom: 60px; display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px 0 11px; border-radius: 999px; background: #fff; color: #000; font-size: 13.5px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
 .unmute svg { width: 18px; height: 18px; }
+.toast.gt { position: fixed; z-index: 30; bottom: calc(24px + var(--sab)); }
 .toast { position: absolute; left: 50%; bottom: 60px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 8px 14px; border-radius: 10px; background: rgba(24,24,28,.88); color: #fff; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: fade .2s; }
 .msgbox { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; text-align: center; background: #000; color: var(--fg-2); font-size: 14px; line-height: 1.45; }
 .msgbox img { width: 60px; height: 60px; border-radius: 50%; background: var(--bg-2); }
@@ -142,9 +174,14 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .info .nm { font-size: 16px; }
 .info .tt { -webkit-line-clamp: 1; margin-top: 1px; }
 .info .gm { margin-top: 2px; }
+.fl { flex: none; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--fg); color: #000; font-size: 13.5px; font-weight: 600; }
+.fl.on { background: var(--bg-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line-2); }
+.fl:disabled { opacity: .5; }
+#bChat2 { display: none; }
+@media (orientation: landscape) and (min-width: 640px) { #watch.vodw #bChat2 { display: grid; } }
 .side { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 .tabs { display: flex; align-items: center; gap: 6px; padding: 8px max(12px, var(--sar)) 8px max(12px, var(--sal)); border-bottom: 1px solid var(--line); }
-.tabs button { height: 32px; padding: 0 14px; border-radius: 999px; color: var(--fg-2); font-size: 13.5px; font-weight: 600; }
+.tabs button { height: 32px; padding: 0 12px; border-radius: 999px; color: var(--fg-2); font-size: 13.5px; font-weight: 600; }
 .tabs button.on { background: var(--bg-2); color: var(--fg); }
 .tw { display: flex; align-items: center; gap: 5px; height: 32px; padding: 0 6px; color: var(--fg-3); font-size: 13px; }
 .tw svg { width: 15px; height: 15px; }
@@ -153,7 +190,15 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .log { position: relative; flex: 1; min-height: 0; }
 .chat { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 0 calc(10px + var(--sab)); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .m { padding: 2px max(14px, var(--sar)) 2px max(14px, var(--sal)); }
-.m .n { font-weight: 700; }
+.m .n { font-weight: 700; cursor: pointer; }
+.m .rp { display: block; color: var(--fg-3); font-size: 12.5px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m.at { background: rgba(255,59,79,.13); box-shadow: inset 2px 0 var(--live); }
+.m.hl { background: rgba(139,109,255,.15); box-shadow: inset 2px 0 #8b6dff; }
+.m.first { box-shadow: inset 2px 0 var(--good); }
+.m.old { opacity: .62; }
+.m .mn { font-weight: 600; }
+.emw { display: inline-grid; margin: -5px 0; vertical-align: middle; }
+.emw > .em { grid-area: 1 / 1; place-self: center; margin: 0; }
 .m .bd { display: inline-block; width: 18px; height: 18px; margin-right: 4px; vertical-align: -4px; }
 .m .em { display: inline-block; height: 28px; width: auto; max-width: none; margin: -5px 0; vertical-align: middle; }
 .m a { color: #9ec5ff; text-decoration: underline; text-underline-offset: 2px; }
@@ -177,11 +222,38 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .send:disabled { opacity: .3; cursor: default; }
 .signin { flex: 1; height: 40px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); color: var(--fg-2); font-size: 14px; font-weight: 600; }
 .signin:active { background: var(--bg-3); }
+.emo { width: 36px; height: 40px; display: grid; place-items: center; flex: none; margin-right: -4px; color: var(--fg-2); }
+.emo.on { color: var(--fg); }
+.ep { flex: none; height: min(40dvh, 300px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg-1); }
+.ep input { flex: none; height: 36px; margin: 8px max(10px, var(--sar)) 4px max(10px, var(--sal)); padding: 0 13px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); outline: 0; font-size: 16px; -webkit-appearance: none; appearance: none; }
+.epl { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 max(10px, var(--sar)) 10px max(10px, var(--sal)); }
+.epl h4 { margin: 10px 2px 5px; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); }
+.epg { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 2px; }
+.epg button { height: 42px; display: grid; place-items: center; border-radius: 8px; }
+.epg button:active { background: var(--bg-3); }
+.epg img { max-width: 38px; max-height: 32px; }
+.rpb { display: flex; align-items: center; gap: 8px; padding: 6px max(10px, var(--sar)) 0 max(14px, var(--sal)); color: var(--fg-2); font-size: 13px; }
+.rpb span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rpb button { flex: none; width: 28px; height: 28px; display: grid; place-items: center; color: var(--fg-3); }
+.rpb svg { width: 15px; height: 15px; }
+.ac { display: flex; gap: 6px; padding: 7px max(10px, var(--sar)) 0 max(10px, var(--sal)); overflow-x: auto; scrollbar-width: none; }
+.ac::-webkit-scrollbar { display: none; }
+.ac button { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 10px; border-radius: 999px; background: var(--bg-2); font-size: 13px; white-space: nowrap; }
+.ac .em { height: 20px; }
 .vods { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 10px max(14px, var(--sar)) calc(16px + var(--sab)) max(14px, var(--sal)); }
 .vod { display: grid; grid-template-columns: 136px minmax(0, 1fr); gap: 12px; padding: 6px 0; }
 .vod:active { opacity: .7; }
 .vod .thumb { border-radius: 8px; }
 .vod .tt { margin-top: 0; color: var(--fg); font-size: 14px; }
+.pr { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--live); }
+.pchips { display: flex; gap: 6px; margin-bottom: 8px; }
+.pchips button { height: 30px; padding: 0 12px; border-radius: 999px; color: var(--fg-2); font-size: 13px; font-weight: 600; }
+.pchips button.on { background: var(--bg-2); color: var(--fg); }
+.facts { color: var(--fg-2); font-size: 13.5px; font-weight: 600; }
+.desc { margin-top: 10px; color: var(--fg); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-line; }
+.desc.dim { color: var(--fg-3); font-size: 13px; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.links .btn { height: 34px; padding: 0 13px; font-size: 13.5px; }
 .st { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 16px; vertical-align: 1px; background: var(--bg-3); color: var(--fg-2); }
 .st.lv { background: var(--live); color: #fff; }
 
@@ -194,8 +266,8 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   .side { flex: none; width: clamp(300px, 32vw, 380px); border-left: 1px solid var(--line); }
   #watch.nochat .side { display: none; }
 }
-/* short screens give the channel row's height to the picture */
-@media (orientation: landscape) and (max-height: 560px) { .info { display: none; } .stage { max-height: 100%; } }
+/* short screens give the channel row's height to the picture, except on videos, where it holds the only way back */
+@media (orientation: landscape) and (max-height: 560px) { #watch:not(.vodw) .info { display: none; } #watch:not(.vodw) .stage { max-height: 100%; } }
 @media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
 /* iPhone fullscreen: the player fills the screen (see UI.fill) */
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; max-height: none; aspect-ratio: auto; }
@@ -221,6 +293,17 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .opt .ck { width: 20px; height: 20px; visibility: hidden; }
 .opt.on .ck { visibility: visible; }
 .opt:disabled { opacity: .4; cursor: default; }
+.code { display: block; width: 100%; margin-bottom: 12px; padding: 18px 8px; border-radius: 13px; background: var(--bg-2); font: 700 30px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .16em; text-align: center; }
+.code:active { background: var(--bg-3); }
+.btn.wide { display: flex; width: 100%; height: 46px; font-size: 15px; }
+.sgn { margin: 12px 4px 0; color: var(--fg-2); font-size: 13.5px; line-height: 1.45; }
+.sgn.dim { color: var(--fg-3); font-size: 12.5px; }
+.card { display: flex; align-items: center; gap: 12px; margin: 8px 4px 12px; }
+.cav { width: 52px; height: 52px; flex: none; border-radius: 50%; background: var(--bg-2); }
+.card .nm { font-size: 17px; }
+.said { margin: 0 4px 12px; color: var(--fg-2); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.said div + div { margin-top: 3px; }
+.nx { color: var(--fg); font-size: 13.5px; }
 .stats { margin: 14px 4px 0; color: var(--fg-3); font-size: 12px; line-height: 1.75; font-variant-numeric: tabular-nums; }
 </style>
 </head>
@@ -230,16 +313,31 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
     <a class="brand" href="./" id="brand"><span id="logo"></span><span>wraith</span></a>
     <span class="sp"></span>
     <button class="ib" id="refresh" type="button" aria-label="Refresh" data-i="refresh"></button>
+    <button class="ib" id="acct" type="button" aria-label="Account" data-i="user"></button>
   </header>
-  <form class="search" id="search" autocomplete="off">
-    <span data-i="search"></span>
-    <input id="q" type="search" enterkeyhint="go" placeholder="Watch any channel" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Channel name or Twitch link">
-    <button type="submit">Watch</button>
-  </form>
-  <section class="sec"><div class="h">Live <b id="liveN"></b></div><div class="rows" id="live"></div></section>
-  <section class="sec" id="secRecent" hidden><div class="h">Recent</div><div class="chips" id="recent"></div></section>
-  <section class="sec" id="secOff" hidden><div class="h">Offline</div><div class="offl" id="off"></div></section>
-  <p class="foot">Live streams play at low latency with Twitch’s ads cut out. Sub-only streams and past broadcasts play from Twitch’s CDN.</p>
+  <div class="searchw">
+    <form class="search" id="search" autocomplete="off">
+      <span data-i="search"></span>
+      <input id="q" type="search" enterkeyhint="go" placeholder="Search Twitch" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Channel, category or Twitch link">
+    </form>
+    <div class="sgl" id="sgl" hidden></div>
+  </div>
+  <nav class="seg"><button type="button" data-view="follow">Following</button><button type="button" data-view="browse">Browse</button></nav>
+  <div id="vFollow">
+    <section class="sec"><div class="h">Live <b id="liveN"></b></div><div class="rows" id="live"></div></section>
+    <section class="sec" id="secRecent" hidden><div class="h">Recent</div><div class="chips" id="recent"></div></section>
+    <section class="sec" id="secOff" hidden><div class="h">Offline</div><div class="offl" id="off"></div></section>
+    <p class="foot">Live streams play at low latency with Twitch’s ads cut out. Sub-only streams and past broadcasts play from Twitch’s CDN.</p>
+  </div>
+  <div id="vBrowse" hidden>
+    <div class="brh" id="brHead" hidden>
+      <button class="cb" id="brBack" type="button" aria-label="Back" data-i="back"></button>
+      <div class="meta"><div class="nm" id="brTitle"></div><div class="gm" id="brSub"></div></div>
+    </div>
+    <section class="sec" id="secCats"><div class="h">Categories</div><div class="cats" id="cats"></div></section>
+    <section class="sec"><div class="h" id="brH">Live now <span class="sp"></span><button class="lng" id="brLang" type="button"></button></div><div class="rows" id="brList"></div><div id="brEnd"></div></section>
+  </div>
+  <div class="toast gt" id="gtoast" hidden></div>
 </main>
 
 <main id="watch" hidden>
@@ -251,12 +349,13 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
       <div class="hud">
         <div class="bar">
           <button class="cb" id="bBack" type="button" aria-label="Back" data-i="back"></button>
-          <span class="sp"></span>
+          <div class="hudt"><b id="hudName"></b> <span id="hudSub"></span></div>
           <button class="cb" id="bChat" type="button" aria-label="Show or hide chat" data-i="chat"></button>
         </div>
         <div class="bar">
           <button class="cb" id="bPlay" type="button" aria-label="Play or pause" data-i="pause"></button>
           <button class="cb" id="bMute" type="button" aria-label="Mute or unmute" data-i="vol"></button>
+          <input class="vol" id="vol" type="range" min="0" max="1" step="0.02" aria-label="Volume">
           <button class="lat" id="bLat" type="button" aria-label="Playback settings"><i></i><span id="latTxt">Live</span></button>
           <span class="sp"></span>
           <button class="cb" id="bSet" type="button" aria-label="Quality" data-i="sliders"></button>
@@ -273,24 +372,34 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
       <button class="cb" id="bBack2" type="button" aria-label="Back" data-i="back"></button>
       <img class="av" id="iAv" alt="">
       <div class="meta"><div class="nm" id="iName"></div><div class="tt" id="iTitle"></div><div class="gm" id="iSub"></div></div>
+      <button class="fl" id="bFollow" type="button" hidden>Follow</button>
+      <button class="cb" id="bChat2" type="button" aria-label="Show or hide the side panel" data-i="chat"></button>
     </div>
   </div>
   <aside class="side">
     <nav class="tabs">
       <button type="button" class="on" data-pane="chat">Chat</button>
       <button type="button" data-pane="vods">Videos</button>
+      <button type="button" data-pane="clips">Clips</button>
+      <button type="button" data-pane="about">About</button>
       <span class="sp"></span>
       <a class="tw" id="twLink" target="_blank" rel="noopener">Twitch <span data-i="ext"></span></a>
     </nav>
     <div class="pane" id="paneChat">
       <div class="log"><div class="chat" id="chat"></div><button class="more" id="more" type="button" hidden>New messages</button></div>
+      <div class="ep" id="ep" hidden><input id="epq" type="search" placeholder="Find an emote" aria-label="Find an emote" autocapitalize="none" autocorrect="off" spellcheck="false"><div class="epl" id="epl"></div></div>
+      <div class="rpb" id="rpb" hidden><span id="rpbT"></span><button id="rpbX" type="button" aria-label="Cancel reply" data-i="x"></button></div>
+      <div class="ac" id="ac" hidden></div>
       <form class="say" id="say" autocomplete="off">
+        <button class="emo" id="bEmote" type="button" aria-label="Emotes" data-i="smile" hidden></button>
         <input id="sayTx" type="text" enterkeyhint="send" maxlength="500" placeholder="Send a message" aria-label="Chat message" autocomplete="off" hidden>
         <button class="send" id="sayGo" type="submit" aria-label="Send" data-i="send" hidden disabled></button>
         <button class="signin" id="signin" type="button">Sign in with Twitch to chat</button>
       </form>
     </div>
     <div class="pane" id="paneVods" hidden><div class="vods" id="vods"></div></div>
+    <div class="pane" id="paneClips" hidden><div class="vods" id="clips"></div></div>
+    <div class="pane" id="paneAbout" hidden><div class="vods" id="about"></div></div>
   </aside>
 </main>
 
@@ -307,10 +416,10 @@ const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 // "Wraith relay" Apps Script. Twitch's playlist servers turn away browsers on other
 // sites, so playlists come through it; the video itself loads straight from Twitch's CDN.
 const RELAY = 'https://script.google.com/macros/s/AKfycbyXQaL8s2_Vo-DTpCZhQCaPvHPF6hSbW4W3-RcmzgicJVtYTP9rCJfzdP5gViglpEIJZA/exec';
-// Client ID of the "Wraith link" app registered at dev.twitch.tv, which signing in to chat goes
-// through. Its redirect URLs are this page and http://localhost:8765/. No ID, no chat box.
-const CHAT_APP = '';
-// ironat___'s follows, newest first. Refresh from Twitch's ChannelFollows query.
+// Twitch's TV app. Its device sign-in (a code you approve on Twitch) works from any page with no registered
+// app, and asking as it gets past the integrity check that stops the web client paging through lists.
+const TV_CID = 'ue6666qo983tsx6so1t0vnawi233wa';
+// ironat___'s follows, newest first: the list until you sign in, when it starts coming from Twitch itself.
 const FOLLOWS = ('forsen redify kaise meltymim menmakiii powdur ruiasaka jellyhoshiumi emiru filian maliceevermore '
   + 'smugalana zenyahima halo_sweety leaflit zackrawrr xqc kiskachan amano_nene pillowdearasmr marimari_en sera_promisu '
   + 'kirsche fallenshadow asmongold sakae_izumi senzawa ikumi jinnytty nintendo nasa').split(' ');
@@ -343,6 +452,8 @@ const PATHS = {
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   chat: '<path d="M5 5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
   send: '<path d="M12 19V5M5.5 11.5L12 5l6.5 6.5"/>',
+  smile: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 14a4 4 0 0 0 7 0M9.5 10h.01M14.5 10h.01"/>',
+  user: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
 };
 const icon = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PATHS[n]}</svg>`;
 function setIcon(node, n) {
@@ -362,6 +473,9 @@ const dur = s => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600
 const clock = s => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const uptime = iso => dur((Date.now() - Date.parse(iso)) / 1000);
 const day = iso => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const ago = iso => { const s = (Date.now() - Date.parse(iso)) / 1000; return s < 3600 ? `${Math.max(1, Math.floor(s / 60))}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : s < 604800 ? `${Math.floor(s / 86400)}d ago` : day(iso); };
+const when = iso => { const d = new Date(iso); return d.toLocaleString(undefined, d - Date.now() < 6048e5 ? { weekday: 'short', hour: 'numeric', minute: '2-digit' } : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+const emoteUrl = id => `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`;
 const norm = s => String(s || '').trim().toLowerCase().replace(/^(https?:\/\/)?((www|m)\.)?twitch\.tv\//, '').replace(/[/?#].*$/, '').replace(/^@/, '');
 const validLogin = s => /^[a-z0-9_]{2,25}$/.test(s);
 const cdnPath = url => (url || '').match(/^(https:\/\/[^/]+\/[^/]+)\/storyboards\//)?.[1] || null;
@@ -372,10 +486,10 @@ function bufAhead(v) {
 }
 
 // ── Twitch ──────────────────────────────────────────
-async function gql(query, variables) {
+async function gql(query, variables, client = CID) {
   const r = await fetch('https://gql.twitch.tv/gql', {
     method: 'POST',
-    headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE },
+    headers: { 'Client-ID': client, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE },
     body: JSON.stringify({ query, variables }),
   });
   if (!r.ok) throw new Error(`Twitch answered ${r.status}`);
@@ -386,7 +500,8 @@ async function gql(query, variables) {
 
 const USER = `id login displayName profileImageURL(width: 150) broadcastSettings { title }
   stream { id createdAt viewersCount type game { displayName } previewImageURL(width: 440, height: 248) }
-  videos(first: 1, sort: TIME) { edges { node { id status seekPreviewsURL } } }`;
+  videos(first: 1, sort: TIME) { edges { node { id status seekPreviewsURL } } }
+  lastBroadcast { startedAt }`;
 
 // One users(logins:) field takes up to 100 names. (Aliasing user() per name is capped at 15 per
 // request, which is what broke the old page's live list.)
@@ -429,7 +544,18 @@ async function cdnBase(u) {
 
 // ── relay + playlist rewriting ──────────────────────
 let relayN = 0, primed = null;   // primed: the first media playlist, delivered with the master
-const relayUrl = u => `${RELAY}?u=${encodeURIComponent(u)}&n=${++relayN}`;
+const relayUrl = u => { Quota.note(); return `${RELAY}?u=${encodeURIComponent(u)}&n=${++relayN}`; };
+// Google allows the relay 20,000 fetches a day. This counts this device's, for the stats panel.
+const Quota = {
+  day: new Date().toDateString(), n: 0,
+  load() { const q = store.get('relayDay', null); if (q?.day === this.day) this.n = q.n; return this; },
+  note() {
+    const today = new Date().toDateString();
+    if (today !== this.day) { this.day = today; this.n = 0; }
+    this.n++;
+    if (this.n % 10 === 0) store.set('relayDay', { day: this.day, n: this.n });
+  },
+}.load();
 fetch(RELAY + '?ping=1').catch(() => {});   // Apps Script wakes faster when warm
 
 const attr = (line, k) => (line.match(new RegExp(`[:,]${k}="?([^",]*)`)) || [])[1] || '';
@@ -467,7 +593,7 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
   const out = [], prefetch = [];
   const shown = shownSegs.get(url) || new Map();
   shownSegs.set(url, shown);
-  let segDur = 2, tailAd = false, adEnd = 0, sn = 0, firstSn = 0;
+  let segDur = 2, tailAd = false, adEnd = 0, sn = 0, firstSn = -1;
   const seg = u => {
     const kept = shown.get(sn);
     if (!kept) shown.set(sn, u);
@@ -479,7 +605,11 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
     if (!line) continue;
     if (line[0] !== '#') { out.push(seg(line)); continue; }
     if (line.startsWith('#EXT-X-TWITCH-PREFETCH:')) { prefetch.push(line.slice(23)); continue; }
-    if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) firstSn = sn = parseInt(line.slice(22), 10) || 0;
+    if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
+      firstSn = sn = parseInt(line.slice(22), 10) || 0;
+      if (firstSn < shown.firstSn) shown.clear();   // the numbering started over: nothing kept still applies
+      shown.firstSn = firstSn;
+    }
     // Twitch declares 6 s for 2 s segments, and hls.js paces its playlist reloads on that number
     if (line.startsWith('#EXT-X-TARGETDURATION:')) { out.push('#EXT-X-TARGETDURATION:2'); continue; }
     if (line.startsWith('#EXT-X-DATERANGE') && /stitched-ad|X-TV-TWITCH-AD/.test(line)) {
@@ -499,6 +629,20 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
   if (!quiet) P.onAd(tailAd, adEnd);
   return out.join('\n') + '\n';
 }
+
+// How hls.js reacts to a failed load. Playlist trouble is the relay or Twitch hiccuping and says nothing
+// about the rendition, so it keeps trying instead of marking renditions bad and switching away. A 4xx
+// gets two more tries: the session is probably gone, and starting a new one is P.restart's job.
+const keepTrying = (tries, ms) => ({ maxNumRetry: tries, retryDelayMs: ms, maxRetryDelayMs: ms, backoff: 'linear',
+  shouldRetry: (cfg, n, timeout, res) => n < cfg.maxNumRetry && !(res?.code >= 400 && res.code < 500 && n >= 2) });
+const LOADING = {
+  ignorePlaylistParsingErrors: true,
+  manifestLoadPolicy: { default: { maxTimeToFirstByteMs: 15e3, maxLoadTimeMs: 15e3,
+    timeoutRetry: { maxNumRetry: 1, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: { maxNumRetry: 2, retryDelayMs: 1000, maxRetryDelayMs: 2000 } } },
+  playlistLoadPolicy: { default: { maxTimeToFirstByteMs: 8e3, maxLoadTimeMs: 8e3, timeoutRetry: keepTrying(20, 0), errorRetry: keepTrying(20, 1000) } },
+  fragLoadPolicy: { default: { maxTimeToFirstByteMs: 8e3, maxLoadTimeMs: 20e3,
+    timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: keepTrying(6, 500) } },
+};
 
 const newStats = () => ({ aborted: false, loaded: 0, retry: 0, total: 0, chunkCount: 0, bwEstimate: 0,
   loading: { start: 0, first: 0, end: 0 }, parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } });
@@ -599,16 +743,20 @@ function unlock() {
   }
 }
 
+if (!store.get('qualityReset', false)) { store.set('quality', 'source'); store.set('qualityReset', true); }   // old builds saved their own step-downs as your pick
+
 const P = {
   gen: 0, login: null, user: null, hls: null, tokenP: null,
-  feed: null,                        // what's on screen: 'live' | 'cdn' | 'vod'
+  feed: null,                        // what's on screen: 'live' | 'cdn' | 'vod' | 'clip'
   pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
+  cap: 0, capWait: 180e3, lastStall: 0,   // renditions below the pick that buffering has forced, for this stream only
   groups: [], base: null, start: 0, subOnly: false,
   ad: false, adEnd: 0, cover: false, skipped: 0,
   rate: 'normal', stalls: [], retries: 0, fixes: 0, vod: null, timer: 0,
   liveT: TARGET.live, calm: 0,       // current live target, and since when playback has been smooth
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
+  pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
   errs: {},                          // player errors this stream, for the stats panel
 
   open(login, gesture, cached) {
@@ -624,8 +772,8 @@ const P = {
       if (gen !== this.gen) return;
       if (!u) return UI.msg(null, `No channel called “${login}”`, 'Check the spelling and try again.');
       this.user = u;
-      UI.info(u); Recent.add(u); Chat.channel(u.id); Vods.channel(u.login);
-      if (!u.stream) return UI.offline(u);
+      UI.info(u); Recent.add(u); Chat.channel(u.id); Vods.channel(u.login); Clips.channel(u.login); About.channel(u.login);
+      if (!u.stream) { UI.offline(u); return this.awaitLive(); }
       this.start = Date.parse(u.stream.createdAt) / 1000;
       this.base = await cdnBase(u);
       if (gen !== this.gen) return;
@@ -640,7 +788,6 @@ const P = {
     if (gesture) unlock();
     UI.watch(null);
     Chat.box.textContent = '';
-    Chat.note('Chat replay isn’t available for past broadcasts.');
     try {
       const d = await gql(`query($id: ID!) { video(id: $id) { id title lengthSeconds createdAt status seekPreviewsURL resourceRestriction { type } game { displayName } owner { id login displayName profileImageURL(width: 150) } } }`, { id });
       if (gen !== this.gen) return;
@@ -651,17 +798,20 @@ const P = {
         return this.open(v.owner.login, false);
       }
       this.vod = v;
-      UI.vodInfo(v); Vods.channel(v.owner?.login); Tabs.show('vods');
+      UI.vodInfo(v); Vods.channel(v.owner?.login); Clips.channel(v.owner?.login); About.channel(v.owner?.login);
+      Chat.loadGlobal();
+      if (v.owner?.id) Chat.channel(v.owner.id);
       const base = cdnPath(v.seekPreviewsURL);
       if (!base) return UI.msg(null, 'This video isn’t on the CDN', 'Twitch didn’t publish a playlist for it.');
-      if (!nativeHls) return UI.needsSafari(`https://www.twitch.tv/videos/${v.id}`, true);
+      if (!nativeHls) { Tabs.show('vods'); return UI.needsSafari(`https://www.twitch.tv/videos/${v.id}`, true); }
+      Replay.open(v.id);
       const srcs = await vodSources(base);
       if (gen !== this.gen) { srcs.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u)); return; }
       this.feed = 'vod'; this.vodSrcs = srcs;
       if (ios) vodSources(base, 'audio_only').then(a => {   // ready for when the app goes to the background
         if (gen === this.gen) this.vodAudio = a; else a.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
       });
-      stage.classList.add('vod');
+      stage.classList.add('vod'); $('watch').classList.add('vodw');
       vC.controls = true;
       vL.classList.add('off'); vC.classList.remove('off');
       const pos = store.get('pos.' + v.id, 0);
@@ -673,20 +823,53 @@ const P = {
     }
   },
 
+  async openClip(slug, gesture) {
+    this.close();
+    const gen = ++this.gen;
+    if (gesture) unlock();
+    UI.watch(null);
+    Chat.box.textContent = '';
+    Chat.note('Clips don’t have chat.');
+    try {
+      const d = await gql(`query($s: ID!) { clip(slug: $s) { slug title viewCount createdAt game { displayName } curator { displayName } broadcaster { id login displayName profileImageURL(width: 150) } videoQualities { quality sourceURL } playbackAccessToken(params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) { signature value } } }`, { s: slug });
+      if (gen !== this.gen) return;
+      const c = d.clip, best = c?.videoQualities?.slice().sort((a, b) => parseFloat(b.quality) - parseFloat(a.quality))[0];
+      if (!best) return UI.msg(null, 'Clip not found', 'It may have been deleted.');
+      UI.clipInfo(c); Vods.channel(c.broadcaster?.login); Clips.channel(c.broadcaster?.login); About.channel(c.broadcaster?.login);
+      Tabs.show('clips');
+      this.feed = 'clip';
+      stage.classList.add('vod'); $('watch').classList.add('vodw');
+      vC.controls = true;
+      vL.classList.add('off'); vC.classList.remove('off');
+      const t = c.playbackAccessToken, u = `${best.sourceURL}?${new URLSearchParams({ sig: t?.signature || '', token: t?.value || '' })}`;
+      vC.dataset.url = u; vC.src = u;
+      UI.spin(true);
+      this.play(vC);
+    } catch (e) {
+      if (gen === this.gen) UI.msg(null, 'Couldn’t load the clip', e.message, () => this.openClip(slug));
+    }
+  },
+
   async playLive() {
     const gen = this.gen;
     this.stopCdn();
     this.feed = 'live'; UI.feed(); UI.spin(true);
-    const tok = await (this.tokenP || getToken(this.login).catch(e => e));
+    this.moved = Date.now();
+    let tok = await (this.tokenP || getToken(this.login).catch(e => e));
     this.tokenP = null;
     if (gen !== this.gen) return;
     if (!tok || tok instanceof Error) return this.fallback('Couldn’t get the live feed');
-    if (tok.authorization?.isForbidden) { this.subOnly = true; return this.fallback('Sub-only stream'); }
+    if (tok.authorization?.isForbidden) {   // sub-only, but your account may be in
+      tok = await Me.streamToken(this.login);
+      if (gen !== this.gen) return;
+      if (!tok || tok.authorization?.isForbidden) { this.subOnly = true; return this.fallback('Sub-only stream'); }
+    }
     let Hls;
     try { Hls = await hlsReady; } catch { return this.fallback('The player didn’t load'); }
     if (gen !== this.gen) return;
     if (!Hls.isSupported()) return this.fallback('This browser can’t run the low-latency player');
     const hls = this.hls = new Hls({
+      ...LOADING,
       pLoader: RelayLoader,
       progressive: true,              // play upcoming segments while Twitch is still sending them
       liveSyncDuration: 4,
@@ -699,7 +882,7 @@ const P = {
       preserveManualLevelOnError: true,   // a failed load on Source shouldn't quietly switch to Auto
     });
     hls.on(Hls.Events.MANIFEST_PARSED, () => this.onManifest());
-    hls.on(Hls.Events.FRAG_BUFFERED, () => { this.retries = 0; });
+    hls.on(Hls.Events.FRAG_BUFFERED, () => { this.retries = 0; this.fixes = 0; });
     hls.on(Hls.Events.ERROR, (_, d) => this.onError(d));
     hls.loadSource(usherUrl(this.login, tok));
     hls.attachMedia(vL);
@@ -718,21 +901,24 @@ const P = {
     return g.map(x => ({ id: x.id, label: x.id === 'chunked' ? `${x.h}p${x.fps > 30 ? x.fps : ''} · source` : x.id }));
   },
 
-  levelIndex() {   // the hls.js level for the picked quality
-    const top = this.groups.reduce((a, b) => (b.br > a.br ? b : a));
-    return (this.q === 'source' ? top : this.groups.find(x => x.id === this.q) || top).i;
+  levelIndex() {   // the hls.js level for the picked quality, less any step down from buffering
+    const list = [...this.groups].filter(x => x.h).sort((a, b) => b.br - a.br);
+    if (!list.length) return this.groups[0].i;
+    return list[Math.min(Math.max(0, list.findIndex(x => x.id === this.q)) + this.cap, list.length - 1)].i;
   },
 
-  applyQuality() {
+  applyQuality(gently) {   // gently: from the next segment on, keeping what's buffered
     const hls = this.hls;
     if (!hls || !this.groups.length) return;
     if (this.q === 'auto') { hls.currentLevel = -1; return; }
     const i = this.levelIndex();
-    if (hls.currentLevel !== i) hls.currentLevel = i;
+    if (gently) hls.loadLevel = i;
+    else if (hls.currentLevel !== i) hls.currentLevel = i;
   },
 
   setQuality(id) {
-    this.q = id; store.set('quality', id);
+    this.q = id; this.cap = 0; store.set('quality', id);
+    this.quietUntil = Date.now() + 6000;   // the switch's own buffering isn't a bad connection
     if (this.feed === 'live') this.applyQuality();
     else if (this.feed === 'cdn') this.playCdn({ cover: this.cover, reload: true });
   },
@@ -747,11 +933,15 @@ const P = {
   onError(d) {
     const Hls = window.Hls;
     this.noteErr(d);
+    if (/too many times|quota/i.test(String(d.response?.text || d.error?.message || ''))) return this.fallback('The relay hit Google’s daily limit');
     if (!d.fatal) return;
     if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) return this.hls.recoverMediaError();
-    const text = String(d.response?.text || d.error?.message || '');
-    if (/too many times|quota/i.test(text)) return this.fallback('The relay hit Google’s daily limit');
     if (d.response?.code === 403 && d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) { this.subOnly = true; return this.fallback('Sub-only stream'); }
+    this.restart();
+  },
+
+  // Start the low-latency feed over, giving up on it after a few tries in a row with nothing to show.
+  restart() {
     if (this.retries++ < 3) {
       UI.spin(true);
       const gen = this.gen;
@@ -764,8 +954,27 @@ const P = {
   // Live isn't possible (sub-only, relay down, old browser): the CDN feed still is.
   fallback(why) {
     this.destroyHls();
-    if (cdnLive && this.base) { UI.toast(`${why} · playing from the CDN`); return this.playCdn(); }
+    if (cdnLive && this.base) {
+      UI.toast(`${why} · playing from the CDN`);
+      if (!this.subOnly && this.pref === 'live') this.retryLive();
+      return this.playCdn();
+    }
     UI.needsSafari(why);
+  },
+
+  // On the CDN feed only because low latency failed: look every few minutes for the relay to come back.
+  retryLive() {
+    const gen = this.gen;
+    setTimeout(async () => {
+      if (gen !== this.gen || this.feed !== 'cdn' || this.pref !== 'live') return;
+      if (BG.on) return this.retryLive();
+      const tok = await getToken(this.login).catch(() => null);
+      const master = tok && !tok.authorization?.isForbidden ? await relayText(usherUrl(this.login, tok)) : null;
+      if (gen !== this.gen || this.feed !== 'cdn') return;
+      if (!master?.includes('#EXT-X-STREAM-INF')) return this.retryLive();
+      this.retries = 0; this.tokenP = Promise.resolve(tok);
+      this.playLive();
+    }, 180e3);
   },
 
   onAd(on, end) {
@@ -862,8 +1071,10 @@ const P = {
   // hysteresis: a continuously varying rate makes the audio pitch wander.
   tick() {
     UI.lat();
-    const v = this.active();
-    if (!v || this.feed === 'vod' || v.paused) return;
+    const v = this.active(), now = Date.now();
+    if (!v || this.feed === 'vod' || this.feed === 'clip') return;
+    this.watch(v, now);
+    if (v.paused) return;
     // a picked quality stays picked, whatever hls.js decides after an error
     if (this.feed === 'live' && this.q !== 'auto' && this.hls?.autoLevelEnabled && this.groups.length) this.hls.loadLevel = this.levelIndex();
     if (v.readyState < 3) {   // stalled: hop the hole a cut-out ad leaves if picture is buffered past it
@@ -877,8 +1088,13 @@ const P = {
       if (live) this.toLiveEdge(); else this.cdnSeek();
       return;
     }
-    if (live && this.liveT > TARGET.live && Date.now() - this.calm > 90e3) {   // smooth for 90 s: edge back in
-      this.liveT = Math.max(TARGET.live, this.liveT - 0.25); this.calm = Date.now();
+    if (live && this.liveT > TARGET.live && now - this.calm > 45e3) {   // smooth for a while: edge back in
+      this.liveT = Math.max(TARGET.live, this.liveT - 0.5); this.calm = now;
+    }
+    if (live && this.cap && now - this.lastStall > this.capWait) {   // and try the quality it stepped down from
+      this.cap--; this.capWait = Math.min(this.capWait * 2, 1800e3); this.lastStall = now;
+      this.applyQuality(true);
+      if (!this.cap) UI.toast('Back to the quality you picked');
     }
     const ahead = bufAhead(v);
     let s = this.rate;
@@ -901,15 +1117,27 @@ const P = {
   noteStall() {
     if (this.feed !== 'live' || this.ad || !this.hls || Date.now() < this.quietUntil) return;
     const now = Date.now();
-    this.liveT = Math.min(TARGET.liveMax, this.liveT + 0.5); this.calm = now;   // more cushion next time
+    this.liveT = Math.min(TARGET.liveMax, this.liveT + 0.5); this.calm = this.lastStall = now;   // more cushion next time
     if (this.q === 'auto') return;
     this.stalls = this.stalls.filter(t => now - t < 60e3).concat(now);
     if (this.stalls.length < 3) return;
-    const list = this.qualities(), i = list.findIndex(x => x.id === (this.q === 'source' ? list[0]?.id : this.q));
-    if (i < 0 || i >= list.length - 1) return;
+    const list = this.qualities(), at = Math.max(0, list.findIndex(x => x.id === this.q)) + this.cap;
+    if (at >= list.length - 1) return;
     this.stalls = [];
-    this.setQuality(list[i + 1].id);
-    UI.toast(`Dropped to ${list[i + 1].label} to stop the buffering`);
+    this.cap++;   // not your setting: the next stream starts on what you picked, and so does this one once it's calm
+    this.applyQuality(true);
+    UI.toast(`Dropped to ${list[at + 1].label} to stop the buffering`);
+  },
+
+  // The player can wedge in ways that raise no error (a socket left dead by a network change, a buffer
+  // iOS threw away). A picture that hasn't moved for 10 s while it should be playing starts over.
+  watch(v, now) {
+    if (this.feed !== 'live' || !this.hls || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine) { this.moved = now; return; }
+    if (v.currentTime !== this.pos) { this.pos = v.currentTime; this.moved = now; return; }
+    if (now - this.moved < 10e3) return;
+    this.moved = now;
+    this.noteErr({ details: 'stuck' });
+    this.restart();
   },
 
   async refresh() {
@@ -918,9 +1146,22 @@ const P = {
       const [u] = await getUsers([this.login]);
       if (gen !== this.gen || !u) return;
       if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) return this.open(this.login);
+      // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
+      if (!u.stream && this.user?.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
+      this.gone = 0;
       this.user = u; UI.info(u);
       if (!u.stream) this.ended(u);
     } catch {}
+  },
+
+  // Offline: look every so often, and start by itself the moment the channel goes live.
+  awaitLive() {
+    const gen = this.gen;
+    clearInterval(this.timer);
+    this.timer = setInterval(async () => {
+      if (document.hidden) return;
+      try { const [u] = await getUsers([this.login]); if (gen === this.gen && u?.stream) this.open(this.login, false, u); } catch {}
+    }, 30e3);
   },
 
   async checkEnded() {
@@ -931,7 +1172,9 @@ const P = {
   ended(u) {
     BG.stop(true);
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
+    this.feed = null;
     UI.offline(u, true);
+    this.awaitLive();
   },
 
   destroyHls() {
@@ -947,9 +1190,12 @@ const P = {
     vC.controls = false; vL.pause(); vL.removeAttribute('src'); vL.load();
     Object.assign(this, { login: null, user: null, feed: null, groups: [], base: null, subOnly: false, ad: false, adEnd: 0,
       cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, vod: null, tokenP: null, seekPending: false,
-      liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null, quietUntil: 0, errs: {} });
-    primed = null;
-    stage.classList.remove('vod');
+      liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null, quietUntil: 0, errs: {},
+      cap: 0, capWait: 180e3, lastStall: 0, pos: -1, moved: 0, gone: 0 });
+    primed = null; shownSegs.clear();
+    stage.classList.remove('vod'); $('watch').classList.remove('vodw');
+    Replay.close();
+    Awake.sync();
     Chat.close(); UI.clear();
   },
 };
@@ -984,7 +1230,7 @@ const BG = {
       P.hls.detachMedia();
       // it takes ~2.5 s to start, so it starts ~2.5 s further back: the sound resumes where the
       // picture stopped, with more cushion for the slower timers of a backgrounded page
-      const h = this.hls = new window.Hls({ pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
+      const h = this.hls = new window.Hls({ ...LOADING, pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12 });
       h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly
         P.noteErr(d, 'background ');
@@ -1019,6 +1265,7 @@ const BG = {
     aBG.pause(); aBG.removeAttribute('src'); aBG.load(); this.srcs = null;
     vL.muted = vC.muted = Sound.muted;
     if (silent) return;
+    P.moved = Date.now();
     if (P.feed === 'live' && P.hls) {
       P.quietUntil = Date.now() + 6000;   // the restart's own buffering isn't a bad connection
       if (!P.hls.media) P.hls.attachMedia(vL);
@@ -1067,22 +1314,49 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
 
 const Sound = {
   muted: store.get('muted', false),
+  level: store.get('volume', 1),     // iPhone ignores this: its buttons set the volume
   set(m) {
     this.muted = m; store.set('muted', m);
     vL.muted = vC.muted = m;
     setIcon($('bMute'), m ? 'mute' : 'vol');
     if (!m) UI.unmute(false);
   },
+  setLevel(x, touched) {
+    this.level = x = Math.min(1, Math.max(0, x)); store.set('volume', x);
+    vL.volume = vC.volume = aBG.volume = x;
+    $('vol').value = x;
+    if (touched && x > 0 && this.muted) this.set(false);
+  },
 };
+
+// The screen stays on while a picture is playing, sound or no sound.
+const Awake = {
+  lock: null, asking: false,
+  async sync() {
+    const v = P.active(), want = !!v && !v.paused && !document.hidden;
+    if (!want) { const l = this.lock; this.lock = null; l?.release().catch(() => {}); return; }
+    if (this.lock || this.asking || !navigator.wakeLock) return;
+    this.asking = true;
+    try { this.lock = await navigator.wakeLock.request('screen'); this.lock.addEventListener('release', () => { this.lock = null; }); } catch {}
+    this.asking = false;
+  },
+};
+document.addEventListener('visibilitychange', () => Awake.sync());
+
+// A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
+window.addEventListener('online', () => {
+  if (P.feed === 'live' && P.hls && !BG.on && !vL.paused && bufAhead(vL) < 1) { P.retries = 0; P.restart(); }
+  if (!document.hidden && !$('home').hidden) Home.load(true);
+});
 
 for (const v of [vL, vC]) {
   v.addEventListener('timeupdate', () => P.tick());
   v.addEventListener('playing', () => {
     if (P.active() === v) { UI.spin(false); UI.big(false); }
-    UI.playIcon();
+    UI.playIcon(); Awake.sync();
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
-  v.addEventListener('pause', () => UI.playIcon());
+  v.addEventListener('pause', () => { UI.playIcon(); Awake.sync(); });
   v.addEventListener('waiting', () => {
     if (P.active() !== v) return;
     UI.spin(true);
@@ -1092,6 +1366,7 @@ for (const v of [vL, vC]) {
 vC.addEventListener('loadedmetadata', () => { if (P.seekPending && P.feed === 'cdn') P.cdnSeek(); });
 vC.addEventListener('error', () => {
   if (!vC.dataset.url) return;
+  if (P.feed === 'clip') return UI.msg(null, 'The clip wouldn’t play', 'Twitch’s CDN refused it.');
   if (P.feed === 'vod') {
     if (P.nextVodSource()) return;   // that copy didn't take: try the next
     return cdnLive ? UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.') : UI.needsSafari(`https://www.twitch.tv/videos/${P.vod.id}`, true);
@@ -1100,7 +1375,9 @@ vC.addEventListener('error', () => {
   if (P.feed === 'cdn') UI.msg(null, 'The CDN feed isn’t available', P.subOnly ? 'This channel’s stream isn’t being recorded, so there is no ad-free copy to play.' : 'Try the low-latency feed instead.', P.subOnly ? null : () => P.setPref('live'));
 });
 vC.addEventListener('timeupdate', () => {
-  if (P.feed === 'vod' && P.vod && Math.floor(vC.currentTime) % 5 === 0) store.set('pos.' + P.vod.id, Math.floor(vC.currentTime));
+  if (P.feed !== 'vod' || !P.vod) return;
+  if (Math.floor(vC.currentTime) % 5 === 0) store.set('pos.' + P.vod.id, Math.floor(vC.currentTime));
+  Replay.tick(vC.currentTime);
 });
 setInterval(() => { if (P.feed) { P.tick(); UI.banner(); } }, 1000);
 
@@ -1132,15 +1409,20 @@ function parseIrc(line) {
 }
 
 const Chat = {
-  box: $('chat'), ws: null, login: null, uid: null, queue: [], stick: true, retry: 0, timer: 0,
-  emotes: new Map(), global: null, badges: new Map(), gbadges: null,
+  box: $('chat'), ws: null, login: null, uid: null, queue: [], stick: true, retry: 0, timer: 0, pinger: 0,
+  emotes: new Map(), global: null, badges: new Map(), gbadges: null, zero: new Set(),
+  chanEmotes: [], globalEmotes: [],     // the same emotes as lists, for the picker
+  seen: new Set(), rx: 0, behind: false,  // ids already handled; when the socket last said anything; a gap to fill in
+  room: {}, names: new Map(),             // chat modes; who has been talking, for @ completion
 
   open(login) {
     this.close();
     this.login = login; this.stick = true; this.box.textContent = ''; $('more').hidden = true;
     this.note('Connecting to chat…').classList.add('wait');
     this.connect();
+    this.history(60);
     this.timer = setInterval(() => this.flush(), 120);
+    this.pinger = setInterval(() => this.ping(), 25e3);
     this.loadGlobal();
     Talk.show();
   },
@@ -1154,19 +1436,37 @@ const Chat = {
 
   connect() {
     const ws = this.ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+    this.rx = Date.now();
     ws.onopen = () => {
       ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
       ws.send('PASS SCHMOOPIIE');
       ws.send('NICK justinfan' + (10000 + Math.floor(Math.random() * 89999)));
       ws.send('JOIN #' + this.login);
     };
-    ws.onmessage = e => { for (const l of e.data.split('\r\n')) if (l) this.line(l); };
+    ws.onmessage = e => { this.rx = Date.now(); for (const l of e.data.split('\r\n')) if (l) this.line(l); };
     ws.onclose = () => {
       if (this.ws !== ws) return;
-      this.ws = null;
+      this.ws = null; this.behind = true;
       const login = this.login;
       setTimeout(() => { if (login && this.login === login && !this.ws) this.connect(); }, Math.min(15e3, 1000 * 2 ** this.retry++));
     };
+  },
+
+  // A socket can die without saying so, above all while iOS has the page suspended. Anything arriving
+  // proves it's alive, so ask for something when it's been quiet, and reconnect if that gets no answer.
+  ping() {
+    if (this.ws?.readyState !== 1) return;
+    const quiet = Date.now() - this.rx;
+    if (quiet > 70e3) this.reconnect();
+    else if (quiet > 20e3) this.ws.send('PING :wraith');
+  },
+  wake() {   // back from the background, or the network changed
+    if (this.login && (!this.ws || Date.now() - this.rx > 15e3)) this.reconnect();
+  },
+  reconnect() {
+    if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+    this.behind = true; this.retry = 0;
+    this.connect();
   },
 
   line(raw) {
@@ -1174,27 +1474,72 @@ const Chat = {
     switch (m.cmd) {
       case 'PING': this.ws?.send('PONG :' + (m.text || 'tmi.twitch.tv')); break;
       case 'RECONNECT': this.ws?.close(); break;
-      case 'ROOMSTATE': if (this.retry || this.box.querySelector('.wait')) { this.retry = 0; this.box.querySelectorAll('.wait').forEach(n => n.remove()); } break;
-      case 'PRIVMSG': case 'USERNOTICE':
-        // what you send shows at once, rather than waiting with everyone else's for the picture
-        if (m.cmd === 'PRIVMSG' && Talk.me && m.tags['user-id'] === Talk.me.id) this.queue.unshift({ ts: 0, m });
-        else this.queue.push({ ts: +m.tags['tmi-sent-ts'] || Date.now(), m });
+      case 'ROOMSTATE':
+        Object.assign(this.room, m.tags);
+        Talk.hint();
+        this.retry = 0;
+        this.box.querySelectorAll('.wait').forEach(n => n.remove());
+        if (this.behind) { this.behind = false; this.history(300); }
         break;
+      case 'PRIVMSG': case 'USERNOTICE': this.add(m); break;
       case 'CLEARCHAT': if (m.text) this.box.querySelectorAll(`[data-l="${CSS.escape(m.text)}"]`).forEach(n => n.classList.add('gone')); break;
       case 'CLEARMSG': if (m.tags['target-msg-id']) this.box.querySelector(`[data-id="${CSS.escape(m.tags['target-msg-id'])}"]`)?.classList.add('gone'); break;
     }
     if (this.queue.length > 800) this.queue.splice(0, this.queue.length - 800);
   },
 
+  fresh(m) {   // not seen before, and not from someone you've blocked
+    const id = m.tags.id;
+    if (Me.blocks.has(m.tags['user-id'])) return false;
+    if (!id) return true;
+    if (this.seen.has(id)) return false;
+    this.seen.add(id);
+    if (this.seen.size > 4000) this.seen = new Set([...this.seen].slice(-2000));
+    return true;
+  },
+
+  add(m) {
+    if (!this.fresh(m)) return;
+    // what you send shows at once, rather than waiting with everyone else's for the picture
+    if (m.cmd === 'PRIVMSG' && Me.acct && m.tags['user-id'] === Me.acct.id) this.queue.unshift({ ts: 0, m });
+    else this.queue.push({ ts: +m.tags['tmi-sent-ts'] || Date.now(), m });
+  },
+
+  // A reader gets nothing from Twitch about what was said before it joined. recent-messages.robotty.de
+  // keeps the last stretch of most channels, which fills chat on opening and the gap after a reconnect.
+  async history(limit) {
+    const login = this.login;
+    try {
+      const r = await fetch(`https://recent-messages.robotty.de/api/v2/recent-messages/${login}?limit=${limit}&hide_moderation_messages=true`);
+      const lines = (await r.json()).messages || [];
+      if (login !== this.login) return;
+      const old = [];
+      for (const raw of lines) {
+        const m = parseIrc(raw);
+        if ((m.cmd !== 'PRIVMSG' && m.cmd !== 'USERNOTICE') || !this.fresh(m)) continue;
+        m.old = true;
+        old.push({ ts: +m.tags['tmi-sent-ts'] || 0, m });
+      }
+      this.queue.unshift(...old);
+    } catch {}
+  },
+
   // Out of sight (app in the background, side chat hidden, Videos tab) nothing is drawn: lines
   // wait in the queue and only the newest screenful is drawn once chat is back in view.
   flush() {
     if (!this.queue.length || document.hidden || !this.box.offsetParent) return;
-    const cut = Date.now() - P.chatDelay(), frag = document.createDocumentFragment();
+    const cut = Date.now() - P.chatDelay();
     let n = 0;
     while (n < this.queue.length && this.queue[n].ts <= cut) n++;
     if (!n) return;
-    for (const q of this.queue.splice(0, n).slice(-220)) frag.appendChild(this.render(q.m));
+    const lines = this.queue.splice(0, n).slice(-220);
+    if (!this.stick && this.box.children.length > 1200) { $('more').hidden = false; return; }   // scrolled up for ages: stop growing
+    this.append(lines.map(q => this.render(q.m)));
+  },
+
+  append(nodes) {
+    const frag = document.createDocumentFragment();
+    for (const n of nodes) frag.appendChild(n);
     this.box.appendChild(frag);
     if (this.stick) {
       const extra = this.box.children.length - 220;
@@ -1208,43 +1553,55 @@ const Chat = {
     const d = el('div', 'm');
     if (t.id) d.dataset.id = t.id;
     if (login) d.dataset.l = login;
+    if (t['user-id']) d.dataset.u = t['user-id'];
+    if (m.old) d.classList.add('old');
+    if (t['rm-deleted'] === '1') d.classList.add('gone');
     if (m.cmd === 'USERNOTICE') {
       d.classList.add('sys');
       d.append(t['system-msg'] || '');
       if (m.text) { const tx = el('span', 'tx'); this.text(tx, m.text, t.emotes); d.append(tx); }
       return d;
     }
+    let text = m.text || '', skip = 0;
+    if (t['msg-id'] === 'highlighted-message') d.classList.add('hl');
+    else if (Me.mentions?.test(text) && t['user-id'] !== Me.acct?.id) d.classList.add('at');
+    else if (t['first-msg'] === '1') d.classList.add('first');
+    const to = t['reply-parent-user-login'];
+    if (to) {   // the text opens with @name, which the line above it already says
+      d.append(el('span', 'rp', `↳ ${t['reply-parent-display-name'] || to}: ${t['reply-parent-msg-body'] || ''}`));
+      if (text.toLowerCase().startsWith(`@${to.toLowerCase()} `)) skip = to.length + 2;
+    }
     for (const b of (t.badges || '').split(',')) {
       const src = b && (this.badges.get(b) || this.gbadges?.get(b));
       if (src) d.append(pic(src, 'bd'));
     }
-    let text = m.text || '';
     const action = text.startsWith('\x01ACTION ') && text.endsWith('\x01');
     if (action) { text = text.slice(8, -1); d.classList.add('me'); }
     const name = t['display-name'] || login;
     const n = el('span', 'n', /^[\x20-\x7e]+$/.test(name) || !login ? name : `${name} (${login})`);
     n.style.color = nameColor(t.color, login || name);
+    if (login) { this.names.delete(login); this.names.set(login, name); if (this.names.size > 500) this.names.delete(this.names.keys().next().value); }
     d.append(n, action ? ' ' : ': ');
     const tx = el('span', 'tx');
     if (action) tx.style.color = n.style.color;
-    this.text(tx, text, t.emotes);
+    this.text(tx, text, t.emotes, skip);
     d.append(tx);
     return d;
   },
 
   // Twitch emotes arrive as code-point ranges in the tags; 7TV/BTTV/FFZ emotes are matched by word.
-  text(node, text, emoteTag) {
+  text(node, text, emoteTag, skip = 0) {
     const cps = Array.from(text), ranges = [];
     if (emoteTag) for (const part of emoteTag.split('/')) {
       const [id, pos] = part.split(':');
       for (const r of (pos || '').split(',')) { const [s, e] = r.split('-').map(Number); if (e >= s) ranges.push([s, e, id]); }
     }
     ranges.sort((a, b) => a[0] - b[0]);
-    let i = 0;
+    let i = skip;
     for (const [s, e, id] of ranges) {
       if (s < i) continue;
       if (s > i) this.words(node, cps.slice(i, s).join(''));
-      this.emote(node, `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`, cps.slice(s, e + 1).join(''));
+      this.emote(node, emoteUrl(id), cps.slice(s, e + 1).join(''));
       i = e + 1;
     }
     if (i < cps.length) this.words(node, cps.slice(i).join(''));
@@ -1255,35 +1612,72 @@ const Chat = {
     for (const w of str.split(/(\s+)/)) {
       const em = w && this.emotes.get(w);
       const link = !em && /^https?:\/\/\S+\.\S+/i.test(w);
-      if (!em && !link) { buf += w; continue; }
+      const at = !em && !link && /^@\w{2,}/.test(w);
+      if (!em && !link && !at) { buf += w; continue; }
       if (buf) { node.append(buf); buf = ''; }
       if (em) this.emote(node, em, w);
+      else if (at) node.append(el('b', 'mn', w));
       else { const a = el('a', null, w); a.href = w; a.target = '_blank'; a.rel = 'noopener noreferrer'; node.append(a); }
     }
     if (buf) node.append(buf);
   },
 
-  emote(node, src, name) { const i = pic(src, 'em'); i.alt = i.title = name; node.append(i); },
+  emote(node, src, name) {
+    const i = pic(src, 'em'); i.alt = i.title = name;
+    if (this.zero.has(name)) {   // a 7TV overlay: stacks on the emote before it
+      let prev = node.lastChild;
+      if (prev?.nodeType === 3 && !prev.data.trim()) { prev.remove(); prev = node.lastChild; }
+      if (prev?.matches?.('.em,.emw')) {
+        let w = prev;
+        if (!prev.matches('.emw')) { w = el('span', 'emw'); prev.replaceWith(w); w.append(prev); }
+        w.append(i);
+        return;
+      }
+    }
+    node.append(i);
+  },
+
+  // One line of a past broadcast's chat, in the same look as a live one.
+  renderReplay(c) {
+    const d = el('div', 'm'), who = c.commenter, msg = c.message || {};
+    if (who?.login) d.dataset.l = who.login;
+    if (who?.id) d.dataset.u = who.id;
+    for (const b of msg.userBadges || []) {
+      const k = `${b.setID}/${b.version}`, src = this.badges.get(k) || this.gbadges?.get(k);
+      if (src) d.append(pic(src, 'bd'));
+    }
+    const name = who?.displayName || who?.login || 'someone';
+    const n = el('span', 'n', name);
+    n.style.color = nameColor(msg.userColor, who?.login || name);
+    d.append(n, ': ');
+    const tx = el('span', 'tx');
+    for (const f of msg.fragments || []) {
+      if (f.emote?.emoteID) this.emote(tx, emoteUrl(f.emote.emoteID), f.text);
+      else this.words(tx, f.text || '');
+    }
+    d.append(tx);
+    return d;
+  },
 
   async loadGlobal() {
     if (this.global) return;
     this.global = new Map();
-    const add = (map, name, url) => { if (name && url) map.set(name, url); };
+    const add = (name, url) => { if (name && url) { this.global.set(name, url); this.globalEmotes.push({ name, url }); } };
     const j = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
     const [ffz, bttv, stv, badges] = await Promise.all([
       j('https://api.frankerfacez.com/v1/set/global'), j('https://api.betterttv.net/3/cached/emotes/global'), j('https://7tv.io/v3/emote-sets/global'),
       gql('query { badges { setID version imageURL(size: DOUBLE) } }').catch(() => null),
     ]);
-    for (const id of ffz?.default_sets || []) for (const e of ffz.sets?.[id]?.emoticons || []) add(this.global, e.name, e.urls?.['2'] || e.urls?.['1']);
-    for (const e of bttv || []) add(this.global, e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
-    for (const e of stv?.emotes || []) add(this.global, e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`);
+    for (const id of ffz?.default_sets || []) for (const e of ffz.sets?.[id]?.emoticons || []) add(e.name, e.urls?.['2'] || e.urls?.['1']);
+    for (const e of bttv || []) add(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
+    for (const e of stv?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
     this.gbadges = new Map((badges?.badges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
     for (const [k, v] of this.global) if (!this.emotes.has(k)) this.emotes.set(k, v);
   },
 
   async channel(uid) {
     this.uid = uid;
-    const map = new Map(this.global || []), add = (name, url) => { if (name && url) map.set(name, url); };
+    const map = new Map(this.global || []), list = [], add = (name, url) => { if (name && url) { map.set(name, url); list.push({ name, url }); } };
     const j = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
     const [ffz, bttv, stv, badges] = await Promise.all([
       j(`https://api.frankerfacez.com/v1/room/id/${uid}`), j(`https://api.betterttv.net/3/cached/users/twitch/${uid}`), j(`https://7tv.io/v3/users/twitch/${uid}`),
@@ -1292,19 +1686,24 @@ const Chat = {
     if (this.uid !== uid) return;
     for (const s of Object.values(ffz?.sets || {})) for (const e of s.emoticons || []) add(e.name, e.urls?.['2'] || e.urls?.['1']);
     for (const e of [...(bttv?.channelEmotes || []), ...(bttv?.sharedEmotes || [])]) add(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
-    for (const e of stv?.emote_set?.emotes || []) add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`);
-    this.emotes = map;
+    for (const e of stv?.emote_set?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
+    this.emotes = map; this.chanEmotes = list;
     this.badges = new Map((badges?.user?.broadcastBadges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
   },
 
   close() {
-    clearInterval(this.timer);
+    clearInterval(this.timer); clearInterval(this.pinger);
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
-    this.login = null; this.uid = null; this.queue = []; this.retry = 0;
+    this.login = null; this.uid = null; this.queue = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = [];
+    this.seen = new Set(); this.names = new Map();
     this.badges = new Map(); this.emotes = new Map(this.global || []);
+    Picker.show(false);
     Talk.show();
   },
 };
+Chat.box.addEventListener('click', e => { const n = e.target.closest('.n'); if (n) Card.open(n.closest('.m')); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Chat.wake(); });
+window.addEventListener('online', () => Chat.wake());
 let chatResized = 0;   // turning the phone or unfolding moves the scroll position; that isn't you scrolling up
 new ResizeObserver(() => { chatResized = performance.now(); if (Chat.stick) Chat.box.scrollTop = Chat.box.scrollHeight; }).observe(Chat.box);
 Chat.box.addEventListener('scroll', () => {
@@ -1314,93 +1713,500 @@ Chat.box.addEventListener('scroll', () => {
 }, { passive: true });
 $('more').onclick = () => { Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true; };
 
-// ── sending chat ────────────────────────────────────
-// Signing in is a trip to Twitch and back: Twitch hands the page a token for CHAT_APP that can only
-// send chat messages. Messages go out through Twitch's API; reading chat stays anonymous.
-const Talk = {
-  me: store.get('me', null),   // { token, id, login } once signed in
-  at: 0,                       // when Twitch last vouched for the token (it wants that checked hourly)
-  busy: false, tx: $('sayTx'), go: $('sayGo'),
-
-  show() {
-    $('paneChat').classList.toggle('talk', !!CHAT_APP && !!Chat.login);
-    this.tx.hidden = this.go.hidden = !this.me;
-    $('signin').hidden = !!this.me;
-    this.go.disabled = this.busy || !this.tx.value.trim();
+// ── past broadcast chat ─────────────────────────────
+// Twitch hands out a video's chat from a position, then page by page, about a minute of a quiet chat at a time.
+const Replay = {
+  id: null, q: [], seen: new Set(), at: 0, cursor: null, last: -1, busy: false, done: false, dead: false, run: 0,
+  open(id) { this.close(); this.id = id; },
+  close() { this.run++; this.id = null; this.q = []; this.seen = new Set(); this.cursor = null; this.last = -1; this.busy = this.done = this.dead = false; },
+  tick(t) {
+    if (!this.id || this.dead) return;
+    if (this.last < 0 || t < this.last - 2 || t > this.last + 8) {   // just started, or a seek
+      this.run++; this.busy = false;
+      this.q = []; this.seen = new Set(); this.at = Math.floor(t); this.cursor = null; this.done = false;
+      Chat.box.textContent = '';
+    }
+    this.last = t;
+    let n = 0;
+    while (n < this.q.length && this.q[n].contentOffsetSeconds <= t) n++;
+    if (n && !document.hidden && Chat.box.offsetParent) Chat.append(this.q.splice(0, n).slice(-120).map(c => Chat.renderReplay(c)));
+    else if (n > 400) this.q.splice(0, n - 120);
+    if (!this.busy && !this.done && (!this.q.length || this.q[this.q.length - 1].contentOffsetSeconds < t + 15)) this.fetch();
   },
-
-  signIn() {
-    const state = rid(16);
-    store.set('signin', { state, back: location.search });
-    location.href = 'https://id.twitch.tv/oauth2/authorize?' + new URLSearchParams({
-      client_id: CHAT_APP, redirect_uri: location.origin + location.pathname, response_type: 'token', scope: 'user:write:chat', state });
-  },
-
-  // Back from Twitch: the token arrives in the address's #fragment (a refusal in the query). Take it
-  // out of the address and return to the channel.
-  arrive() {
-    const h = new URLSearchParams(location.hash.slice(1)), q = new URLSearchParams(location.search);
-    const state = h.get('state') || q.get('state');
-    if (!state || !(h.has('access_token') || q.has('error'))) return;
-    const sent = store.get('signin', null);
-    store.set('signin', null);
-    history.replaceState(null, '', location.pathname + (sent?.back || ''));
-    if (sent?.state === state && h.get('access_token')) this.check(h.get('access_token'));
-  },
-
-  async check(token = this.me?.token) {
-    if (!token) return;
+  async fetch() {
+    this.busy = true;
+    const run = this.run, vars = this.cursor ? { id: this.id, c: this.cursor } : { id: this.id, o: this.at };
+    const head = this.cursor ? '$c: Cursor' : '$o: Int', from = this.cursor ? 'after: $c' : 'contentOffsetSeconds: $o';
     try {
-      const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + token } });
-      if (r.status === 401) return this.out(token === this.me?.token ? 'Twitch signed you out of chat.' : 'Twitch didn’t sign you in. Try again.');
-      const j = await r.json();
-      if (!r.ok || j.client_id !== CHAT_APP) return;
-      this.me = { token, id: j.user_id, login: j.login };
-      this.at = Date.now();
-      store.set('me', this.me);
-      this.show();
+      const d = await gql(`query($id: ID!, ${head}) { video(id: $id) { comments(${from}) { edges { cursor node { id contentOffsetSeconds commenter { id login displayName } message { fragments { text emote { emoteID } } userColor userBadges { setID version } } } } pageInfo { hasNextPage } } } }`, vars, TV_CID);
+      if (run !== this.run) return;
+      const c = d.video?.comments;
+      if (!c) { this.dead = true; return void Chat.note('Twitch isn’t sharing this video’s chat.'); }
+      for (const { node: n } of c.edges) {
+        if (n.contentOffsetSeconds < this.last - 3 || this.seen.has(n.id) || Me.blocks.has(n.commenter?.id)) continue;
+        this.seen.add(n.id);
+        this.q.push(n);
+      }
+      this.q.sort((a, b) => a.contentOffsetSeconds - b.contentOffsetSeconds);
+      this.cursor = c.edges[c.edges.length - 1]?.cursor || null;
+      if (!c.pageInfo?.hasNextPage || !this.cursor) this.done = true;
+    } catch {}
+    finally { if (run === this.run) this.busy = false; }
+  },
+};
+
+// ── your account ────────────────────────────────────
+// Signing in is the device flow of Twitch's TV app: the page shows a code, you approve it on Twitch (on
+// this device or any other), and the page gets a token. It needs no registered app and no trip away from
+// the page, which matters in the Home Screen app, whose storage Safari doesn't share. Playback and
+// reading chat stay anonymous; the account is for what only it can see or do. The token only goes to Twitch.
+const SCOPES = 'channel_read chat:read chat:edit user_read user_follows_edit user_blocks_read user_blocks_edit user:write:chat user:read:follows user:read:blocked_users user:manage:blocked_users user:read:emotes';
+const Me = {
+  acct: store.get('me', null),         // { token, refresh, exp, id, login, name, pic }
+  follows: store.get('follows', null), // your follow list from Twitch, newest first
+  blocks: new Set(store.get('blocks', [])),
+  emotes: store.get('myEmotes', []),   // [{ name, url, owner }]
+  mentions: null,                      // matches your name in chat
+  at: {}, notes: {},                   // when each list was last fetched; why one last failed, for the account sheet
+
+  post(url, params) { return fetch(url, { method: 'POST', body: new URLSearchParams(params) }); },
+
+  async accept(j) {   // a token fresh from Twitch
+    const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + j.access_token } });
+    if (!r.ok) throw new Error(`Twitch answered ${r.status}`);
+    const v = await r.json();
+    this.save({ token: j.access_token, refresh: j.refresh_token || this.acct?.refresh || null,
+      exp: j.expires_in ? Date.now() + j.expires_in * 1000 : 0, id: v.user_id, login: v.login, name: this.acct?.name || v.login, pic: this.acct?.pic || null });
+    this.at.check = Date.now();
+  },
+  save(a) {
+    this.acct = a;
+    store.set('me', a);
+    this.mentions = a ? new RegExp(`(^|[^\\w])@?${a.login}($|[^\\w])`, 'i') : null;
+    UI.account();
+  },
+
+  // A usable token, renewed first if it's about to lapse. Renewals go one at a time: a refresh token works once.
+  async token() {
+    if (this.acct?.exp && Date.now() > this.acct.exp - 120e3) await this.renew();
+    return this.acct?.token || null;
+  },
+  renew() {
+    if (!this.renewing) this.renewing = this.renewNow().finally(() => { this.renewing = null; });
+    return this.renewing;
+  },
+  async renewNow() {
+    const a = this.acct;
+    if (!a?.refresh) return this.out('Twitch signed you out. Sign in again.');
+    try {
+      const r = await this.post('https://id.twitch.tv/oauth2/token', { client_id: TV_CID, grant_type: 'refresh_token', refresh_token: a.refresh });
+      if (r.ok) await this.accept(await r.json());
+      else if (r.status === 400 || r.status === 401) this.out('Twitch signed you out. Sign in again.');
     } catch {}
   },
-
-  out(why) {
-    this.me = null; store.set('me', null);
-    this.show();
-    if (why && Chat.login) Chat.note(why).classList.add('err');
+  async check() {   // Twitch asks apps to re-validate hourly
+    if (!this.acct) return;
+    this.at.check = Date.now();
+    try {
+      const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + this.acct.token } });
+      if (r.status === 401) await this.renew();
+    } catch {}
   },
-
+  out(why) {
+    this.save(null);
+    this.follows = null; this.blocks = new Set(); this.emotes = []; this.at = {}; this.notes = {};
+    store.set('follows', null); store.set('blocks', []); store.set('myEmotes', []);
+    Talk.show();
+    if (!$('home').hidden) Home.load(true);
+    if (why) { if (Chat.login) Chat.note(why).classList.add('err'); else UI.toast(why); }
+  },
   signOut() {
-    const token = this.me?.token;
-    if (token) fetch('https://id.twitch.tv/oauth2/revoke', { method: 'POST', body: new URLSearchParams({ client_id: CHAT_APP, token }) }).catch(() => {});
+    const token = this.acct?.token;
+    if (token) this.post('https://id.twitch.tv/oauth2/revoke', { client_id: TV_CID, token }).catch(() => {});
     this.out();
   },
 
-  async send() {
-    const text = this.tx.value.trim(), me = this.me, room = Chat.uid;
-    if (!text || !me || !room || this.busy) return;
-    this.busy = true; this.show();
-    let r = null, j = null;
+  async gql(body) {
+    const send = t => fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': TV_CID, Authorization: 'OAuth ' + t, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE }, body: JSON.stringify(body) });
+    let r = await send(await this.token());
+    if (r.status === 401 && this.acct?.refresh) { await this.renew(); if (this.acct) r = await send(this.acct.token); }
+    return r.json();
+  },
+  async helix(path, init = {}) {
+    const t = await this.token();
+    return fetch('https://api.twitch.tv/helix' + path, { ...init, headers: { 'Client-Id': TV_CID, Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
+  },
+  async helixAll(path, field) {   // every page of a list
+    const out = [];
+    let after = '';
+    for (let i = 0; i < 60; i++) {
+      const r = await this.helix(`${path}&first=100${after ? '&after=' + after : ''}`);
+      if (!r.ok) throw new Error(`Helix ${r.status}`);
+      const j = await r.json();
+      for (const x of j.data || []) out.push(field(x));
+      after = j.pagination?.cursor || '';
+      if (!after) break;
+    }
+    return out;
+  },
+
+  // Keeps your lists current: all of them on launch, then each at its own pace.
+  async sync(force) {
+    if (!this.acct) return;
+    const due = (k, ms) => force || !this.at[k] || Date.now() - this.at[k] > ms;
+    const jobs = [];
+    if (due('profile', 216e5)) jobs.push(this.loadProfile());
+    if (due('follows', 3e5)) jobs.push(this.loadFollows());
+    if (due('blocks', 36e5)) jobs.push(this.loadBlocks());
+    if (due('emotes', 216e5)) jobs.push(this.loadEmotes());
+    await Promise.allSettled(jobs);
+  },
+  async loadProfile() {
+    this.at.profile = Date.now();
+    const u = (await this.gql({ query: 'query { currentUser { login displayName profileImageURL(width: 70) } }' }))?.data?.currentUser;
+    if (u && this.acct) this.save({ ...this.acct, name: u.displayName || u.login, pic: u.profileImageURL });
+  },
+  async loadFollows() {
+    this.at.follows = Date.now();
+    const before = (this.follows || []).join();
     try {
-      r = await fetch('https://api.twitch.tv/helix/chat/messages', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + me.token, 'Client-Id': CHAT_APP, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ broadcaster_id: room, sender_id: me.id, message: text }),
-      });
-      j = await r.json().catch(() => null);
+      const logins = [];
+      let cursor = null;
+      for (let i = 0; i < 30; i++) {
+        const j = await this.gql({ operationName: 'ChannelFollows', variables: { limit: 100, order: 'DESC', cursor },
+          extensions: { persistedQuery: { version: 1, sha256Hash: 'eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907' } } });
+        const f = j?.data?.user?.follows;
+        if (!f) throw new Error(j?.errors?.[0]?.message || 'no follow list');
+        logins.push(...f.edges.map(e => e.node.login));
+        cursor = f.pageInfo?.hasNextPage ? f.edges[f.edges.length - 1]?.cursor : null;
+        if (!cursor) break;
+      }
+      this.follows = logins; this.notes.follows = null;
+    } catch (e) {
+      try { this.follows = await this.helixAll(`/channels/followed?user_id=${this.acct.id}`, x => x.broadcaster_login); this.notes.follows = null; }
+      catch (e2) { this.notes.follows = `${e.message}; ${e2.message}`; }
+    }
+    store.set('follows', this.follows);
+    UI.owner();
+    if ((this.follows || []).join() !== before && !$('home').hidden) Home.load(true);
+  },
+  async loadBlocks() {   // Twitch's own query stops at 1,000; the API pages through the rest
+    this.at.blocks = Date.now();
+    const ids = new Set();
+    try {
+      const list = (await this.gql({ query: 'query { currentUser { blockedUsers { id } } }' }))?.data?.currentUser?.blockedUsers;
+      for (const u of list || []) ids.add(u.id);
     } catch {}
-    this.busy = false;
-    const d = j?.data?.[0];
-    if (r?.status === 401) return this.out('Twitch signed you out of chat. Sign in again to send messages.');
-    if (r?.ok && d?.is_sent) {
-      if (this.tx.value.trim() === text) this.tx.value = '';
-      Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true;
-    } else Chat.note('Not sent: ' + (d?.drop_reason?.message || j?.message || (r ? `Twitch answered ${r.status}` : 'couldn’t reach Twitch'))).classList.add('err');
+    if (!ids.size || ids.size >= 1000) {
+      try { for (const id of await this.helixAll(`/users/blocks?broadcaster_id=${this.acct.id}`, x => x.user_id)) ids.add(id); }
+      catch (e) { if (!ids.size) this.notes.blocks = e.message; }
+    }
+    if (ids.size) { this.blocks = ids; this.notes.blocks = null; store.set('blocks', [...ids]); }
+  },
+  async loadEmotes() {
+    this.at.emotes = Date.now();
+    try {
+      const sets = (await this.gql({ query: 'query { currentUser { emoteSets { owner { login } emotes { id token } } } }' }))?.data?.currentUser?.emoteSets;
+      if (!sets) throw new Error('no emote sets');
+      const out = new Map();
+      for (const s of sets) for (const e of s.emotes || []) if (/^\w+$/.test(e.token)) out.set(e.token, { name: e.token, url: emoteUrl(e.id), owner: s.owner?.login || '' });
+      this.emotes = [...out.values()];
+      this.notes.emotes = null;
+      store.set('myEmotes', this.emotes);
+    } catch (e) { this.notes.emotes = e.message; }
+  },
+
+  following(login) { return (this.follows || FOLLOWS).includes(login); },
+  async setFollow(u, on) {
+    const j = await this.gql(on
+      ? { query: 'mutation($i: FollowUserInput!) { followUser(input: $i) { follow { user { id } } error { code } } }', variables: { i: { targetID: u.id, disableNotifications: false } } }
+      : { query: 'mutation($i: UnfollowUserInput!) { unfollowUser(input: $i) { follow { user { id } } } }', variables: { i: { targetID: u.id } } });
+    if (j?.errors?.length || j?.data?.followUser?.error) throw new Error(j.errors?.[0]?.message || j.data.followUser.error.code);
+    this.follows = on ? [u.login, ...(this.follows || FOLLOWS).filter(x => x !== u.login)] : (this.follows || FOLLOWS).filter(x => x !== u.login);
+    store.set('follows', this.follows);
+    Home.at = 0;
+  },
+  async block(uid) {
+    let ok = false;
+    try { ok = (await this.helix(`/users/blocks?target_user_id=${uid}&source_context=chat`, { method: 'PUT' })).ok; } catch {}
+    if (!ok) {
+      const j = await this.gql({ query: 'mutation($input: BlockUserInput!) { blockUser(input: $input) { targetUser { login } } }', variables: { input: { targetUserID: uid, sourceContext: 'CHAT' } } }).catch(() => null);
+      ok = !!j?.data?.blockUser && !j.errors?.length;
+    }
+    if (!ok) return false;
+    this.blocks.add(uid);
+    store.set('blocks', [...this.blocks]);
+    Chat.box.querySelectorAll(`[data-u="${CSS.escape(uid)}"]`).forEach(n => n.remove());
+    return true;
+  },
+  // Sub-only stream: Twitch decides by account, so this asks as you.
+  async streamToken(login) {
+    if (!this.acct) return null;
+    try {
+      const j = await this.gql({ query: 'query($l: String!) { streamPlaybackAccessToken(channelName: $l, params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) { value signature authorization { isForbidden forbiddenReasonCode } } }', variables: { l: login } });
+      return j?.data?.streamPlaybackAccessToken || null;
+    } catch { return null; }
+  },
+};
+
+// The code screen. Twitch keeps the code valid for half an hour; the page asks every few seconds whether it's been approved.
+const SignIn = {
+  flow: null,
+  async start() {
+    this.flow = null;
+    Sheet.show(body => this.draw(body));
+    try {
+      const r = await Me.post('https://id.twitch.tv/oauth2/device', { client_id: TV_CID, scopes: SCOPES });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.message || `Twitch answered ${r.status}`);
+      this.flow = { device: j.device_code, code: j.user_code, every: (j.interval || 5) * 1000, until: Date.now() + (j.expires_in || 1800) * 1000 };
+      this.wait();
+    } catch (e) { this.flow = { error: e.message }; }
+    if ($('sheet').hidden) return;
+    Sheet.render();
+  },
+  draw(body) {
+    body.append(el('h3', null, 'Sign in with Twitch'));
+    const f = this.flow;
+    if (!f) return body.append(el('p', 'sgn', 'Asking Twitch for a code…'));
+    if (f.error) {
+      body.append(el('p', 'sgn', `Couldn’t start: ${f.error}`));
+      const b = el('button', 'btn pri wide', 'Try again'); b.type = 'button'; b.onclick = () => this.start(); body.append(b);
+      return;
+    }
+    const code = el('button', 'code', f.code); code.type = 'button'; code.setAttribute('aria-label', 'Copy the code');
+    code.onclick = () => { navigator.clipboard?.writeText(f.code).then(() => UI.toast('Code copied')).catch(() => {}); };
+    const go = el('a', 'btn pri wide', 'Approve on Twitch');
+    go.href = `https://www.twitch.tv/activate?device-code=${encodeURIComponent(f.code)}`; go.target = '_blank'; go.rel = 'noopener';
+    body.append(code, go, el('p', 'sgn', 'Or enter the code at twitch.tv/activate on any device that’s signed in. This screen moves on by itself once you’ve approved it.'));
+    body.append(el('p', 'sgn dim', 'Lets you send chat, keeps your follow list in sync, hides chatters you’ve blocked, and adds a follow button. Watching stays anonymous.'));
+  },
+  wait() {
+    const f = this.flow;
+    clearTimeout(this.timer);
+    if (f?.device) this.timer = setTimeout(() => this.poll(f), f.every);
+  },
+  async poll(f) {
+    if (f !== this.flow || $('sheet').hidden) return;
+    if (Date.now() > f.until) return this.start();
+    try {
+      const r = await Me.post('https://id.twitch.tv/oauth2/token', { client_id: TV_CID, device_code: f.device, grant_type: 'urn:ietf:params:oauth:grant-type:device_code', scopes: SCOPES });
+      const j = await r.json().catch(() => ({}));
+      if (f !== this.flow) return;
+      if (r.ok && j.access_token) {
+        await Me.accept(j);
+        this.flow = null;
+        Sheet.close();
+        UI.toast(`Signed in as ${Me.acct.login}`);
+        Talk.show();
+        await Me.sync(true);
+        if (!$('home').hidden) Home.load(true);
+        return;
+      }
+      if (/invalid device code|expired/i.test(j.message || '')) return this.start();
+    } catch {}
+    this.wait();
+  },
+  cancel() { clearTimeout(this.timer); this.flow = null; },
+};
+document.addEventListener('visibilitychange', () => { if (!document.hidden && SignIn.flow?.device) SignIn.poll(SignIn.flow); });   // back from approving it
+
+// ── sending chat ────────────────────────────────────
+// The API says outright whether a message went out and why not, so it goes first. If it turns this
+// client away, chat's own socket does the job: a second connection used only for sending, while the
+// messages you read (your own included) keep coming through the anonymous one.
+const Talk = {
+  busy: false, tx: $('sayTx'), go: $('sayGo'), reply: null,
+  irc: null, ircOk: false, ircQ: [], ircWait: null, useIrc: false,
+
+  show() {
+    const me = !!Me.acct;
+    $('paneChat').classList.toggle('talk', !!Chat.login);
+    this.tx.hidden = this.go.hidden = $('bEmote').hidden = !me;
+    $('signin').hidden = me;
+    this.go.disabled = this.busy || !this.tx.value.trim();
+    if (!me || !Chat.login) { this.setReply(null); $('ac').hidden = true; }
+    this.hint();
+  },
+  hint() {
+    const r = Chat.room, bits = [];
+    if (r['subs-only'] === '1') bits.push('subscribers only');
+    if (r['emote-only'] === '1') bits.push('emotes only');
+    if (r['followers-only'] !== undefined && +r['followers-only'] >= 0) bits.push('followers only');
+    if (+r.slow > 0) bits.push(`slow mode ${r.slow} s`);
+    this.tx.placeholder = bits.length ? bits.join(' · ') : 'Send a message';
+  },
+  setReply(r) {
+    this.reply = r;
+    $('rpb').hidden = !r;
+    if (r) $('rpbT').textContent = `Replying to ${r.name}`;
+  },
+  insert(word) {
+    const v = this.tx.value;
+    this.tx.value = (v && !/\s$/.test(v) ? v + ' ' : v) + word + ' ';
     this.show();
+  },
+
+  // Finishes the word being typed: @names from who's been talking, anything else from the emotes.
+  complete() {
+    const box = $('ac'), m = this.tx.value.match(/(?:^|\s)(@?)([\w-]{2,})$/);
+    box.textContent = '';
+    box.hidden = true;
+    if (!m) return;
+    const low = m[2].toLowerCase(), hits = [];
+    if (m[1]) { for (const [l, n] of [...Chat.names].reverse()) if (l.startsWith(low)) hits.push({ word: '@' + n }); }
+    else for (const e of [...Chat.chanEmotes, ...Me.emotes, ...Chat.globalEmotes]) if (e.name.toLowerCase().startsWith(low)) hits.push({ word: e.name, url: e.url });
+    for (const x of hits.slice(0, 16)) {
+      const b = el('button'); b.type = 'button'; b.dataset.w = x.word;
+      if (x.url) { const i = pic(x.url, 'em'); i.alt = ''; b.append(i); }
+      b.append(x.word);
+      box.append(b);
+    }
+    box.hidden = !hits.length;
+  },
+
+  async send() {
+    const text = this.tx.value.trim(), room = Chat.uid, reply = this.reply?.id;
+    if (!text || !Me.acct || !room || this.busy) return;
+    this.busy = true; this.show();
+    const res = (!this.useIrc && !text.startsWith('/') && await this.viaApi(text, room, reply)) || await this.viaIrc(text, reply);
+    this.busy = false;
+    if (res.ok) {
+      if (this.tx.value.trim() === text) this.tx.value = '';
+      this.setReply(null);
+      $('ac').hidden = true;
+      Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true;
+    } else Chat.note('Not sent: ' + res.why).classList.add('err');
+    this.show();
+  },
+  async viaApi(text, room, reply) {   // null means try the socket
+    try {
+      const r = await Me.helix('/chat/messages', { method: 'POST',
+        body: JSON.stringify({ broadcaster_id: room, sender_id: Me.acct.id, message: text, ...(reply ? { reply_parent_message_id: reply } : {}) }) });
+      const j = await r.json().catch(() => null), d = j?.data?.[0];
+      if (r.ok) return d?.is_sent ? { ok: true } : { ok: false, why: d?.drop_reason?.message || 'Twitch dropped it' };
+      if (r.status === 401 || r.status === 403) { this.useIrc = r.status === 401; return null; }
+      return { ok: false, why: j?.message || `Twitch answered ${r.status}` };
+    } catch { return { ok: false, why: 'couldn’t reach Twitch' }; }
+  },
+  viaIrc(text, reply) {
+    return new Promise(resolve => {
+      const done = r => { clearTimeout(t); if (this.ircWait === done) this.ircWait = null; resolve(r); };
+      const t = setTimeout(() => done({ ok: true }), 2500);   // no refusal by then means it went through
+      this.ircWait = done;
+      this.ircSend(`${reply ? `@reply-parent-msg-id=${reply} ` : ''}PRIVMSG #${Chat.login} :${text}`);
+    });
+  },
+  async ircSend(line) {
+    if (this.ircOk && this.irc?.readyState === 1) return this.irc.send(line);
+    this.ircQ.push(line);
+    if (this.irc) return;
+    const token = await Me.token();
+    const ws = this.irc = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+    ws.onopen = () => {
+      ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
+      ws.send('PASS oauth:' + token);
+      ws.send('NICK ' + Me.acct?.login);
+    };
+    ws.onmessage = e => {
+      for (const raw of e.data.split('\r\n')) {
+        if (!raw) continue;
+        const m = parseIrc(raw);
+        if (m.cmd === 'PING') ws.send('PONG :' + (m.text || 'tmi.twitch.tv'));
+        else if (m.cmd === 'RECONNECT') ws.close();
+        else if (m.cmd === 'GLOBALUSERSTATE') { this.ircOk = true; for (const l of this.ircQ.splice(0)) ws.send(l); }
+        else if (m.cmd === 'USERSTATE') this.ircWait?.({ ok: true });
+        else if (m.cmd === 'NOTICE') {
+          if (/authentication failed|improperly formatted/i.test(m.text || '')) { this.ircQ = []; this.ircWait?.({ ok: false, why: 'Twitch refused the sign-in' }); Me.check(); ws.close(); }
+          else if ((m.tags['msg-id'] || '').startsWith('msg_')) this.ircWait?.({ ok: false, why: m.text });
+        }
+      }
+    };
+    ws.onclose = () => { if (this.irc === ws) { this.irc = null; this.ircOk = false; } };
   },
 };
 $('say').addEventListener('submit', e => { e.preventDefault(); Talk.send(); });
-Talk.tx.addEventListener('input', () => Talk.show());
-Talk.go.addEventListener('mousedown', e => e.preventDefault());   // tapping send leaves the keyboard up
-$('signin').onclick = () => Talk.signIn();
+Talk.tx.addEventListener('input', () => { Talk.show(); Talk.complete(); });
+for (const n of [Talk.go, $('ac'), $('bEmote'), $('rpbX')]) n.addEventListener('mousedown', e => e.preventDefault());   // tapping these leaves the keyboard up
+$('signin').onclick = () => SignIn.start();
+$('rpbX').onclick = () => Talk.setReply(null);
+$('ac').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  Talk.tx.value = Talk.tx.value.replace(/(@?[\w-]+)$/, '') + b.dataset.w + ' ';
+  $('ac').hidden = true;
+  Talk.show();
+});
+
+// The emote picker, above the box. Picking one leaves the keyboard down, so several in a row is one tap each.
+const Picker = {
+  on: false,
+  show(on) {
+    this.on = on;
+    $('ep').hidden = !on;
+    $('bEmote').classList.toggle('on', on);
+    if (on) { Talk.tx.blur(); $('epq').value = ''; this.draw(); }
+  },
+  draw() {
+    const box = $('epl'), term = $('epq').value.trim().toLowerCase(), used = new Set();
+    box.textContent = '';
+    const section = (title, list) => {
+      const items = list.filter(e => !used.has(e.name) && (!term || e.name.toLowerCase().includes(term)));
+      if (!items.length) return;
+      box.append(el('h4', null, title));
+      const g = el('div', 'epg');
+      for (const e of items.slice(0, 400)) {
+        used.add(e.name);
+        const b = el('button'), i = pic(e.url);
+        b.type = 'button'; b.dataset.w = e.name; b.title = e.name;
+        i.alt = e.name; i.loading = 'lazy';
+        b.append(i); g.append(b);
+      }
+      box.append(g);
+    };
+    const name = P.user?.displayName || 'This channel', mine = [...Me.emotes].sort((a, b) => (b.owner === Chat.login) - (a.owner === Chat.login));
+    section(name, Chat.chanEmotes);
+    section('Your Twitch emotes', mine);
+    section('Global', Chat.globalEmotes);
+    if (!box.children.length) box.append(el('p', 'note', 'No emotes match.'));
+  },
+};
+$('bEmote').onclick = () => Picker.show(!Picker.on);
+$('epq').addEventListener('input', () => Picker.draw());
+$('epl').addEventListener('click', e => { const b = e.target.closest('button'); if (b) Talk.insert(b.dataset.w); });
+
+// A chatter's card: tap their name in chat.
+const Card = {
+  async open(line) {
+    const login = line?.dataset.l, uid = line?.dataset.u, msg = line?.dataset.id;
+    if (!login) return;
+    const name = line.querySelector('.n')?.textContent || login;
+    let u = null;
+    Sheet.show(body => {
+      const head = el('div', 'card');
+      head.append(pic(u?.profileImageURL, 'cav'));
+      const meta = el('div', 'meta');
+      meta.append(el('div', 'nm', name));
+      if (u) meta.append(el('div', 'gm', [u.stream ? 'Live now' : null, u.followers ? `${count(u.followers.totalCount)} followers` : null, u.createdAt ? `joined ${new Date(u.createdAt).toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}` : null].filter(Boolean).join(' · ')));
+      head.append(meta);
+      body.append(head);
+      const said = [...Chat.box.querySelectorAll(`[data-l="${CSS.escape(login)}"] .tx`)].slice(-4);
+      if (said.length) { const box = el('div', 'said'); for (const s of said) box.append(el('div', null, s.textContent)); body.append(box); }
+      const items = [];
+      if (Me.acct && Chat.login) {
+        if (msg) items.push({ label: 'Reply', pick: () => { Talk.setReply({ id: msg, name }); Sheet.close(); Talk.tx.focus(); } });
+        items.push({ label: 'Mention', pick: () => { Talk.insert('@' + name); Sheet.close(); Talk.tx.focus(); } });
+      }
+      items.push({ label: 'Go to their channel', pick: () => go(`?c=${login}`, true) });
+      if (Me.acct && uid && uid !== Me.acct.id) items.push({ label: 'Block', desc: 'Hides them everywhere on Twitch, here included.', pick: async () => {
+        Sheet.close();
+        UI.toast(await Me.block(uid) ? `Blocked ${name}` : 'Twitch didn’t take the block');
+      } });
+      Sheet.group(body, null, items);
+    });
+    try { u = (await gql('query($l: String!) { user(login: $l) { createdAt profileImageURL(width: 70) followers { totalCount } stream { id } } }', { l: login })).user; if (!$('sheet').hidden) Sheet.render(); } catch {}
+  },
+};
 
 // iPhone's keyboard covers the page instead of shrinking it, and slides the page up to keep the box
 // in view, which takes the picture off the top. While it's up, the watch screen fits the part of the
@@ -1412,11 +2218,12 @@ function fitKeyboard() {
   w.classList.toggle('kb', up);
   w.style.height = up ? vv.height + 'px' : '';
   w.style.transform = up && vv.offsetTop ? `translateY(${vv.offsetTop}px)` : '';
+  if (up && Picker.on) Picker.show(false);
 }
 vv?.addEventListener('resize', fitKeyboard);
 vv?.addEventListener('scroll', fitKeyboard);
 Talk.tx.addEventListener('blur', () => setTimeout(fitKeyboard, 100));
-$('watch').addEventListener('click', e => { if (!e.target.closest('#say')) Talk.tx.blur(); });   // a tap elsewhere puts the keyboard away
+$('watch').addEventListener('click', e => { if (!e.target.closest('#say,#ac,#ep,#rpb')) Talk.tx.blur(); });   // a tap elsewhere puts the keyboard away
 
 // ── videos tab ──────────────────────────────────────
 const Vods = {
@@ -1439,6 +2246,8 @@ const Vods = {
         const now = v.status === 'RECORDING' && P.user?.login === login ? P.user.stream?.previewImageURL : null;   // Twitch has no VOD thumbnail yet
         const th = el('div', 'thumb'); th.append(pic(now || v.previewThumbnailURL));
         th.append(el('span', 'vc r', v.status === 'RECORDING' ? 'live' : dur(v.lengthSeconds)));
+        const seen = v.status === 'RECORDING' ? 0 : store.get('pos.' + v.id, 0) / v.lengthSeconds;
+        if (seen > 0.01) { const bar = el('i', 'pr'); bar.style.width = Math.min(100, seen * 100) + '%'; th.append(bar); }
         const meta = el('div', 'meta'), title = el('div', 'tt');
         if (v.status === 'RECORDING') title.append(el('span', 'st lv', 'LIVE'));
         if (v.resourceRestriction) title.append(el('span', 'st', 'SUB'));
@@ -1455,19 +2264,101 @@ const Vods = {
     }
   },
 };
-$('vods').addEventListener('click', e => {
+for (const id of ['vods', 'clips']) $(id).addEventListener('click', e => {
   const a = e.target.closest('a.vod');
   if (!a) return;
   e.preventDefault();
   go(a.getAttribute('href'), true);
 });
 
+const Clips = {
+  login: null, loaded: null, period: store.get('clipPeriod', 'LAST_WEEK'),
+  PERIODS: [['LAST_WEEK', '7 days'], ['LAST_MONTH', '30 days'], ['ALL_TIME', 'All time']],
+  channel(login) { this.login = login; this.loaded = null; if (!$('paneClips').hidden) this.load(); },
+  async load() {
+    const login = this.login, box = $('clips'), key = login + this.period;
+    if (!login || this.loaded === key) return;
+    this.loaded = key;
+    box.textContent = '';
+    const chips = el('div', 'pchips');
+    for (const [id, label] of this.PERIODS) {
+      const b = el('button', id === this.period ? 'on' : '', label); b.type = 'button';
+      b.onclick = () => { this.period = id; store.set('clipPeriod', id); this.load(); };
+      chips.append(b);
+    }
+    const list = el('div');
+    list.append(el('p', 'note', 'Loading…'));
+    box.append(chips, list);
+    try {
+      const d = await gql(`query($l: String!) { user(login: $l) { clips(first: 40, criteria: { period: ${this.period} }) { edges { node { slug title viewCount durationSeconds createdAt thumbnailURL(width: 320, height: 180) curator { displayName } game { displayName } } } } } }`, { l: login });
+      if (this.loaded !== key) return;
+      const clips = (d.user?.clips?.edges || []).map(e => e.node);
+      list.textContent = '';
+      if (!clips.length) return list.append(el('p', 'note', 'No clips from this stretch.'));
+      for (const c of clips) {
+        const a = el('a', 'vod'); a.href = `?clip=${encodeURIComponent(c.slug)}`;
+        const th = el('div', 'thumb'), bits = [`${count(c.viewCount)} views`, ago(c.createdAt), c.curator?.displayName && `by ${c.curator.displayName}`];
+        th.append(pic(c.thumbnailURL), el('span', 'vc r', clock(c.durationSeconds)));
+        const meta = el('div', 'meta');
+        meta.append(el('div', 'tt', c.title || 'Untitled'), el('div', 'gm', bits.filter(Boolean).join(' · ')));
+        a.append(th, meta);
+        list.append(a);
+      }
+    } catch (e) {
+      if (this.loaded !== key) return;
+      this.loaded = null; list.textContent = '';
+      const p = el('p', 'note', 'Couldn’t load clips. '), b = el('button', null, 'Retry'); b.type = 'button'; b.onclick = () => this.load();
+      p.append(b); list.append(p);
+    }
+  },
+};
+
+const About = {
+  login: null, loaded: null,
+  channel(login) { this.login = login; this.loaded = null; if (!$('paneAbout').hidden) this.load(); },
+  fetch(login) {
+    return gql('query($l: String!) { user(login: $l) { description createdAt followers { totalCount } roles { isPartner } lastBroadcast { startedAt title } channel { socialMedias { name title url } schedule { nextSegment { startAt title } } } } }', { l: login }).then(d => d.user);
+  },
+  async load() {
+    const login = this.login, box = $('about');
+    if (!login || this.loaded === login) return;
+    this.loaded = login;
+    box.textContent = '';
+    box.append(el('p', 'note', 'Loading…'));
+    try {
+      const u = await this.fetch(login);
+      if (this.login !== login) return;
+      box.textContent = '';
+      const facts = [u?.followers && `${count(u.followers.totalCount)} followers`, u?.roles?.isPartner && 'Partner', u?.createdAt && `since ${new Date(u.createdAt).getFullYear()}`];
+      box.append(el('div', 'facts', facts.filter(Boolean).join(' · ')));
+      if (u?.description) box.append(el('p', 'desc', u.description));
+      const next = u?.channel?.schedule?.nextSegment;
+      if (next) box.append(el('p', 'desc', `Next stream: ${when(next.startAt)}${next.title ? ' · ' + next.title : ''}`));
+      if (u?.lastBroadcast?.startedAt) box.append(el('p', 'desc dim', `Last went live ${ago(u.lastBroadcast.startedAt)}${u.lastBroadcast.title ? ': ' + u.lastBroadcast.title : ''}`));
+      const socials = u?.channel?.socialMedias || [];
+      if (socials.length) {
+        const row = el('div', 'links');
+        for (const s of socials.filter(x => /^https?:/i.test(x.url))) { const a = el('a', 'btn', s.title || s.name); a.href = s.url; a.target = '_blank'; a.rel = 'noopener noreferrer'; row.append(a); }
+        box.append(row);
+      }
+    } catch (e) {
+      if (this.login !== login) return;
+      this.loaded = null; box.textContent = '';
+      box.append(el('p', 'note', 'Couldn’t load this.'));
+    }
+  },
+};
+
 const Tabs = {
   show(name) {
     document.querySelectorAll('.tabs [data-pane]').forEach(b => b.classList.toggle('on', b.dataset.pane === name));
     $('paneChat').hidden = name !== 'chat';
     $('paneVods').hidden = name !== 'vods';
+    $('paneClips').hidden = name !== 'clips';
+    $('paneAbout').hidden = name !== 'about';
     if (name === 'vods') Vods.load();
+    if (name === 'clips') Clips.load();
+    if (name === 'about') About.load();
     if (name === 'chat' && Chat.stick) Chat.box.scrollTop = Chat.box.scrollHeight;
   },
 };
@@ -1481,7 +2372,7 @@ const UI = {
     document.title = (u?.displayName || login || 'Video') + ' · Wraith';
     $('twLink').href = 'https://www.twitch.tv/' + (login || '');
     if (u) this.info(u);
-    else { $('iName').textContent = login || ''; $('iTitle').textContent = ''; $('iSub').textContent = ''; $('iAv').removeAttribute('src'); }
+    else { $('iName').textContent = login || ''; $('iTitle').textContent = ''; $('iSub').textContent = ''; $('iAv').removeAttribute('src'); $('hudName').textContent = login || ''; $('hudSub').textContent = ''; this.owner(null); }
     Tabs.show('chat');
     this.spin(true);
     hud(true);
@@ -1492,8 +2383,11 @@ const UI = {
     $('iTitle').textContent = u.broadcastSettings?.title || '';
     const s = u.stream;
     $('iSub').textContent = s ? [s.game?.displayName, `${count(s.viewersCount)} watching`, uptime(s.createdAt)].filter(Boolean).join(' · ') : 'Offline';
+    $('hudName').textContent = u.displayName || u.login;
+    $('hudSub').textContent = s ? `· ${count(s.viewersCount)}` : '';
     $('twLink').href = 'https://www.twitch.tv/' + u.login;
     document.title = (u.displayName || u.login) + ' · Wraith';
+    this.owner(u);
     if ('mediaSession' in navigator && u.stream) {
       try { navigator.mediaSession.metadata = new MediaMetadata({ title: u.broadcastSettings?.title || 'Live', artist: u.displayName, artwork: u.profileImageURL ? [{ src: u.profileImageURL, sizes: '150x150' }] : [] }); } catch {}
     }
@@ -1505,13 +2399,46 @@ const UI = {
     $('iSub').textContent = [day(v.createdAt), dur(v.lengthSeconds), v.game?.displayName].filter(Boolean).join(' · ');
     $('twLink').href = `https://www.twitch.tv/videos/${v.id}`;
     document.title = (v.title || 'Video') + ' · Wraith';
+    this.owner(v.owner);
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.metadata = new MediaMetadata({ title: v.title || 'Past broadcast', artist: v.owner?.displayName || '', artwork: v.owner?.profileImageURL ? [{ src: v.owner.profileImageURL, sizes: '150x150' }] : [] }); } catch {}
     }
   },
+  clipInfo(c) {
+    const b = c.broadcaster;
+    $('iAv').src = b?.profileImageURL || '';
+    $('iName').textContent = b?.displayName || '';
+    $('iTitle').textContent = c.title || '';
+    $('iSub').textContent = [`${count(c.viewCount)} views`, ago(c.createdAt), c.curator?.displayName && `clipped by ${c.curator.displayName}`].filter(Boolean).join(' · ');
+    $('twLink').href = `https://clips.twitch.tv/${c.slug}`;
+    document.title = (c.title || 'Clip') + ' · Wraith';
+    this.owner(b);
+  },
+  // Who the follow button is about, if you're signed in to use it.
+  owner(u) {
+    if (u !== undefined) this.chan = u;
+    const b = $('bFollow'), on = !!(this.chan && Me.acct && this.chan.id && this.chan.id !== Me.acct.id);
+    b.hidden = !on;
+    if (!on) return;
+    const f = Me.following(this.chan.login);
+    b.classList.toggle('on', f);
+    b.textContent = f ? 'Following' : 'Follow';
+  },
+  account() {   // signed in or out
+    const a = $('acct'), me = Me.acct;
+    a.querySelector('img')?.remove();
+    a.classList.toggle('me', !!me?.pic);
+    if (me?.pic) a.append(pic(me.pic));
+    if (!$('watch').hidden) this.owner();
+  },
   offline(u, ended) {
     this.spin(false);
-    UI.msg(u.profileImageURL, ended ? `${u.displayName}’s stream ended` : `${u.displayName} is offline`, 'Past broadcasts are under Videos.');
+    UI.msg(u.profileImageURL, ended ? `${u.displayName}’s stream ended` : `${u.displayName} is offline`, 'Starts by itself if they go live. Past broadcasts are under Videos.');
+    const gen = P.gen;
+    About.fetch(u.login).then(x => {
+      const next = x?.channel?.schedule?.nextSegment;
+      if (next && gen === P.gen && !$('msgbox').hidden) $('msgbox').append(el('div', 'nx', `Next stream: ${when(next.startAt)}${next.title ? ' · ' + next.title : ''}`));
+    }).catch(() => {});
     Tabs.show('vods');
   },
   msg(avatar, title, body, retry) {
@@ -1533,7 +2460,9 @@ const UI = {
     box.append(el('div', null, 'On iPhone or Mac it plays right here. On this computer, open it on Twitch, where the Wraith extension plays the CDN copy.'));
     const a = el('div', 'acts'), tw = el('a', 'btn pri', 'Open on Twitch');
     tw.href = vod ? why : `https://www.twitch.tv/${login}`; tw.target = '_blank'; tw.rel = 'noopener';
-    a.append(tw); box.append(a);
+    a.append(tw);
+    if (!vod && login) { const b = el('button', 'btn', 'Try again'); b.type = 'button'; b.onclick = () => P.open(login); a.append(b); }
+    box.append(a);
     box.hidden = false;
     this.spin(false);
   },
@@ -1571,7 +2500,7 @@ const UI = {
       + (left > 1 ? ` (${clock(left)})` : '');
   },
   toast(text) {
-    const t = $('toast');
+    const t = $($('watch').hidden ? 'gtoast' : 'toast');
     t.textContent = text; t.hidden = false;
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
   },
@@ -1582,9 +2511,17 @@ function hud(on) {
   clearTimeout(hudTimer);
   if (on) hudTimer = setTimeout(() => { const v = P.active(); if (v && !v.paused && $('sheet').hidden) stage.classList.remove('ui'); }, 3500);
 }
+let lastTap = 0;
 stage.addEventListener('click', e => {
   if (e.target.closest('.msgbox')) return;
-  if (e.target.closest('button,a')) return hud(true);
+  if (e.target.closest('button,a,input')) return hud(true);
+  const now = performance.now();
+  if (now - lastTap < 300) {   // a double tap: fullscreen, without the controls the first tap brought up
+    lastTap = 0;
+    if (!stage.classList.contains('vod')) { $('bFull').click(); hud(false); }
+    return;
+  }
+  lastTap = now;
   hud(!stage.classList.contains('ui'));
 });
 stage.addEventListener('mousemove', () => hud(true));
@@ -1602,10 +2539,20 @@ function togglePlay() {
 $('bPlay').onclick = togglePlay;
 $('bigPlay').onclick = () => { UI.big(false); unlock(); P.userPaused = false; P.play(P.active() || vL); };
 $('bMute').onclick = () => { unlock(); Sound.set(!Sound.muted); };
+$('vol').addEventListener('input', e => { Sound.setLevel(+e.target.value, true); hud(true); });
 $('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); };
 $('bBack').onclick = $('bBack2').onclick = () => back();
+$('bFollow').onclick = async () => {
+  const u = UI.chan, on = !Me.following(u?.login);
+  if (!u) return;
+  $('bFollow').disabled = true;
+  try { await Me.setFollow(u, on); UI.toast(on ? `Following ${u.displayName}` : `Unfollowed ${u.displayName}`); }
+  catch (e) { UI.toast(`Twitch didn’t take it (${e.message})`); }
+  $('bFollow').disabled = false;
+  UI.owner();
+};
 $('watch').classList.toggle('nochat', !store.get('sideChat', false));   // side chat: hidden until you show it, then as you left it
-$('bChat').onclick = () => store.set('sideChat', !$('watch').classList.toggle('nochat'));
+$('bChat').onclick = $('bChat2').onclick = () => store.set('sideChat', !$('watch').classList.toggle('nochat'));
 $('bLat').onclick = $('bSet').onclick = () => Sheet.open();
 $('bFull').onclick = () => {
   if ($('watch').classList.contains('full')) return UI.fill(false);
@@ -1615,66 +2562,84 @@ $('bFull').onclick = () => {
   else UI.fill(true);
 };
 document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !$('sheet').hidden) return Sheet.close();
   if ($('watch').hidden || e.target.closest('input') || e.metaKey || e.ctrlKey) return;
   if (e.key === ' ' || e.key === 'k') { e.preventDefault(); togglePlay(); }
   else if (e.key === 'm') $('bMute').click();
   else if (e.key === 'f') $('bFull').click();
-  else if (e.key === 'Escape' && !$('sheet').hidden) Sheet.close();
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); Sound.setLevel(Sound.level + (e.key === 'ArrowUp' ? 0.05 : -0.05), true); hud(true); }
 });
 
 // ── settings sheet ──────────────────────────────────
 const Sheet = {
-  open() {
+  fn: null,
+  show(fn) {
+    this.fn = fn;
     this.render();
     $('sheet').hidden = false;
     clearTimeout(hudTimer);
+    clearInterval(this.timer);
     this.timer = setInterval(() => this.stats(), 1000);
   },
-  close() { $('sheet').hidden = true; clearInterval(this.timer); hud(true); },
+  open() { this.show(body => this.playback(body)); },
+  account() { this.show(body => this.accountItems(body, true)); },
+  close() { $('sheet').hidden = true; clearInterval(this.timer); SignIn.cancel(); if (!$('watch').hidden) hud(true); },
   render() {
     const body = $('sheetBody');
     body.textContent = '';
-    const group = (title, items) => {
-      body.append(el('h3', null, title));
-      const box = el('div', 'opts');
-      for (const it of items) {
-        const b = el('button', 'opt' + (it.on ? ' on' : '')); b.type = 'button'; b.disabled = !!it.disabled;
-        const l = el('span', 'l', it.label);
-        if (it.desc) l.append(el('span', 'd', it.desc));
-        b.append(l); b.insertAdjacentHTML('beforeend', icon('check')); b.lastChild.classList.add('ck');
-        b.onclick = () => { it.pick(); this.render(); };
-        box.append(b);
-      }
-      body.append(box);
-    };
-    const live = P.user?.stream;
-    if (P.feed !== 'vod') group('Feed', [
+    this.fn(body);
+  },
+  group(body, title, items) {
+    if (title) body.append(el('h3', null, title));
+    const box = el('div', 'opts');
+    for (const it of items) {
+      const b = el('button', 'opt' + (it.on ? ' on' : '')); b.type = 'button'; b.disabled = !!it.disabled;
+      const l = el('span', 'l', it.label);
+      if (it.desc) l.append(el('span', 'd', it.desc));
+      b.append(l); b.insertAdjacentHTML('beforeend', icon('check')); b.lastChild.classList.add('ck');
+      b.onclick = () => { it.pick?.(); if (!$('sheet').hidden && this.fn) this.render(); };
+      box.append(b);
+    }
+    body.append(box);
+  },
+  playback(body) {
+    const live = P.user?.stream, past = P.feed === 'vod' || P.feed === 'clip';
+    if (!past) this.group(body, 'Feed', [
       { label: 'Low latency', desc: `About ${TARGET.live} s behind. Ads are cut out${cdnLive ? '; during a break you watch the ad-free feed' : ''}.`,
         on: P.pref === 'live', disabled: P.subOnly, pick: () => P.setPref('live') },
       { label: 'Ad-free CDN', desc: `About ${TARGET.cdn} s behind. Never has ads and plays sub-only streams${cdnLive ? '' : ' (Safari only)'}.`,
         on: P.pref === 'cdn', disabled: !cdnLive, pick: () => P.setPref('cdn') },
     ]);
     const qs = P.qualities();
-    if (live && P.feed !== 'vod') group('Quality', [
+    if (live && !past) this.group(body, 'Quality', [
       { label: 'Source', desc: qs[0] ? qs[0].label.replace(' · source', '') : null, on: P.q === 'source', pick: () => P.setQuality('source') },
       ...qs.slice(1).map(x => ({ label: x.label, on: P.q === x.id, pick: () => P.setQuality(x.id) })),
       ...(P.hls ? [{ label: 'Auto', desc: 'Lets the player drop quality on a weak connection.', on: P.q === 'auto', pick: () => P.setQuality('auto') }] : []),
     ]);
-    if (CHAT_APP && Talk.me) group('Chat', [
-      { label: `Sign out ${Talk.me.login}`, desc: 'Messages you send go out as this Twitch account.', pick: () => Talk.signOut() },
-    ]);
+    this.accountItems(body);
     body.append(el('div', 'stats'));
     this.stats();
   },
+  accountItems(body, full) {
+    const me = Me.acct;
+    if (!me) return this.group(body, 'Account', [{ label: 'Sign in with Twitch', desc: 'Send chat, your real follow list, hide chatters you’ve blocked.', pick: () => SignIn.start() }]);
+    const facts = [`${(Me.follows || FOLLOWS).length} follows`, `${Me.blocks.size} blocked`, `${Me.emotes.length} emotes`].join(' · ');
+    this.group(body, 'Account', [{ label: `Sign out ${me.name || me.login}`, desc: facts, pick: () => Me.signOut() }]);
+    const trouble = Object.entries(Me.notes).filter(([, v]) => v);
+    if (trouble.length) { const s = el('div', 'stats'); for (const [k, v] of trouble) s.append(el('div', null, `${k}: ${v}`)); body.append(s); }
+  },
   stats() {
-    const s = $('sheetBody').querySelector('.stats');
-    if (!s) return;
+    const s = $('sheetBody').querySelector('.stats:last-child');
+    if (!s || !this.fn || !P.feed) return;
     const v = P.active(), l = P.latency(), lines = [];
-    if (P.feed) lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : P.feed === 'live' ? 'low-latency feed' : P.feed === 'cdn' ? 'CDN feed' : 'past broadcast'}`);
+    const lvl = P.hls?.levels?.[P.hls.currentLevel];
+    lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : { live: 'low-latency feed', cdn: 'CDN feed', vod: 'past broadcast', clip: 'clip' }[P.feed]}`);
     if (l != null) lines.push(`Behind live: ${l.toFixed(1)} s${P.feed === 'live' ? ` (aiming for ${P.liveT} s)` : ''}`);
-    if (v && v.videoHeight) lines.push(`Picture: ${v.videoWidth}×${v.videoHeight}${v.playbackRate !== 1 ? ` · speed ${v.playbackRate}×` : ''}`);
+    if (v && v.videoHeight) lines.push(`Picture: ${v.videoWidth}×${v.videoHeight}${lvl ? ` · ${(lvl.bitrate / 1e6).toFixed(1)} Mbps · ${lvl.details?.fragments?.[0]?.initSegment ? 'fMP4' : 'TS'}` : ''}${v.playbackRate !== 1 ? ` · speed ${v.playbackRate}×` : ''}`);
+    if (P.cap) lines.push(`Held ${P.cap} step${P.cap > 1 ? 's' : ''} below your pick after buffering`);
     if (v) lines.push(`Buffered: ${bufAhead(v).toFixed(1)} s`);
     if (P.skipped) lines.push(`Ad breaks skipped: ${P.skipped}`);
+    if (Quota.n) lines.push(`Relay today: ${Quota.n.toLocaleString()} of 20,000`);
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
     s.textContent = '';
@@ -1687,25 +2652,61 @@ $('scrim').onclick = () => Sheet.close();
 const Recent = {
   list() { return store.get('recent', []); },
   add(u) {
-    if (FOLLOWS.includes(u.login)) return;
+    if (Home.roster().includes(u.login)) return;
     store.set('recent', [{ l: u.login, n: u.displayName, p: u.profileImageURL }, ...this.list().filter(x => x.l !== u.login)].slice(0, 12));
   },
   remove(l) { store.set('recent', this.list().filter(x => x.l !== l)); Home.renderRecent(); },
 };
 
+// A channel's thumbnail, keeping the last one on screen until its replacement has loaded so the list never blinks.
+const thumbs = new Map();
+function thumb(login, url) {
+  const img = pic(thumbs.get(login) || url);
+  if (url && thumbs.get(login) !== url) { const n = new Image(); n.onload = () => { thumbs.set(login, url); img.src = url; }; n.src = url; }
+  return img;
+}
+function streamRow(x) {
+  const a = el('a', 'row');
+  a.href = `?c=${x.login}`;
+  const th = el('div', 'thumb');
+  th.append(thumb(x.login, x.thumb), el('span', 'tag', !x.type || x.type === 'live' ? 'LIVE' : String(x.type).toUpperCase()), el('span', 'vc', count(x.viewers)));
+  if (x.since) th.append(el('span', 'vc r', uptime(x.since)));
+  const meta = el('div', 'meta'), who = el('div', 'who');
+  who.append(pic(x.avatar, 'av'), el('span', 'nm', x.name));
+  meta.append(who, el('div', 'tt', x.title || ''), el('div', 'gm', x.game || ''));
+  a.append(th, meta);
+  return a;
+}
+
 const Home = {
-  users: [], at: 0, busy: false,
+  users: [], live: new Set(), at: 0, busy: false, view: store.get('homeView', 'follow'), y: { follow: 0, browse: 0 },
+  roster() { return Me.follows || FOLLOWS; },
   find(login) { return this.users.find(u => u.login === login) || null; },
+  setView(view) {
+    if (view !== this.view) { this.y[this.view] = scrollY; this.view = view; store.set('homeView', view); }
+    document.querySelectorAll('.seg [data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === view));
+    $('vFollow').hidden = view !== 'follow';
+    $('vBrowse').hidden = view !== 'browse';
+    if (view === 'browse') Browse.load();
+    scrollTo(0, this.y[view]);
+  },
   async load(force) {
     this.renderRecent();
+    if (Me.acct) Me.sync();
+    if (this.view === 'browse') Browse.load(force);
     if (this.busy || (!force && Date.now() - this.at < 45e3)) return;
     this.busy = true;
     $('refresh').classList.add('busy');
     if (!this.at) this.skeleton();
     try {
-      this.users = (await getUsers(FOLLOWS)).filter(Boolean);
+      const roster = this.roster(), recent = Recent.list().map(r => r.l);
+      const all = (await getUsers([...new Set([...roster, ...recent])])).filter(Boolean);
+      const mine = new Set(roster);
+      this.users = all.filter(u => mine.has(u.login));
+      this.live = new Set(all.filter(u => u.stream).map(u => u.login));
       this.at = Date.now();
       this.render();
+      this.renderRecent();
     } catch (e) {
       if (!this.at) {
         const box = $('live'); box.textContent = '';
@@ -1728,27 +2729,23 @@ const Home = {
   },
   render() {
     const live = this.users.filter(u => u.stream).sort((a, b) => b.stream.viewersCount - a.stream.viewersCount);
-    const off = this.users.filter(u => !u.stream);
+    const last = u => Date.parse(u.lastBroadcast?.startedAt || 0) || 0;
+    const off = this.users.filter(u => !u.stream).sort((a, b) => last(b) - last(a));
     const box = $('live'), bust = Math.floor(Date.now() / 60e3);
     box.textContent = '';
     $('liveN').textContent = live.length || '';
     if (!live.length) box.append(el('p', 'note', 'Nobody you follow is live right now.'));
     for (const u of live) {
-      const s = u.stream, a = el('a', 'row');
-      a.href = `?c=${u.login}`;
-      const th = el('div', 'thumb');
-      th.append(pic(s.previewImageURL ? `${s.previewImageURL}?t=${bust}` : ''), el('span', 'tag', s.type === 'live' ? 'LIVE' : String(s.type || 'LIVE').toUpperCase()), el('span', 'vc', count(s.viewersCount)), el('span', 'vc r', uptime(s.createdAt)));
-      const meta = el('div', 'meta'), who = el('div', 'who');
-      who.append(pic(u.profileImageURL, 'av'), el('span', 'nm', u.displayName));
-      meta.append(who, el('div', 'tt', u.broadcastSettings?.title || ''), el('div', 'gm', s.game?.displayName || ''));
-      a.append(th, meta);
-      box.append(a);
+      const s = u.stream;
+      box.append(streamRow({ login: u.login, name: u.displayName, avatar: u.profileImageURL, title: u.broadcastSettings?.title, game: s.game?.displayName,
+        viewers: s.viewersCount, since: s.createdAt, thumb: s.previewImageURL ? `${s.previewImageURL}?t=${bust}` : '', type: s.type }));
     }
     const offBox = $('off'); offBox.textContent = '';
     $('secOff').hidden = !off.length;
     for (const u of off) {
       const a = el('a'); a.href = `?c=${u.login}`;
       a.append(pic(u.profileImageURL), el('span', null, u.displayName));
+      if (last(u)) a.append(el('small', null, ago(u.lastBroadcast.startedAt)));
       offBox.append(a);
     }
   },
@@ -1757,7 +2754,7 @@ const Home = {
     $('secRecent').hidden = !list.length;
     box.textContent = '';
     for (const r of list) {
-      const c = el('span', 'chip'), a = el('a'), x = el('button', 'x');
+      const c = el('span', 'chip' + (this.live.has(r.l) ? ' on' : '')), a = el('a'), x = el('button', 'x');
       a.href = `?c=${r.l}`; a.append(pic(r.p), el('span', null, r.n || r.l));
       x.type = 'button'; x.setAttribute('aria-label', `Remove ${r.n || r.l}`); x.innerHTML = icon('x');
       x.onclick = () => Recent.remove(r.l);
@@ -1766,51 +2763,192 @@ const Home = {
   },
 };
 
+// Browse: what's on across Twitch, by category. The language chip is a Twitch tag; most browsing is in one language.
+const STREAM = 'viewersCount type createdAt title previewImageURL(width: 440, height: 248) game { displayName } broadcaster { login displayName profileImageURL(width: 150) }';
+const Browse = {
+  game: null, cursor: null, end: false, busy: false, at: 0, key: null, gameInfo: null,
+  lang() { return store.get('lang', 'English'); },
+  async load(force) {
+    const key = `${this.game || ''}|${this.lang()}`;
+    if (!force && key === this.key && Date.now() - this.at < 60e3) return;
+    this.key = key; this.at = Date.now(); this.cursor = null; this.end = false; this.busy = false;
+    $('brHead').hidden = !this.game; $('secCats').hidden = !!this.game;
+    $('brLang').textContent = this.lang() === 'all' ? 'All languages' : this.lang();
+    if (!this.game) this.cats();
+    else { $('brTitle').textContent = this.game; $('brSub').textContent = ''; }
+    $('brH').firstChild.textContent = this.game ? 'Live channels' : 'Live now ';
+    await this.page(true);
+  },
+  async cats() {
+    if ($('cats').children.length && Date.now() - this.catAt < 3e5) return;
+    this.catAt = Date.now();
+    try {
+      const d = await gql('query { games(first: 30) { edges { node { name displayName viewersCount boxArtURL(width: 192, height: 256) } } } }');
+      const box = $('cats');
+      box.textContent = '';
+      for (const { node: g } of d.games?.edges || []) {
+        const a = el('a', 'cat'); a.href = `?g=${encodeURIComponent(g.name)}`;
+        a.append(pic(g.boxArtURL), el('div', 'nm', g.displayName), el('div', 'gm', count(g.viewersCount)));
+        box.append(a);
+      }
+    } catch {}
+  },
+  async page(first) {
+    if (this.busy || this.end) return;
+    this.busy = true;
+    const key = this.key, box = $('brList'), lang = this.lang();
+    const after = this.cursor ? `, after: ${JSON.stringify(this.cursor)}` : '';
+    const opts = `{ sort: VIEWER_COUNT${lang === 'all' ? '' : `, freeformTags: [${JSON.stringify(lang)}]`} }`;
+    const field = `streams(first: 30${after}, options: ${opts}) { edges { cursor node { ${STREAM} } } pageInfo { hasNextPage } }`;
+    try {
+      const d = this.game ? await gql(`query($g: String!) { game(name: $g) { displayName viewersCount ${field} } }`, { g: this.game }, TV_CID) : await gql(`query { ${field} }`, null, TV_CID);
+      if (key !== this.key) return;
+      const res = this.game ? d.game?.streams : d.streams;
+      if (this.game && d.game) { $('brTitle').textContent = d.game.displayName; $('brSub').textContent = `${count(d.game.viewersCount)} watching`; }
+      const edges = res?.edges || [];
+      if (first) box.textContent = '';
+      for (const { node: s } of edges) box.append(streamRow({ login: s.broadcaster?.login, name: s.broadcaster?.displayName, avatar: s.broadcaster?.profileImageURL, title: s.title,
+        game: s.game?.displayName, viewers: s.viewersCount, since: s.createdAt, thumb: s.previewImageURL, type: s.type }));
+      this.cursor = edges[edges.length - 1]?.cursor || null;
+      this.end = !res?.pageInfo?.hasNextPage || !this.cursor;
+      if (first && !edges.length) box.append(el('p', 'note', 'Nothing live here in this language.'));
+    } catch (e) {
+      if (key === this.key && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
+    } finally { if (key === this.key) this.busy = false; }
+  },
+};
+new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' }).observe($('brEnd'));
+$('brLang').onclick = () => { store.set('lang', Browse.lang() === 'all' ? 'English' : 'all'); Browse.load(true); };
+
+// Search as you type: your follows at once, everyone else as Twitch answers.
+const Search = {
+  n: 0, timer: 0, at: -1,
+  ITEM: 'login displayName profileImageURL(width: 50) stream { viewersCount game { displayName } }',
+  hide() { this.n++; clearTimeout(this.timer); $('sgl').hidden = true; $('sgl').textContent = ''; this.at = -1; },
+  input() {
+    const term = $('q').value.trim();
+    clearTimeout(this.timer);
+    if (term.length < 2 || /[/.]/.test(term)) return this.hide();
+    const low = term.toLowerCase();
+    this.draw(term, Home.users.filter(u => u.login.includes(low) || u.displayName?.toLowerCase().includes(low)).slice(0, 6), []);
+    this.timer = setTimeout(() => this.run(term), 150);
+  },
+  async run(term) {
+    const n = ++this.n;
+    try {
+      const d = await gql(`query($q: String!) { searchFor(userQuery: $q, platform: "web") { users { edges { item { ... on User { ${this.ITEM} } } } } channels { edges { item { ... on User { ${this.ITEM} } } } } games { edges { item { ... on Game { name displayName viewersCount boxArtURL(width: 54, height: 72) } } } } } }`, { q: term });
+      if (n !== this.n) return;
+      const low = term.toLowerCase(), r = d.searchFor, mine = Home.users.filter(u => u.login.includes(low) || u.displayName?.toLowerCase().includes(low));
+      const found = new Map();
+      for (const u of [...mine, ...(r?.users?.edges || []).map(e => e.item), ...(r?.channels?.edges || []).map(e => e.item)]) if (u?.login && !found.has(u.login)) found.set(u.login, u);
+      const rank = u => (u.login === low ? 3e9 : 0) + (mine.includes(u) ? 2e9 : 0) + (u.stream ? 1e9 + u.stream.viewersCount : 0);
+      this.draw(term, [...found.values()].sort((a, b) => rank(b) - rank(a)).slice(0, 8), (r?.games?.edges || []).map(e => e.item).filter(Boolean).slice(0, 3));
+    } catch {}
+  },
+  draw(term, users, games) {
+    const box = $('sgl');
+    box.textContent = '';
+    this.at = -1;
+    for (const u of users) {
+      const a = el('a', 'sg'); a.href = `?c=${u.login}`;
+      const meta = el('div', 'meta');
+      meta.append(el('div', 'nm', u.displayName || u.login));
+      if (u.stream) { const g = el('div', 'gm'); g.append(el('i', 'dot'), [count(u.stream.viewersCount), u.stream.game?.displayName].filter(Boolean).join(' · ')); meta.append(g); }
+      a.append(pic(u.profileImageURL), meta);
+      box.append(a);
+    }
+    for (const g of games) {
+      const a = el('a', 'sg'); a.href = `?g=${encodeURIComponent(g.name)}`;
+      const meta = el('div', 'meta');
+      meta.append(el('div', 'nm', g.displayName), el('div', 'gm', `Category${g.viewersCount ? ' · ' + count(g.viewersCount) + ' watching' : ''}`));
+      const art = pic(g.boxArtURL, 'art');
+      a.append(art, meta);
+      box.append(a);
+    }
+    box.hidden = !box.children.length;
+  },
+  move(by) {
+    const items = $('sgl').children;
+    if (!items.length) return;
+    this.at = (this.at + by + items.length) % items.length;
+    [...items].forEach((n, i) => n.classList.toggle('on', i === this.at));
+    items[this.at].scrollIntoView({ block: 'nearest' });
+  },
+  submit() {
+    const raw = $('q').value.trim(), picked = $('sgl').children[this.at] || null;
+    const video = raw.match(/twitch\.tv\/(?:\w+\/)?videos?\/(\d+)/), clip = raw.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/\w+\/clip\/)([\w-]+)/);
+    let url = picked?.getAttribute('href');
+    if (!url && video) url = `?v=${video[1]}`;
+    if (!url && clip) url = `?clip=${clip[1]}`;
+    if (!url && validLogin(norm(raw))) url = `?c=${norm(raw)}`;
+    if (!url) url = $('sgl').firstElementChild?.getAttribute('href');
+    if (!url) { $('q').focus(); return; }
+    $('q').value = ''; $('q').blur();
+    this.hide();
+    go(url, true);
+  },
+};
+$('q').addEventListener('input', () => Search.input());
+$('q').addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); Search.move(e.key === 'ArrowDown' ? 1 : -1); }
+  else if (e.key === 'Escape') Search.hide();
+  else if (e.key === 'Enter') { e.preventDefault(); Search.submit(); }
+});
+document.addEventListener('click', e => { if (!e.target.closest('.searchw')) Search.hide(); });
+document.querySelector('.seg').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (b) { if (Browse.game) { Browse.game = null; history.replaceState(null, '', location.pathname); } Home.setView(b.dataset.view); } });
+$('brBack').onclick = () => back();
+$('acct').onclick = () => Sheet.account();
+
 document.querySelector('#home').addEventListener('click', e => {
-  const a = e.target.closest('a[href^="?c="]');
+  const a = e.target.closest('a[href^="?"]');
   if (!a || e.metaKey || e.ctrlKey || e.shiftKey) return;
   e.preventDefault();
+  $('q').value = ''; Search.hide();
   go(a.getAttribute('href'), true);
 });
-$('refresh').onclick = () => Home.load(true);
+$('refresh').onclick = () => { if (Me.acct) Me.loadFollows(); Home.load(true); };
 $('brand').onclick = e => { e.preventDefault(); scrollTo(0, 0); Home.load(true); };
 setInterval(() => { if (!document.hidden && !$('home').hidden) Home.load(); }, 60e3);
-$('search').addEventListener('submit', e => {
-  e.preventDefault();
-  const login = norm($('q').value);
-  if (!validLogin(login)) { $('q').focus(); return; }
-  $('q').value = ''; $('q').blur();
-  go(`?c=${login}`, true);
-});
+$('search').addEventListener('submit', e => { e.preventDefault(); Search.submit(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('home').hidden) Home.load(); });
 
 // ── routing ─────────────────────────────────────────
 let depth = 0;
+history.scrollRestoration = 'manual';
 function route(gesture) {
   const q = new URLSearchParams(location.search);
-  const c = norm(q.get('c') || q.get('channel') || ''), v = q.get('v');
+  const c = norm(q.get('c') || q.get('channel') || ''), v = q.get('v'), clip = q.get('clip'), g = q.get('g');
   if (Sheet && !$('sheet').hidden) Sheet.close();
   if (validLogin(c)) P.open(c, gesture, Home.find(c));
   else if (/^\d+$/.test(v || '')) P.openVod(v, gesture);
+  else if (clip) P.openClip(clip, gesture);
   else {
     P.close();
     $('watch').hidden = true; $('home').hidden = false;
     document.title = 'Wraith';
+    Browse.game = g || null;
+    Home.setView(g ? 'browse' : Home.view);
     Home.load();
   }
 }
-function go(url, gesture) { history.pushState(null, '', url); depth++; route(gesture); }
+function go(url, gesture) {
+  if (!$('home').hidden) Home.y[Home.view] = scrollY;
+  history.pushState(null, '', url); depth++; route(gesture);
+  if (url.startsWith('?g=')) scrollTo(0, 0);
+}
 function back() {
   if (depth > 0) history.back();
   else { history.replaceState(null, '', location.pathname); route(false); }
 }
 window.addEventListener('popstate', () => { depth = Math.max(0, depth - 1); route(false); });
 
+Sound.setLevel(Sound.level);
 Sound.set(Sound.muted);
-Talk.arrive();
-if (Talk.me) Talk.check();
-setInterval(() => { if (Talk.me && !document.hidden && Date.now() - Talk.at > 3600e3) Talk.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Talk };   // for poking at playback from devtools
+Me.save(Me.acct);
+Me.check();
+Me.sync();
+setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
+window.wraith = { P, Chat, Home, BG, Talk, Me, Replay, Browse, Search, SignIn, Clips };   // for poking at playback from devtools
 route(false);
 })();
 </script>
