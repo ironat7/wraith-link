@@ -276,6 +276,8 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 /* typing, with the on-screen keyboard up: picture, chat and the box share the space above it (see fitKeyboard) */
 #watch.kb .info, #watch.kb .tabs { display: none; }
 #watch.kb .say { padding-bottom: 8px; }
+#watch.kb:has(#epq:focus) .log { display: none; }   /* finding an emote: the results get what's left above the keyboard */
+#watch.kb:has(#epq:focus) .ep { flex: 1; height: auto; min-height: 0; }
 
 /* ── settings sheet ───────────────────────────────── */
 .sheet { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
@@ -565,7 +567,7 @@ const attr = (line, k) => (line.match(new RegExp(`[:,]${k}="?([^",]*)`)) || [])[
 
 async function relayText(url) {   // the body, or null on any failure
   try {
-    const t = await (await fetch(relayUrl(url), { cache: 'no-store' })).text(), nl = t.indexOf('\n');
+    const t = await (await fetch(relayUrl(url), { cache: 'no-store', signal: AbortSignal.timeout(10e3) })).text(), nl = t.indexOf('\n');
     return t.slice(0, nl) === '200' ? t.slice(nl + 1) : null;
   } catch { return null; }
 }
@@ -700,6 +702,7 @@ class RelayLoader {
     this.done(real, body.includes('#EXTINF') ? rewrite(body, real, this.quiet) : body);
   }
   done(url, data) {
+    if (!this.callbacks) return;   // the playlist's own ad news can stop the player that asked for it
     const st = this.stats;
     st.loading.first = st.loading.end = performance.now();
     st.loaded = st.total = data.length;
@@ -762,6 +765,7 @@ const P = {
   liveT: TARGET.live, calm: 0,       // current live target, and since when playback has been smooth
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
+  began: 0,                          // when the live player last started
   errs: {},                          // player errors this stream, for the stats panel
 
   open(login, gesture, cached) {
@@ -820,7 +824,7 @@ const P = {
       vC.controls = true;
       vL.classList.add('off'); vC.classList.remove('off');
       const pos = store.get('pos.' + v.id, 0);
-      if (pos > 15 && pos < v.lengthSeconds - 30) vC.addEventListener('loadedmetadata', () => { vC.currentTime = pos; }, { once: true });
+      if (pos > 15 && pos < v.lengthSeconds - 30) vC.addEventListener('loadedmetadata', () => { if (gen === this.gen) vC.currentTime = pos; }, { once: true });
       UI.spin(true);
       this.nextVodSource();
     } catch (e) {
@@ -856,10 +860,13 @@ const P = {
   },
 
   async playLive() {
-    const gen = this.gen, run = ++this.liveRun, stale = () => gen !== this.gen || run !== this.liveRun;   // a newer start takes over
+    this.destroyHls();
+    const gen = this.gen, run = this.liveRun, stale = () => gen !== this.gen || run !== this.liveRun;   // a newer start takes over
     this.stopCdn();
+    this.cover = this.ad = false; this.adEnd = 0; UI.banner();   // the new session's ads, if any, are its own
+    $('msgbox').hidden = true;
     this.feed = 'live'; UI.feed(); UI.spin(true);
-    this.moved = Date.now();
+    this.moved = this.began = Date.now();
     let tok = await (this.tokenP || getToken(this.login).catch(e => e));
     this.tokenP = null;
     if (stale()) return;
@@ -887,7 +894,6 @@ const P = {
       preserveManualLevelOnError: true,   // a failed load on Source shouldn't quietly switch to Auto
     });
     hls.on(Hls.Events.MANIFEST_PARSED, () => this.onManifest());
-    hls.on(Hls.Events.FRAG_BUFFERED, () => { this.retries = 0; this.fixes = 0; });
     hls.on(Hls.Events.ERROR, (_, d) => this.onError(d));
     hls.loadSource(usherUrl(this.login, tok));
     hls.attachMedia(vL);
@@ -924,21 +930,21 @@ const P = {
   setQuality(id) {
     this.q = id; this.cap = 0; store.set('quality', id);
     this.quietUntil = Date.now() + 6000;   // the switch's own buffering isn't a bad connection
-    if (this.feed === 'live') this.applyQuality();
-    else if (this.feed === 'cdn') this.playCdn({ cover: this.cover, reload: true });
+    if (this.feed === 'live' || this.cover) this.applyQuality();
+    if (this.feed === 'cdn') this.playCdn({ cover: this.cover, reload: true });
   },
 
   setPref(f) {
     this.pref = f; store.set('feed', f);
     if (!this.user?.stream || this.feed === 'vod') return;
-    if (f === 'cdn' && this.feed === 'live') { this.destroyHls(); this.playCdn(); }
+    if (f === 'cdn' && (this.feed === 'live' || this.cover)) { this.destroyHls(); this.cover = this.ad = false; this.adEnd = 0; UI.banner(); this.playCdn(); }
     else if (f === 'live' && this.feed === 'cdn' && !this.subOnly) this.playLive();
   },
 
   onError(d) {
     const Hls = window.Hls;
     this.noteErr(d);
-    if (/too many times|quota/i.test(String(d.response?.text || d.error?.message || ''))) return this.fallback('The relay hit Google’s daily limit');
+    if (/too many times/i.test(String(d.response?.text || ''))) return this.fallback('The relay hit Google’s daily limit');
     if (!d.fatal) return;
     if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) return this.hls.recoverMediaError();
     if (d.response?.code === 403 && d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) { this.subOnly = true; return this.fallback('Sub-only stream'); }
@@ -947,18 +953,20 @@ const P = {
 
   // Start the low-latency feed over, giving up on it after a few tries in a row with nothing to show.
   restart() {
+    const gen = this.gen;
     if (this.retries++ < 3) {
-      UI.spin(true);
-      const gen = this.gen;
-      setTimeout(() => { if (gen === this.gen && this.feed === 'live') { this.destroyHls(); this.playLive(); } }, 1500 * this.retries);
+      if (!this.cover) UI.spin(true);
+      // while away the sound has its own player, and coming back starts this one over anyway
+      setTimeout(() => { if (gen === this.gen && (this.feed === 'live' || this.cover) && !BG.on) this.playLive(); }, 1500 * this.retries);
       return;
     }
-    this.checkEnded().then(ended => { if (!ended) this.fallback('The low-latency feed keeps failing'); });
+    this.checkEnded().then(ended => { if (!ended && gen === this.gen) this.fallback('The low-latency feed keeps failing'); });
   },
 
   // Live isn't possible (sub-only, relay down, old browser): the CDN feed still is.
   fallback(why) {
     this.destroyHls();
+    this.cover = this.ad = false; this.adEnd = 0; UI.banner();
     if (cdnLive && this.base) {
       UI.toast(`${why} · playing from the CDN`);
       if (!this.subOnly && this.pref === 'live') this.retryLive();
@@ -992,27 +1000,31 @@ const P = {
     } else if (this.ad) {
       this.ad = false; this.adEnd = 0; this.dodged.clear();
       if (this.cover) { this.cover = false; this.stopCdn(); this.show('live'); }
-      if (this.feed === 'live') { this.toLiveEdge(); this.play(vL); }
+      if (BG.on) this.hls?.stopLoad();   // away, on the CDN's sound: it all comes back with the picture
+      else if (this.feed === 'live') { this.toLiveEdge(); this.play(vL); }
       UI.banner();
     }
   },
 
   // An ad on this session. Another kind of session usually isn't getting it (your account's Turbo never is),
-  // so look for one that comes back clean and move to it. Only if all have ads does the break play out.
+  // so look for one that comes back clean and move to it. Only if all have ads does the break play out:
+  // Safari can show the ad-free CDN feed through it, also while the looking takes a while; elsewhere the picture holds.
   async dodge() {
     if (this.dodging) return;
     this.dodging = true;
     const gen = this.gen, login = this.login;
+    const cover = () => { if (gen === this.gen && this.ad && this.feed === 'live' && !BG.on && cdnLive && this.base) { this.cover = true; this.playCdn({ cover: true }); UI.banner(); } };
+    const slow = setTimeout(cover, 5000);
     try {
       for (const kind of [...PLAYER_TYPES, 'account']) {
         if (kind === this.playerType || this.dodged.has(kind)) continue;
         this.dodged.add(kind);
         const tok = kind === 'account' ? await Me.streamToken(login) : await getToken(login, kind).catch(() => null);
-        if (gen !== this.gen || !this.ad) return;
+        if (gen !== this.gen || !this.ad || BG.on) return;
         if (!tok || tok.authorization?.isForbidden) continue;
         const master = await relayText(usherUrl(login, tok)), media = master && master.match(/#EXT-X-STREAM-INF[^\n]*\n(\S+)/)?.[1];
         const text = media && await relayText(media);
-        if (gen !== this.gen || !this.ad) return;
+        if (gen !== this.gen || !this.ad || BG.on) return;
         if (!text?.includes('#EXTINF') || /stitched-ad|X-TV-TWITCH-AD|,Amazon/.test(text)) continue;
         if (kind !== 'account') { this.playerType = kind; store.set('playerType', kind); }
         this.ad = false; this.adEnd = 0; this.dodged.clear();
@@ -1021,9 +1033,8 @@ const P = {
         UI.banner();
         return this.playLive();
       }
-      // Safari can show the ad-free CDN feed through the break; elsewhere the picture holds.
-      if (this.feed === 'live' && cdnLive && this.base) { this.cover = true; this.playCdn({ cover: true }); UI.banner(); }
-    } finally { if (gen === this.gen) this.dodging = false; }
+      cover();
+    } finally { clearTimeout(slow); if (gen === this.gen) this.dodging = false; }
   },
 
   playCdn({ cover = false, reload = false } = {}) {
@@ -1033,7 +1044,7 @@ const P = {
     if (reload || vC.dataset.url !== url) { vC.dataset.url = url; vC.src = url; this.seekPending = true; }
     vC.muted = Sound.muted;
     this.show('cdn');
-    UI.spin(true);
+    UI.spin(vC.paused || vC.readyState < 3);
     this.play(vC);
   },
 
@@ -1077,6 +1088,7 @@ const P = {
   },
 
   play(v) {
+    if (this.userPaused) return;   // a pause you chose holds until you undo it
     v.muted = Sound.muted;
     const p = v.play();
     if (p) p.catch(err => {
@@ -1165,8 +1177,10 @@ const P = {
   // The player can wedge in ways that raise no error (a socket left dead by a network change, a buffer
   // iOS threw away). A picture that hasn't moved for 10 s while it should be playing starts over.
   watch(v, now) {
-    if (this.feed !== 'live' || !this.hls || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine) { this.moved = now; return; }
-    if (v.currentTime !== this.pos) { this.pos = v.currentTime; this.moved = now; return; }
+    const moving = v.currentTime !== this.pos;
+    this.pos = v.currentTime;
+    if (moving && this.feed === 'live' && now - this.began > 8e3) this.retries = this.fixes = 0;   // it really is playing: the last restart worked
+    if (this.feed !== 'live' || !this.hls || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
     if (now - this.moved < 10e3) return;
     this.moved = now;
     this.noteErr({ details: 'stuck' });
@@ -1178,7 +1192,7 @@ const P = {
     try {
       const [u] = await getUsers([this.login]);
       if (gen !== this.gen || !u) return;
-      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) return this.open(this.login);
+      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) { const paused = this.userPaused; this.open(this.login); this.userPaused = paused; return; }
       // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
       if (!u.stream && this.user?.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
       this.gone = 0;
@@ -1198,19 +1212,22 @@ const P = {
   },
 
   async checkEnded() {
-    try { const [u] = await getUsers([this.login]); if (u && !u.stream) { this.ended(u); return true; } } catch {}
+    const gen = this.gen;
+    try { const [u] = await getUsers([this.login]); if (gen === this.gen && u && !u.stream) { this.ended(u); return true; } } catch {}
     return false;
   },
 
   ended(u) {
     BG.stop(true);
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
-    this.feed = null;
+    this.feed = null; this.cover = this.ad = false; this.adEnd = 0; UI.banner();
     UI.offline(u, true);
+    Awake.sync();
     this.awaitLive();
   },
 
   destroyHls() {
+    this.liveRun++;   // and any start still under way
     if (this.hls) { this.hls.destroy(); this.hls = null; }
   },
 
@@ -1276,8 +1293,8 @@ const BG = {
       h.attachMedia(aBG);
     } else {
       const at = vC.currentTime;   // the audio copy runs on the same clock: pick up where the picture is
-      this.srcs = P.feed === 'cdn' ? [`${P.base}/audio_only/index-dvr.m3u8`] : [...P.vodAudio];
-      aBG.addEventListener('loadedmetadata', () => { aBG.currentTime = at; }, { once: true });
+      const srcs = this.srcs = P.feed === 'cdn' ? [`${P.base}/audio_only/index-dvr.m3u8`] : [...P.vodAudio];
+      aBG.addEventListener('loadedmetadata', () => { if (this.srcs === srcs) aBG.currentTime = at; }, { once: true });
       this.next();
     }
     const p = aBG.play(); if (p) p.catch(() => {});
@@ -1405,7 +1422,7 @@ vC.addEventListener('error', () => {
     if (P.nextVodSource()) return;   // that copy didn't take: try the next
     return cdnLive ? UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.') : UI.needsSafari(`https://www.twitch.tv/videos/${P.vod.id}`, true);
   }
-  if (P.cover) { P.cover = false; P.show('live'); return; }
+  if (P.cover) { P.cover = false; P.stopCdn(); P.show('live'); UI.spin(false); UI.banner(); return; }
   if (P.feed === 'cdn') UI.msg(null, 'The CDN feed isn’t available', P.subOnly ? 'This channel’s stream isn’t being recorded, so there is no ad-free copy to play.' : 'Try the low-latency feed instead.', P.subOnly ? null : () => P.setPref('live'));
 });
 vC.addEventListener('timeupdate', () => {
@@ -1448,6 +1465,7 @@ const Chat = {
   chanEmotes: [], globalEmotes: [],     // the same emotes as lists, for the picker
   seen: new Set(), rx: 0, behind: false,  // ids already handled; when the socket last said anything; a gap to fill in
   room: {}, names: new Map(),             // chat modes; who has been talking, for @ completion
+  newest: 0,                              // the time of the latest line drawn
 
   open(login) {
     this.close();
@@ -1516,8 +1534,18 @@ const Chat = {
         if (this.behind) { this.behind = false; this.history(300); }
         break;
       case 'PRIVMSG': case 'USERNOTICE': this.add(m); break;
-      case 'CLEARCHAT': if (m.text) this.box.querySelectorAll(`[data-l="${CSS.escape(m.text)}"]`).forEach(n => n.classList.add('gone')); break;
-      case 'CLEARMSG': if (m.tags['target-msg-id']) this.box.querySelector(`[data-id="${CSS.escape(m.tags['target-msg-id'])}"]`)?.classList.add('gone'); break;
+      case 'CLEARCHAT':   // on screen, and among the lines still waiting for the picture
+        if (m.text) {
+          this.box.querySelectorAll(`[data-l="${CSS.escape(m.text)}"]`).forEach(n => n.classList.add('gone'));
+          for (const q of this.queue) if (q.m.prefix.startsWith(m.text + '!')) q.m.tags['rm-deleted'] = '1';
+        }
+        break;
+      case 'CLEARMSG':
+        if (m.tags['target-msg-id']) {
+          this.box.querySelector(`[data-id="${CSS.escape(m.tags['target-msg-id'])}"]`)?.classList.add('gone');
+          for (const q of this.queue) if (q.m.tags.id === m.tags['target-msg-id']) q.m.tags['rm-deleted'] = '1';
+        }
+        break;
     }
     if (this.queue.length > 800) this.queue.splice(0, this.queue.length - 800);
   },
@@ -1535,7 +1563,7 @@ const Chat = {
   add(m) {
     if (!this.fresh(m)) return;
     // what you send shows at once, rather than waiting with everyone else's for the picture
-    if (m.cmd === 'PRIVMSG' && Me.acct && m.tags['user-id'] === Me.acct.id) this.queue.unshift({ ts: 0, m });
+    if (m.cmd === 'PRIVMSG' && Me.acct && m.tags['user-id'] === Me.acct.id) { this.queue.unshift({ ts: 0, m }); Talk.ircWait?.({ ok: true }); }
     else this.queue.push({ ts: +m.tags['tmi-sent-ts'] || Date.now(), m });
   },
 
@@ -1554,7 +1582,7 @@ const Chat = {
         m.old = true;
         old.push({ ts: +m.tags['tmi-sent-ts'] || 0, m });
       }
-      this.queue.unshift(...old);
+      this.queue = [...old, ...this.queue].sort((a, b) => a.ts - b.ts);
     } catch {}
   },
 
@@ -1568,7 +1596,20 @@ const Chat = {
     if (!n) return;
     const lines = this.queue.splice(0, n).slice(-220);
     if (!this.stick && this.box.children.length > 1200) { $('more').hidden = false; return; }   // scrolled up for ages: stop growing
-    this.append(lines.map(q => this.render(q.m)));
+    // history can come back after newer lines are up, and goes in above them, where its times say
+    const late = lines.filter(q => q.m.old && q.ts < this.newest), next = late.length ? lines.filter(q => !late.includes(q)) : lines;
+    if (late.length) this.insert(late);
+    for (const q of next) if (q.ts > this.newest) this.newest = q.ts;
+    this.append(next.map(q => this.render(q.m)));
+  },
+
+  insert(late) {   // both in time order
+    const drawn = [...this.box.querySelectorAll('[data-ts]')];
+    let i = 0;
+    for (const q of late) {
+      while (i < drawn.length && +drawn[i].dataset.ts <= q.ts) i++;
+      this.box.insertBefore(this.render(q.m), drawn[i] || null);
+    }
   },
 
   append(nodes) {
@@ -1586,6 +1627,7 @@ const Chat = {
     const t = m.tags, login = m.prefix.split('!')[0];
     const d = el('div', 'm');
     if (t.id) d.dataset.id = t.id;
+    if (t['tmi-sent-ts']) d.dataset.ts = t['tmi-sent-ts'];
     if (login) d.dataset.l = login;
     if (t['user-id']) d.dataset.u = t['user-id'];
     if (m.old) d.classList.add('old');
@@ -1711,7 +1753,7 @@ const Chat = {
 
   async channel(uid) {
     this.uid = uid;
-    const map = new Map(this.global || []), list = [], add = (name, url) => { if (name && url) { map.set(name, url); list.push({ name, url }); } };
+    const list = [], add = (name, url) => { if (name && url) list.push({ name, url }); };
     const j = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
     const [ffz, bttv, stv, badges] = await Promise.all([
       j(`https://api.frankerfacez.com/v1/room/id/${uid}`), j(`https://api.betterttv.net/3/cached/users/twitch/${uid}`), j(`https://7tv.io/v3/users/twitch/${uid}`),
@@ -1721,14 +1763,14 @@ const Chat = {
     for (const s of Object.values(ffz?.sets || {})) for (const e of s.emoticons || []) add(e.name, e.urls?.['2'] || e.urls?.['1']);
     for (const e of [...(bttv?.channelEmotes || []), ...(bttv?.sharedEmotes || [])]) add(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
     for (const e of stv?.emote_set?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
-    this.emotes = map; this.chanEmotes = list;
+    this.emotes = new Map([...(this.global || []), ...list.map(e => [e.name, e.url])]); this.chanEmotes = list;
     this.badges = new Map((badges?.user?.broadcastBadges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
   },
 
   close() {
     clearInterval(this.timer); clearInterval(this.pinger);
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
-    this.login = null; this.uid = null; this.queue = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = [];
+    this.login = null; this.uid = null; this.queue = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
     this.seen = new Set(); this.names = new Map();
     this.badges = new Map(); this.emotes = new Map(this.global || []);
     Picker.show(false);
@@ -1750,13 +1792,13 @@ $('more').onclick = () => { Chat.stick = true; Chat.box.scrollTop = Chat.box.scr
 // ── past broadcast chat ─────────────────────────────
 // Twitch hands out a video's chat from a position, then page by page, about a minute of a quiet chat at a time.
 const Replay = {
-  id: null, q: [], seen: new Set(), at: 0, cursor: null, last: -1, busy: false, done: false, dead: false, run: 0,
+  id: null, q: [], seen: new Set(), at: 0, cursor: null, last: -1, busy: false, done: false, dead: false, run: 0, wait: 0,
   open(id) { this.close(); this.id = id; },
-  close() { this.run++; this.id = null; this.q = []; this.seen = new Set(); this.cursor = null; this.last = -1; this.busy = this.done = this.dead = false; },
+  close() { this.run++; this.id = null; this.q = []; this.seen = new Set(); this.cursor = null; this.last = -1; this.busy = this.done = this.dead = false; this.wait = 0; },
   tick(t) {
     if (!this.id || this.dead) return;
     if (this.last < 0 || t < this.last - 2 || t > this.last + 8) {   // just started, or a seek
-      this.run++; this.busy = false;
+      this.run++; this.busy = false; this.wait = 0;
       this.q = []; this.seen = new Set(); this.at = Math.floor(t); this.cursor = null; this.done = false;
       Chat.box.textContent = '';
     }
@@ -1765,7 +1807,7 @@ const Replay = {
     while (n < this.q.length && this.q[n].contentOffsetSeconds <= t) n++;
     if (n && !document.hidden && Chat.box.offsetParent) Chat.append(this.q.splice(0, n).slice(-120).map(c => Chat.renderReplay(c)));
     else if (n > 400) this.q.splice(0, n - 120);
-    if (!this.busy && !this.done && (!this.q.length || this.q[this.q.length - 1].contentOffsetSeconds < t + 15)) this.fetch();
+    if (!this.busy && !this.done && Date.now() >= this.wait && (!this.q.length || this.q[this.q.length - 1].contentOffsetSeconds < t + 15)) this.fetch();
   },
   async fetch() {
     this.busy = true;
@@ -1784,7 +1826,7 @@ const Replay = {
       this.q.sort((a, b) => a.contentOffsetSeconds - b.contentOffsetSeconds);
       this.cursor = c.edges[c.edges.length - 1]?.cursor || null;
       if (!c.pageInfo?.hasNextPage || !this.cursor) this.done = true;
-    } catch {}
+    } catch { this.wait = Date.now() + 5e3; }
     finally { if (run === this.run) this.busy = false; }
   },
 };
@@ -1805,12 +1847,12 @@ const Me = {
 
   post(url, params) { return fetch(url, { method: 'POST', body: new URLSearchParams(params) }); },
 
-  async accept(j) {   // a token fresh from Twitch
+  tokens(j) { return { token: j.access_token, refresh: j.refresh_token || this.acct?.refresh || null, exp: j.expires_in ? Date.now() + j.expires_in * 1000 : 0 }; },
+  async accept(j) {   // a first sign-in
     const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + j.access_token } });
     if (!r.ok) throw new Error(`Twitch answered ${r.status}`);
     const v = await r.json();
-    this.save({ token: j.access_token, refresh: j.refresh_token || this.acct?.refresh || null,
-      exp: j.expires_in ? Date.now() + j.expires_in * 1000 : 0, id: v.user_id, login: v.login, name: this.acct?.name || v.login, pic: this.acct?.pic || null });
+    this.save({ ...this.tokens(j), id: v.user_id, login: v.login, name: v.login, pic: null });
     this.at.check = Date.now();
   },
   save(a) {
@@ -1834,8 +1876,14 @@ const Me = {
     if (!a?.refresh) return this.out('Twitch signed you out. Sign in again.');
     try {
       const r = await this.post('https://id.twitch.tv/oauth2/token', { client_id: TV_CID, grant_type: 'refresh_token', refresh_token: a.refresh });
-      if (r.ok) await this.accept(await r.json());
-      else if (r.status === 400 || r.status === 401) this.out('Twitch signed you out. Sign in again.');
+      if (r.ok) {   // the old refresh token is spent, so the new one is kept before anything else can go wrong
+        const j = await r.json();
+        if (j.access_token && this.acct?.id === a.id) this.save({ ...this.acct, ...this.tokens(j) });
+      } else if (r.status === 400 || r.status === 401) {
+        const there = store.get('me', null);   // another tab may have got there first
+        if (there?.refresh && there.refresh !== a.refresh) this.save(there);
+        else this.out('Twitch signed you out. Sign in again.');
+      }
     } catch {}
   },
   async check() {   // Twitch asks apps to re-validate hourly
@@ -1850,6 +1898,7 @@ const Me = {
     this.save(null);
     this.follows = null; this.blocks = new Set(); this.emotes = []; this.at = {}; this.notes = {};
     store.set('follows', null); store.set('blocks', []); store.set('myEmotes', []);
+    Talk.ircDrop(); Talk.useIrc = false;   // that socket is signed in as whoever opened it
     Talk.show();
     if (!$('home').hidden) Home.load(true);
     if (why) { if (Chat.login) Chat.note(why).classList.add('err'); else UI.toast(why); }
@@ -1902,7 +1951,8 @@ const Me = {
   },
   async loadFollows() {
     this.at.follows = Date.now();
-    const before = (this.follows || []).join();
+    const me = this.acct?.id, before = (this.follows || []).join();
+    let list = null;
     try {
       const logins = [];
       let cursor = null;
@@ -1915,33 +1965,39 @@ const Me = {
         cursor = f.pageInfo?.hasNextPage ? f.edges[f.edges.length - 1]?.cursor : null;
         if (!cursor) break;
       }
-      this.follows = logins; this.notes.follows = null;
+      list = logins; this.notes.follows = null;
     } catch (e) {
-      try { this.follows = await this.helixAll(`/channels/followed?user_id=${this.acct.id}`, x => x.broadcaster_login); this.notes.follows = null; }
+      try { list = await this.helixAll(`/channels/followed?user_id=${me}`, x => x.broadcaster_login); this.notes.follows = null; }
       catch (e2) { this.notes.follows = `${e.message}; ${e2.message}`; }
     }
+    if (this.acct?.id !== me) return;   // signed out meanwhile
+    if (list) this.follows = list;
     store.set('follows', this.follows);
     UI.owner();
     if ((this.follows || []).join() !== before && !$('home').hidden) Home.load(true);
   },
   async loadBlocks() {   // Twitch's own query stops at 1,000; the API pages through the rest
     this.at.blocks = Date.now();
-    const ids = new Set();
+    const me = this.acct?.id, ids = new Set();
+    let sure = false;   // an empty list is only believed from the API
     try {
       const list = (await this.gql({ query: 'query { currentUser { blockedUsers { id } } }' }))?.data?.currentUser?.blockedUsers;
       for (const u of list || []) ids.add(u.id);
+      sure = ids.size > 0 && ids.size < 1000;
     } catch {}
-    if (!ids.size || ids.size >= 1000) {
-      try { for (const id of await this.helixAll(`/users/blocks?broadcaster_id=${this.acct.id}`, x => x.user_id)) ids.add(id); }
+    if (!sure) {
+      try { for (const id of await this.helixAll(`/users/blocks?broadcaster_id=${me}`, x => x.user_id)) ids.add(id); sure = true; }
       catch (e) { if (!ids.size) this.notes.blocks = e.message; }
     }
-    if (ids.size) { this.blocks = ids; this.notes.blocks = null; store.set('blocks', [...ids]); }
+    if ((sure || ids.size) && this.acct?.id === me) { this.blocks = ids; this.notes.blocks = null; store.set('blocks', [...ids]); }
   },
   async loadEmotes() {
     this.at.emotes = Date.now();
+    const me = this.acct?.id;
     try {
       const sets = (await this.gql({ query: 'query { currentUser { emoteSets { owner { login } emotes { id token } } } }' }))?.data?.currentUser?.emoteSets;
       if (!sets) throw new Error('no emote sets');
+      if (this.acct?.id !== me) return;
       const out = new Map();
       for (const s of sets) for (const e of s.emotes || []) if (/^\w+$/.test(e.token)) out.set(e.token, { name: e.token, url: emoteUrl(e.id), owner: s.owner?.login || '' });
       this.emotes = [...out.values()];
@@ -1971,6 +2027,7 @@ const Me = {
     this.blocks.add(uid);
     store.set('blocks', [...this.blocks]);
     Chat.box.querySelectorAll(`[data-u="${CSS.escape(uid)}"]`).forEach(n => n.remove());
+    Chat.queue = Chat.queue.filter(q => q.m.tags['user-id'] !== uid);
     return true;
   },
   // A sub-only stream, or an ad break Turbo skips: Twitch decides by account, so this asks as you.
@@ -2049,9 +2106,10 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && Si
 // The API says outright whether a message went out and why not, so it goes first. If it turns this
 // client away, chat's own socket does the job: a second connection used only for sending, while the
 // messages you read (your own included) keep coming through the anonymous one.
+const atName = (login, name) => '@' + (/^[\x20-\x7e]+$/.test(name) ? name : login);   // Twitch only links a mention by a name in plain letters
 const Talk = {
   busy: false, tx: $('sayTx'), go: $('sayGo'), reply: null,
-  irc: null, ircOk: false, ircQ: [], ircWait: null, useIrc: false,
+  irc: null, ircOk: false, ircRx: 0, ircQ: [], ircWait: null, useIrc: false,
 
   show() {
     const me = !!Me.acct;
@@ -2088,7 +2146,7 @@ const Talk = {
     box.hidden = true;
     if (!m) return;
     const low = m[2].toLowerCase(), hits = [];
-    if (m[1]) { for (const [l, n] of [...Chat.names].reverse()) if (l.startsWith(low)) hits.push({ word: '@' + n }); }
+    if (m[1]) { for (const [l, n] of [...Chat.names].reverse()) if (l.startsWith(low)) hits.push({ word: atName(l, n) }); }
     else for (const e of [...Chat.chanEmotes, ...Me.emotes, ...Chat.globalEmotes]) if (e.name.toLowerCase().startsWith(low)) hits.push({ word: e.name, url: e.url });
     for (const x of hits.slice(0, 16)) {
       const b = el('button'); b.type = 'button'; b.dataset.w = x.word;
@@ -2100,10 +2158,10 @@ const Talk = {
   },
 
   async send() {
-    const text = this.tx.value.trim(), room = Chat.uid, reply = this.reply?.id;
+    const text = this.tx.value.trim(), room = Chat.uid, login = Chat.login, reply = this.reply?.id;
     if (!text || !Me.acct || !room || this.busy) return;
     this.busy = true; this.show();
-    const res = (!this.useIrc && !text.startsWith('/') && await this.viaApi(text, room, reply)) || await this.viaIrc(text, reply);
+    const res = (!this.useIrc && !text.startsWith('/') && await this.viaApi(text, room, reply)) || await this.viaIrc(text, reply, login);
     this.busy = false;
     if (res.ok) {
       if (this.tx.value.trim() === text) this.tx.value = '';
@@ -2123,19 +2181,28 @@ const Talk = {
       return { ok: false, why: j?.message || `Twitch answered ${r.status}` };
     } catch { return { ok: false, why: 'couldn’t reach Twitch' }; }
   },
-  viaIrc(text, reply) {
+  viaIrc(text, reply, login) {
     return new Promise(resolve => {
       const done = r => { clearTimeout(t); if (this.ircWait === done) this.ircWait = null; resolve(r); };
-      const t = setTimeout(() => done({ ok: true }), 2500);   // no refusal by then means it went through
+      // Twitch answers a line it takes, chat's own socket sees it arrive, or Twitch says why not. Silence means it never left.
+      const t = setTimeout(() => { this.ircDrop(); done({ ok: false, why: 'Twitch didn’t answer' }); }, 6000);
       this.ircWait = done;
-      this.ircSend(`${reply ? `@reply-parent-msg-id=${reply} ` : ''}PRIVMSG #${Chat.login} :${text}`);
+      this.ircSend(`${reply ? `@reply-parent-msg-id=${reply} ` : ''}PRIVMSG #${login} :${text}`);
     });
   },
+  ircDrop() {
+    const ws = this.irc;
+    this.irc = null; this.ircOk = false; this.ircQ = [];
+    ws?.close();
+  },
   async ircSend(line) {
-    if (this.ircOk && this.irc?.readyState === 1) return this.irc.send(line);
+    // iOS can kill a socket while the app is away without anyone hearing of it, so a quiet one isn't trusted
+    if (this.ircOk && (this.irc?.readyState !== 1 || Date.now() - this.ircRx > 60e3)) this.ircDrop();
+    if (this.ircOk) return this.irc.send(line);
     this.ircQ.push(line);
     if (this.irc) return;
     const token = await Me.token();
+    if (!token) return;
     const ws = this.irc = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
     ws.onopen = () => {
       ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands');
@@ -2143,6 +2210,7 @@ const Talk = {
       ws.send('NICK ' + Me.acct?.login);
     };
     ws.onmessage = e => {
+      this.ircRx = Date.now();
       for (const raw of e.data.split('\r\n')) {
         if (!raw) continue;
         const m = parseIrc(raw);
@@ -2152,11 +2220,15 @@ const Talk = {
         else if (m.cmd === 'USERSTATE') this.ircWait?.({ ok: true });
         else if (m.cmd === 'NOTICE') {
           if (/authentication failed|improperly formatted/i.test(m.text || '')) { this.ircQ = []; this.ircWait?.({ ok: false, why: 'Twitch refused the sign-in' }); Me.check(); ws.close(); }
-          else if ((m.tags['msg-id'] || '').startsWith('msg_')) this.ircWait?.({ ok: false, why: m.text });
+          else this.ircWait?.({ ok: /_(success|on|off)$/.test(m.tags['msg-id'] || ''), why: m.text });   // this socket joins no channel, so any notice is about what it just sent
         }
       }
     };
-    ws.onclose = () => { if (this.irc === ws) { this.irc = null; this.ircOk = false; } };
+    ws.onclose = () => {
+      if (this.irc !== ws) return;
+      this.irc = null; this.ircOk = false; this.ircQ = [];
+      this.ircWait?.({ ok: false, why: 'the connection to chat dropped' });
+    };
   },
 };
 $('say').addEventListener('submit', e => { e.preventDefault(); Talk.send(); });
@@ -2229,7 +2301,7 @@ const Card = {
       const items = [];
       if (Me.acct && Chat.login) {
         if (msg) items.push({ label: 'Reply', pick: () => { Talk.setReply({ id: msg, name }); Sheet.close(); Talk.tx.focus(); } });
-        items.push({ label: 'Mention', pick: () => { Talk.insert('@' + name); Sheet.close(); Talk.tx.focus(); } });
+        items.push({ label: 'Mention', pick: () => { Talk.insert(atName(login, name)); Sheet.close(); Talk.tx.focus(); } });
       }
       items.push({ label: 'Go to their channel', pick: () => go(`?c=${login}`, true) });
       if (Me.acct && uid && uid !== Me.acct.id) items.push({ label: 'Block', desc: 'Hides them everywhere on Twitch, here included.', pick: async () => {
@@ -2247,17 +2319,17 @@ const Card = {
 // screen above it, the channel row and tabs making room for chat.
 const vv = window.visualViewport;
 function fitKeyboard() {
-  const w = $('watch'), up = !!vv && document.activeElement === Talk.tx && vv.scale < 1.05
+  const w = $('watch'), at = document.activeElement, up = !!vv && (at === Talk.tx || at === $('epq')) && vv.scale < 1.05
     && vv.height < document.documentElement.clientHeight - 80;
   w.classList.toggle('kb', up);
   w.style.height = up ? vv.height + 'px' : '';
   w.style.transform = up && vv.offsetTop ? `translateY(${vv.offsetTop}px)` : '';
-  if (up && Picker.on) Picker.show(false);
+  if (up && Picker.on && at === Talk.tx) Picker.show(false);
 }
 vv?.addEventListener('resize', fitKeyboard);
 vv?.addEventListener('scroll', fitKeyboard);
-Talk.tx.addEventListener('blur', () => setTimeout(fitKeyboard, 100));
-$('watch').addEventListener('click', e => { if (!e.target.closest('#say,#ac,#ep,#rpb')) Talk.tx.blur(); });   // a tap elsewhere puts the keyboard away
+for (const n of [Talk.tx, $('epq')]) n.addEventListener('blur', () => setTimeout(fitKeyboard, 100));
+$('watch').addEventListener('click', e => { if (!e.target.closest('#say,#ac,#ep,#rpb')) { Talk.tx.blur(); $('epq').blur(); } });   // a tap elsewhere puts the keyboard away
 
 // ── videos tab ──────────────────────────────────────
 const Vods = {
@@ -2504,7 +2576,7 @@ const UI = {
     $('msgbox').hidden = true; $('banner').hidden = true; $('toast').hidden = true;
     this.unmute(false); this.big(false); this.spin(false); this.fill(false);
   },
-  spin(on) { $('spin').hidden = !on; },
+  spin(on) { $('spin').hidden = !on || P.userPaused; },
   big(on) { $('bigPlay').hidden = !on; if (on) this.spin(false); },
   unmute(on) { $('unmute').hidden = !on; },
   // iPhone can't make part of a page fullscreen, only hand the video to its own player, which pauses
@@ -2800,18 +2872,20 @@ const Home = {
 // Browse: what's on across Twitch, by category. The language chip is a Twitch tag; most browsing is in one language.
 const STREAM = 'viewersCount type createdAt title previewImageURL(width: 440, height: 248) game { displayName } broadcaster { login displayName profileImageURL(width: 150) }';
 const Browse = {
-  game: null, cursor: null, end: false, busy: false, at: 0, key: null, gameInfo: null,
+  game: null, cursor: null, end: false, busy: false, at: 0, key: null, gameInfo: null, run: 0,
   lang() { return store.get('lang', 'English'); },
   async load(force) {
-    const key = `${this.game || ''}|${this.lang()}`;
-    if (!force && key === this.key && Date.now() - this.at < 60e3) return;
-    this.key = key; this.at = Date.now(); this.cursor = null; this.end = false; this.busy = false;
+    const key = `${this.game || ''}|${this.lang()}`, deep = $('brList').children.length > 30;
+    // A list you've scrolled down stays as it is for a good while: reloading keeps only its first page.
+    if (!force && key === this.key && Date.now() - this.at < (deep ? 9e5 : 60e3)) return;
+    this.run++; this.key = key; this.at = Date.now(); this.cursor = null; this.end = false; this.busy = false;
     $('brHead').hidden = !this.game; $('secCats').hidden = !!this.game;
     $('brLang').textContent = this.lang() === 'all' ? 'All languages' : this.lang();
     if (!this.game) this.cats();
     else { $('brTitle').textContent = this.game; $('brSub').textContent = ''; }
     $('brH').firstChild.textContent = this.game ? 'Live channels' : 'Live now ';
     await this.page(true);
+    if (deep && !$('vBrowse').hidden) scrollTo(0, 0);
   },
   async cats() {
     if ($('cats').children.length && Date.now() - this.catAt < 3e5) return;
@@ -2830,13 +2904,14 @@ const Browse = {
   async page(first) {
     if (this.busy || this.end) return;
     this.busy = true;
-    const key = this.key, box = $('brList'), lang = this.lang();
+    const run = this.run, box = $('brList'), lang = this.lang();
     const after = this.cursor ? `, after: ${JSON.stringify(this.cursor)}` : '';
     const opts = `{ sort: VIEWER_COUNT${lang === 'all' ? '' : `, freeformTags: [${JSON.stringify(lang)}]`} }`;
     const field = `streams(first: 30${after}, options: ${opts}) { edges { cursor node { ${STREAM} } } pageInfo { hasNextPage } }`;
     try {
       const d = this.game ? await gql(`query($g: String!) { game(name: $g) { displayName viewersCount ${field} } }`, { g: this.game }, TV_CID) : await gql(`query { ${field} }`, null, TV_CID);
-      if (key !== this.key) return;
+      if (run !== this.run) return;
+      this.at = Date.now();
       const res = this.game ? d.game?.streams : d.streams;
       if (this.game && d.game) { $('brTitle').textContent = d.game.displayName; $('brSub').textContent = `${count(d.game.viewersCount)} watching`; }
       const edges = res?.edges || [];
@@ -2847,8 +2922,8 @@ const Browse = {
       this.end = !res?.pageInfo?.hasNextPage || !this.cursor;
       if (first && !edges.length) box.append(el('p', 'note', 'Nothing live here in this language.'));
     } catch (e) {
-      if (key === this.key && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
-    } finally { if (key === this.key) this.busy = false; }
+      if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
+    } finally { if (run === this.run) this.busy = false; }
   },
 };
 new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' }).observe($('brEnd'));
@@ -3004,7 +3079,7 @@ Me.save(Me.acct);
 Me.check();
 Me.sync();
 setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Talk, Me, Replay, Browse, Search, SignIn, Clips };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Talk, Me, Replay, Browse, Search, SignIn, Clips, UI, Card };   // for poking at playback from devtools
 route(false);
 })();
 </script>
