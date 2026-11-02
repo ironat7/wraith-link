@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://script.google.com">
 <link rel="preconnect" href="https://script.googleusercontent.com">
 <link rel="preconnect" href="https://static-cdn.jtvnw.net">
-<script id="hlsjs" src="https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.light.min.js" integrity="sha384-y8wQxRLtNclrHbMBLBLTEkgUrdFu6uWzZiobE1wBE09nt2wHIZlBPvPepdZU4+MM" crossorigin="anonymous" async onload="this.dataset.ok=1" onerror="this.dataset.err=1"></script>
+<script id="hlsjs" src="https://cdn.jsdelivr.net/npm/hls.js@1.7.4/dist/hls.light.min.js" integrity="sha384-vpNtFjJmrPAaL9LfqByx3MxTVjqrtQ6Ue6UVNnFeghNrhE0uvpydDr3tkTVcBgDz" crossorigin="anonymous" async onload="this.dataset.ok=1" onerror="this.dataset.err=1"></script>
 <style>
 :root {
   --bg: #0b0b0d; --bg-1: #121215; --bg-2: #19191d; --bg-3: #232329;
@@ -455,16 +455,31 @@ async function vodSources(base, rend = 'chunked') {
   return [URL.createObjectURL(new Blob([fixed], { type })), `data:${type};base64,${btoa(fixed)}`, direct];
 }
 
+// Each playlist's segments, by number, under the URL the player first saw them. On some streams (the
+// fMP4 ones, like powdur's) Twitch advertises an upcoming segment at one URL and lists it at another
+// when it arrives: the same bytes, but hls.js throws out any playlist whose segment N changed URL.
+const shownSegs = new Map();
+
 // Twitch titles real segments "live" and stitched ads anything else ("Amazon|…"). Ads become
 // EXT-X-GAP so the player never fetches them; the two upcoming segments Twitch advertises with
 // EXT-X-TWITCH-PREFETCH become real entries, which is what makes the feed low latency.
-function rewrite(text, quiet) {   // quiet: the background-audio player, which doesn't steer ad breaks
+function rewrite(text, url, quiet) {   // quiet: the background-audio player, which doesn't steer ad breaks
   const out = [], prefetch = [];
-  let segDur = 2, tailAd = false, adEnd = 0;
+  const shown = shownSegs.get(url) || new Map();
+  shownSegs.set(url, shown);
+  let segDur = 2, tailAd = false, adEnd = 0, sn = 0, firstSn = 0;
+  const seg = u => {
+    const kept = shown.get(sn);
+    if (!kept) shown.set(sn, u);
+    sn++;
+    return kept || u;
+  };
   for (const raw of text.split('\n')) {
     const line = raw.trim();
     if (!line) continue;
+    if (line[0] !== '#') { out.push(seg(line)); continue; }
     if (line.startsWith('#EXT-X-TWITCH-PREFETCH:')) { prefetch.push(line.slice(23)); continue; }
+    if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) firstSn = sn = parseInt(line.slice(22), 10) || 0;
     // Twitch declares 6 s for 2 s segments, and hls.js paces its playlist reloads on that number
     if (line.startsWith('#EXT-X-TARGETDURATION:')) { out.push('#EXT-X-TARGETDURATION:2'); continue; }
     if (line.startsWith('#EXT-X-DATERANGE') && /stitched-ad|X-TV-TWITCH-AD/.test(line)) {
@@ -479,7 +494,8 @@ function rewrite(text, quiet) {   // quiet: the background-audio player, which d
     }
     out.push(line);
   }
-  if (!tailAd) for (const u of prefetch) out.push(`#EXTINF:${segDur.toFixed(3)},live`, u);
+  if (!tailAd) for (const u of prefetch) out.push(`#EXTINF:${segDur.toFixed(3)},live`, seg(u));
+  for (const k of shown.keys()) if (k < firstSn) shown.delete(k);
   if (!quiet) P.onAd(tailAd, adEnd);
   return out.join('\n') + '\n';
 }
@@ -498,7 +514,7 @@ class RelayLoader {
     if (!this.quiet && context.type !== 'manifest' && primed?.url === real && Date.now() - primed.at < 5000) {
       const text = primed.text;
       primed = null;
-      Promise.resolve().then(() => this.callbacks && this.done(real, rewrite(text)));
+      Promise.resolve().then(() => this.callbacks && this.done(real, rewrite(text, real)));
       return;
     }
     // the relay appends this rendition's media playlist to the master, saving a round trip
@@ -534,7 +550,7 @@ class RelayLoader {
       body = body.slice(0, cut);
     }
     if (!this.quiet && body.includes('#EXT-X-STREAM-INF')) P.audioUrl = (body.match(/VIDEO="audio_only"[^\n]*\n(\S+)/) || [])[1] || null;
-    this.done(real, body.includes('#EXTINF') ? rewrite(body, this.quiet) : body);
+    this.done(real, body.includes('#EXTINF') ? rewrite(body, real, this.quiet) : body);
   }
   done(url, data) {
     const st = this.stats;
