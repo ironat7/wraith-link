@@ -1,4 +1,4 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout
+// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout relay (staged, needs no channel)
 // Checks for the bugs an independent code review found on 2026-11-02, on real streams with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { chromium } from 'playwright-core';
@@ -15,11 +15,11 @@ const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebK
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!A || !B) {
+if (which !== 'relay' && (!A || !B)) {
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login } } } } }')).streams.edges.map(e => e.node.broadcaster.login);
   A ||= top[0]; B ||= top.find(x => x !== A);
 }
-console.log('channels', A, B);
+if (A) console.log('channels', A, B);
 let fails = 0;
 const ok = (name, cond, extra = '') => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (extra ? ' — ' + extra : '')); if (!cond) fails++; };
 const ALL = new Set(['site', 'popout', 'embed', 'frontpage']), NONE = new Set();
@@ -954,6 +954,61 @@ if (want('layout')) {
   b = await box();
   ok('and chat can still be hidden there', !b.side, JSON.stringify(b.side));
   await done();
+}
+
+if (want('relay')) {
+  // The relay going quiet, with Twitch and the relay staged. Normal is ~1 s a call with the odd 3 s stall, and Apps Script waking up takes several.
+  const MASTER = '200\n#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2",VIDEO="chunked"\nhttps://x.playlist.ttvnw.net/chunked.m3u8\n';
+  const MEDIA = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/1.ts\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/2.ts\n';
+  const headers = { 'access-control-allow-origin': '*' }, never = () => {};
+  const answer = route => route.fulfill({ status: 200, headers, body: route.request().url().includes('usher') ? MASTER : MEDIA }).catch(never);
+  const stage = async relay => {
+    const { page, done } = await open({ iphone: true, w: 390, h: 844 });
+    const user = { id: '1', login: 'staged', displayName: 'Staged', broadcastSettings: { title: '' }, stream: { id: '1', createdAt: new Date(Date.now() - 36e5).toISOString(), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
+    await page.routeWebSocket(/./, never);
+    await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
+      const u = route.request().url(), b = route.request().postData() || '';
+      if (u.includes('cdn.jsdelivr.net')) return route.continue();
+      if (u.includes('script.google')) return relay(route);
+      if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } } : {} }) });
+      if (!u.endsWith('.ts')) return route.abort().catch(never);   // segments just never come: the picture stays still
+    });
+    const t = Date.now();
+    await page.goto(base + '?c=staged');
+    return { page, done, t };
+  };
+  const toCdn = async (page, from) => { await page.waitForFunction(() => wraith.P.feed === 'cdn', null, { timeout: 60000 }).catch(never); return Date.now() - from; };
+  const levels = (page, ms) => page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: ms }).catch(never);
+  const waking = async (secs, tries, name) => {
+    const at = Date.now() + secs * 1000, { page, done } = await stage(async route => { await sleep(Math.max(0, at - Date.now())); await answer(route); });
+    await levels(page, (secs + 3) * 1000);
+    const s = await st(page);
+    ok(name, s.feed === 'live' && s.retries === tries && await page.evaluate(() => wraith.P.hls?.levels.length === 1), JSON.stringify(s));
+    await done();
+  };
+  await Promise.all([
+    (async () => {
+      const { page, done, t } = await stage(never), ms = await toCdn(page, t);
+      ok('a relay that never answers: on the CDN in about the time a dead one takes', ms < 30e3, `${ms} ms`);
+      await done();
+    })(),
+    (async () => {
+      let hung = false;
+      const { page, done } = await stage(route => hung ? null : answer(route));
+      await levels(page, 15000); hung = true;
+      const ms = await toCdn(page, Date.now());
+      ok('one that stops answering with a stream under way: the same', ms < 30e3, `${ms} ms`);
+      await done();
+    })(),
+    (async () => {
+      const { page, done, t } = await stage(route => route.abort().catch(never)), ms = await toCdn(page, t);
+      const tries = await page.evaluate(() => wraith.P.errs['manifestLoadError (fatal)']);
+      ok('a dead relay still gets every try first', tries === 4, `${tries} tries, ${ms} ms`);
+      await done();
+    })(),
+    waking(8, 0, 'a relay taking 8 s to wake up keeps the first try'),
+    waking(15, 1, 'one taking 15 s is still answering the second'),
+  ]);
 }
 
 await browser.close(); srv.close();
