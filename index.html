@@ -693,7 +693,7 @@ const keepTrying = (tries, ms) => ({ maxNumRetry: tries, retryDelayMs: ms, maxRe
   shouldRetry: (cfg, n, timeout, res) => n < cfg.maxNumRetry && !(res?.code >= 400 && res.code < 500 && n >= 2) });
 const LOADING = {
   ignorePlaylistParsingErrors: true,
-  manifestLoadPolicy: { default: { maxLoadTimeMs: 15e3 } },   // one try: only hls.js's own loaders retry a manifest
+  manifestLoadPolicy: { default: { maxLoadTimeMs: 10e3 } },   // enough for Apps Script to wake up; one try, as only hls.js's own loaders retry a manifest
   playlistLoadPolicy: { default: { maxTimeToFirstByteMs: 8e3, maxLoadTimeMs: 8e3, timeoutRetry: keepTrying(20, 0), errorRetry: keepTrying(20, 1000) } },
   fragLoadPolicy: { default: { maxTimeToFirstByteMs: 8e3, maxLoadTimeMs: 20e3,
     timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: keepTrying(6, 500) } },
@@ -907,7 +907,6 @@ const P = {
     const hls = this.hls = new Hls({
       ...LOADING,
       pLoader: RelayLoader,
-      manifestLoadPolicy: { default: { maxLoadTimeMs: 10e3 } },   // enough for Apps Script to wake up, with someone watching the spinner
       progressive: true,              // play upcoming segments while Twitch is still sending them
       liveSyncDuration: 4,
       liveMaxLatencyDuration: 14,
@@ -1324,7 +1323,7 @@ const BG = {
         P.noteErr(d, 'background ');
         if (!d.fatal || this.hls !== h) return;
         if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) { h.recoverMediaError(); if (this.wanted) aBG.play().catch(() => {}); }
-        else setTimeout(() => { if (this.hls === h && this.wanted) h.startLoad(-1); }, 2000);
+        else setTimeout(() => { if (this.hls === h && this.wanted) this.load(h); }, 2000);
       });
       h.loadSource(P.audioUrl);
       h.attachMedia(aBG);
@@ -1338,6 +1337,7 @@ const BG = {
     v.pause();
     vL.muted = vC.muted = true;
   },
+  load(h) { if (h.levels.length) h.startLoad(-1); else h.loadSource(h.url); },   // with no playlist yet, startLoad does nothing
   next() {
     const u = this.srcs?.shift();
     if (!u) return false;
@@ -1440,7 +1440,7 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
           const p = h.liveSyncPosition;
           if (BG.hls === h && Number.isFinite(p) && p > aBG.currentTime + 3) aBG.currentTime = p;
         });
-        h.startLoad(-1);
+        BG.load(h);
       }
       aBG.play().catch(() => {});
     } else if (P.active()?.paused) togglePlay();

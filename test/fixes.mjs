@@ -959,20 +959,24 @@ if (want('layout')) {
 
 if (want('relay')) {
   // The relay going quiet, with Twitch and the relay staged. Normal is ~1 s a call with the odd 3 s stall, and Apps Script waking up takes several.
-  const MASTER = '200\n#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2",VIDEO="chunked"\nhttps://x.playlist.ttvnw.net/chunked.m3u8\n';
+  const MASTER = '200\n#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2",VIDEO="chunked"\nhttps://x.playlist.ttvnw.net/chunked.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=64000,CODECS="mp4a.40.2",VIDEO="audio_only"\nhttps://x.playlist.ttvnw.net/audio.m3u8\n';
   const MEDIA = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/1.ts\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/2.ts\n';
+  // the audio_only feed: a live playlist of two seconds of silence after two seconds of silence
+  const AUDIO = () => { const n = Math.floor(Date.now() / 2000); return `200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:${n}\n` + [0, 1, 2, 3, 4, 5].map(i => `#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/${n + i}.aac\n`).join(''); };
+  const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 0x40, 0x01, 0xbf, 0xfc, 0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]).flat());
   const headers = { 'access-control-allow-origin': '*' }, never = () => {};
-  const answer = route => route.fulfill({ status: 200, headers, body: route.request().url().includes('usher') ? MASTER : MEDIA }).catch(never);
+  const answer = route => { const u = route.request().url(); return route.fulfill({ status: 200, headers, body: u.includes('usher') ? MASTER : u.includes('audio') ? AUDIO() : MEDIA }).catch(never); };
   const stage = async relay => {
-    const { page, done } = await open({ iphone: true, w: 390, h: 844 });
+    const { page, done } = await open({ iphone: true, w: 390, h: 844, init: captureButtons });
     const user = { id: '1', login: 'staged', displayName: 'Staged', broadcastSettings: { title: '' }, stream: { id: '1', createdAt: new Date(Date.now() - 36e5).toISOString(), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
-    await page.routeWebSocket(/./, never);
+    await page.addInitScript(() => { window.WebSocket = class { close() {} send() {} }; });
     await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
       const u = route.request().url(), b = route.request().postData() || '';
-      if (u.includes('cdn.jsdelivr.net')) return route.continue();
+      if (u.includes('cdn.jsdelivr.net')) return route.continue().catch(never);
       if (u.includes('script.google')) return relay(route);
-      if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } } : {} }) });
-      if (!u.endsWith('.ts')) return route.abort().catch(never);   // segments just never come: the picture stays still
+      if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } } : {} }) }).catch(never);
+      if (u.endsWith('.aac')) return route.fulfill({ status: 200, headers, body: SILENCE }).catch(never);
+      if (!u.endsWith('.ts')) return route.abort().catch(never);   // video segments just never come: the picture stays still
     });
     const t = Date.now();
     await page.goto(base + '?c=staged');
@@ -987,7 +991,53 @@ if (want('relay')) {
     ok(name, s.feed === 'live' && s.retries === tries && await page.evaluate(() => wraith.P.hls?.levels.length === 1), JSON.stringify(s));
     await done();
   };
+  // Leaving the app with the relay hung: the sound starts by itself once there's an answer, unless you've stopped it.
+  const leaving = async run => {
+    const S = { hung: false, audio: 0 };
+    const { page, done } = await stage(route => { if (route.request().url().includes('audio')) S.audio++; return S.hung ? null : answer(route); });
+    await levels(page, 15000);
+    S.hung = true; await vis(page, true); await sleep(1000);
+    const t = Date.now(), live = async name => ok(name, !!(await sounding(page)), `${Date.now() - t} ms ${JSON.stringify(await snd(page))}`);
+    const silent = async (name, ms = 3000) => { const n = S.audio; await sleep(ms); const s = await snd(page); ok(name, s.paused && S.audio === n, `${S.audio - n} calls ${JSON.stringify(s)}`); };
+    await run(page, S, live, silent);
+    await done();
+  };
   await Promise.all([
+    leaving(async (page, S, live) => {
+      await sleep(3000); S.hung = false;
+      await live('a relay hanging as you leave: the sound starts once it answers');
+    }),
+    leaving(async (page, S, live) => {
+      await sleep(25000); S.hung = false;
+      await live('and after a hang long enough to outlast the first try');
+    }),
+    leaving(async (page, S, live, silent) => {
+      await cc(page, 'pause'); S.hung = false;
+      await page.evaluate(() => wraith.BG.hls.trigger(Hls.Events.ERROR, { type: Hls.ErrorTypes.NETWORK_ERROR, details: 'manifestLoadTimeOut', fatal: true }));
+      await silent('stopped during the hang, it stays stopped when the relay answers');
+      await cc(page, 'play');
+      await live('until the button starts it');
+    }),
+    leaving(async (page, S, live, silent) => {
+      await page.evaluate(() => document.getElementById('aBG').pause()); S.hung = false;
+      await silent('another app taking the sound during the hang: the same');
+      await page.evaluate(() => { document.getElementById('aBG').play().catch(() => {}); });
+      await silent('iOS starting it again when that app stops doesn’t take', 800);
+      await cc(page, 'play');
+      await live('and the button still starts it');
+    }),
+    (async () => {
+      const S = { hung: false };
+      const { page, done } = await stage(route => S.hung ? null : answer(route));
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      S.hung = true; await sleep(20000); S.hung = false;
+      const at = await page.evaluate(() => document.getElementById('aBG').currentTime);
+      await page.waitForFunction(t => document.getElementById('aBG').currentTime > t + 2, at, { timeout: 25000 }).catch(never);
+      const s = await snd(page);
+      ok('a hang once the sound is going: it carries on after', s.on && s.wanted && await page.evaluate(t => document.getElementById('aBG').currentTime > t + 2, at), JSON.stringify(s));
+      await done();
+    })(),
     (async () => {
       const { page, done, t } = await stage(never), ms = await toCdn(page, t);
       ok('a relay that never answers: on the CDN in about the time a dead one takes', ms < 30e3, `${ms} ms`);
