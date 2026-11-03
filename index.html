@@ -693,8 +693,7 @@ const keepTrying = (tries, ms) => ({ maxNumRetry: tries, retryDelayMs: ms, maxRe
   shouldRetry: (cfg, n, timeout, res) => n < cfg.maxNumRetry && !(res?.code >= 400 && res.code < 500 && n >= 2) });
 const LOADING = {
   ignorePlaylistParsingErrors: true,
-  manifestLoadPolicy: { default: { maxTimeToFirstByteMs: 15e3, maxLoadTimeMs: 15e3,
-    timeoutRetry: { maxNumRetry: 1, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: { maxNumRetry: 2, retryDelayMs: 1000, maxRetryDelayMs: 2000 } } },
+  manifestLoadPolicy: { default: { maxLoadTimeMs: 15e3 } },   // one try: only hls.js's own loaders retry a manifest
   playlistLoadPolicy: { default: { maxTimeToFirstByteMs: 8e3, maxLoadTimeMs: 8e3, timeoutRetry: keepTrying(20, 0), errorRetry: keepTrying(20, 1000) } },
   fragLoadPolicy: { default: { maxTimeToFirstByteMs: 8e3, maxLoadTimeMs: 20e3,
     timeoutRetry: { maxNumRetry: 4, retryDelayMs: 0, maxRetryDelayMs: 0 }, errorRetry: keepTrying(6, 500) } },
@@ -908,6 +907,7 @@ const P = {
     const hls = this.hls = new Hls({
       ...LOADING,
       pLoader: RelayLoader,
+      manifestLoadPolicy: { default: { maxLoadTimeMs: 10e3 } },   // enough for Apps Script to wake up, with someone watching the spinner
       progressive: true,              // play upcoming segments while Twitch is still sending them
       liveSyncDuration: 4,
       liveMaxLatencyDuration: 14,
@@ -977,6 +977,7 @@ const P = {
       return;
     }
     if (d.response?.code === 403 && d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) { this.subOnly = true; return this.fallback('Sub-only stream'); }
+    if (d.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT && this.retries) this.retries = 3;   // a fresh start got no answer either: the relay is hung, so on to the CDN
     this.restart();
   },
 
@@ -1207,12 +1208,13 @@ const P = {
   },
 
   // The player can wedge in ways that raise no error (a socket left dead by a network change, a buffer
-  // iOS threw away). A picture that hasn't moved for 10 s while it should be playing starts over.
+  // iOS threw away). A picture that hasn't moved for 10 s while it should be playing starts over, once there's
+  // a playlist to play: before that, the wait is the playlist load's own timeout.
   watch(v, now) {
     const moving = v.currentTime !== this.pos;
     this.pos = v.currentTime;
     if (moving && this.feed === 'live' && now - this.began > 8e3) this.retries = this.fixes = 0;   // it really is playing: the last restart worked
-    if (this.feed !== 'live' || !this.hls || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
+    if (this.feed !== 'live' || !this.hls?.levels.length || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
     if (now - this.moved < 10e3) return;
     this.moved = now;
     this.noteErr({ details: 'stuck' });
