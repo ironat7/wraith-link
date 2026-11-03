@@ -928,7 +928,8 @@ const P = {
   onManifest() {
     this.groups = this.hls.levels.map((l, i) => ({ i, id: l.attrs?.VIDEO || `${l.height}p`, h: l.height || 0, fps: Math.round(l.frameRate || 0), br: l.bitrate }));
     this.applyQuality();
-    if (document.hidden && Pages.shown) BG.start();   // the stream (re)started while the app was in the background
+    // the stream (re)started while the app was in the background; once hls.js is done with this manifest, or its own start undoes the handover
+    if (document.hidden && Pages.shown) queueMicrotask(() => BG.start());
   },
 
   qualities() {

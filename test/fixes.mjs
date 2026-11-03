@@ -961,7 +961,7 @@ if (want('relay')) {
   // The relay going quiet, with Twitch and the relay staged. Normal is ~1 s a call with the odd 3 s stall, and Apps Script waking up takes several.
   const MASTER = '200\n#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2",VIDEO="chunked"\nhttps://x.playlist.ttvnw.net/chunked.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=64000,CODECS="mp4a.40.2",VIDEO="audio_only"\nhttps://x.playlist.ttvnw.net/audio.m3u8\n';
   const MEDIA = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/1.ts\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/2.ts\n';
-  // the audio_only feed: a live playlist of two seconds of silence after two seconds of silence
+  // the audio_only feed: a live playlist of silence, two seconds a segment
   const AUDIO = () => { const n = Math.floor(Date.now() / 2000); return `200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:${n}\n` + [0, 1, 2, 3, 4, 5].map(i => `#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/${n + i}.aac\n`).join(''); };
   const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 0x40, 0x01, 0xbf, 0xfc, 0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]).flat());
   const headers = { 'access-control-allow-origin': '*' }, never = () => {};
@@ -1052,8 +1052,8 @@ if (want('relay')) {
       await done();
     })(),
     (async () => {
-      const S = { hung: false };
-      const { page, done } = await stage(route => S.hung ? null : answer(route));
+      const S = { hung: false, picture: 0 };
+      const { page, done } = await stage(route => { if (route.request().url().includes('chunked')) S.picture++; return S.hung ? null : answer(route); });
       await levels(page, 15000);
       await vis(page, true); await sounding(page);
       S.hung = true;
@@ -1061,6 +1061,8 @@ if (want('relay')) {
       await toCdn(page, Date.now());
       S.hung = false;
       ok('a stream restarting during a long hang: the sound comes back with the relay', !!(await sounding(page)), JSON.stringify(await snd(page)));
+      const n = S.picture; await sleep(5000);
+      ok('and the picture’s player leaves the relay alone', S.picture === n, `${S.picture - n} calls in 5 s`);
       await done();
     })(),
     cutShort(false, s => !s.paused && s.spin, 'a start cut short by leaving goes again on coming back'),
