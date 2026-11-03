@@ -172,7 +172,7 @@ if (want('misc')) {
   const { page, ads, done } = await open({ init: stub });
   await page.goto(base + `?c=${A}`); await playing(page);
 
-  await page.evaluate(() => wraith.P.hls.trigger('hlsError', { type: 'mediaError', details: 'bufferFullError', fatal: false, error: new Error('The quota has been exceeded.') }));
+  await page.evaluate(() => wraith.P.hls?.trigger('hlsError', { type: 'mediaError', details: 'bufferFullError', fatal: false, error: new Error('The quota has been exceeded.') }));
   await sleep(1000);
   let s = await st(page); ok('a full buffer isn’t mistaken for Google’s limit', s.feed === 'live' && s.hls && !s.msg, JSON.stringify(s));
 
@@ -197,7 +197,7 @@ if (want('misc')) {
   ok('a picture that keeps moving does', await page.evaluate(() => wraith.P.retries === 0 && wraith.P.fixes === 0));
 
   // a media error that keeps coming back ends in a restart, not a loop of recoveries
-  const mediaError = () => page.evaluate(() => wraith.P.hls.trigger('hlsError', { type: 'mediaError', details: 'bufferAppendError', fatal: true }));
+  const mediaError = () => page.evaluate(() => wraith.P.hls?.trigger('hlsError', { type: 'mediaError', details: 'bufferAppendError', fatal: true }));
   await page.evaluate(() => { wraith.P.fixes = 0; wraith.P.retries = 0; window.__old = wraith.P.hls; });
   await mediaError(); await playing(page, 8000);
   ok('one recovery plays on by itself', await page.evaluate(() => wraith.P.fixes === 1 && wraith.P.hls === window.__old && !wraith.P.active().paused), JSON.stringify(await st(page)));
@@ -205,14 +205,15 @@ if (want('misc')) {
   ok('recoveries that don’t hold end in a restart', await page.evaluate(() => wraith.P.fixes === 3 && wraith.P.retries === 1), JSON.stringify(await page.evaluate(() => [wraith.P.fixes, wraith.P.retries])));
   await sleep(2500); await playing(page);
   ok('which plays', await page.evaluate(() => wraith.P.hls !== window.__old) && !(await st(page)).paused);
-  await sleep(9500);
+  await page.waitForFunction(() => wraith.P.fixes === 0 && wraith.P.retries === 0, null, { timeout: 25000 }).catch(() => {});
   ok('and once it’s held, the slate is clean', await page.evaluate(() => wraith.P.fixes === 0 && wraith.P.retries === 0));
 
-  // a slow answer about the channel you just left
+  // a slow answer from before you opened the channel again
   let slow = true;
   await page.route('https://gql.twitch.tv/gql', async route => {
     const b = route.request().postData() || '';
     if (!slow || !b.includes('users(logins') || !b.includes(A)) return route.fallback();
+    slow = false;
     await sleep(2500);
     const res = await route.fetch().catch(() => null);
     if (!res) return;
@@ -221,10 +222,10 @@ if (want('misc')) {
     await route.fulfill({ response: res, body: JSON.stringify(j) }).catch(() => {});
   });
   await page.evaluate(() => { wraith.P.checkEnded(); }); await sleep(100);
-  await page.evaluate(b => wraith.P.open(b), B);
+  await page.evaluate(a => wraith.P.open(a), A);
   await sleep(4500);
-  s = await st(page); ok('a slow “stream ended” for the last channel leaves this one alone', s.feed === 'live' && !s.msg && await page.evaluate(b => wraith.P.login === b, B), JSON.stringify(s));
-  slow = false; await page.unroute('https://gql.twitch.tv/gql');
+  s = await st(page); ok('a slow “stream ended” from before leaves the stream alone', s.feed === 'live' && !s.msg, JSON.stringify(s));
+  await page.unroute('https://gql.twitch.tv/gql');
   await playing(page);
 
   // the wake lock goes with the stream
@@ -236,9 +237,9 @@ if (want('misc')) {
 
   // Google's limit itself still counts
   await page.goto(base + `?c=${A}`); await playing(page);
-  await page.evaluate(() => wraith.P.hls.trigger('hlsError', { type: 'networkError', details: 'levelLoadError', fatal: false, response: { code: 599, text: 'Exception: Service invoked too many times for one day: urlfetch.' } }));
+  const up = await page.evaluate(() => { const h = wraith.P.hls; h?.trigger('hlsError', { type: 'networkError', details: 'levelLoadError', fatal: false, response: { code: 599, text: 'Exception: Service invoked too many times for one day: urlfetch.' } }); return !!h; });
   await sleep(500);
-  s = await st(page); ok('Google’s real limit still falls back', !s.hls, JSON.stringify(s));
+  s = await st(page); ok('Google’s real limit still falls back', up && !s.hls, JSON.stringify(s));
   await done();
 }
 
