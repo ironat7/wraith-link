@@ -42,7 +42,8 @@ async function open({ iphone = false, init, initArg, w = 900, h = 1000 } = {}) {
     let b = await res.text();
     if (u.includes('usher.ttvnw.net')) {
       const kind = JSON.parse(new URL(u).searchParams.get('token') || '{}').player_type || '?';
-      ads.masters.push(kind);
+      if (!kindOf.has(u)) ads.masters.push(kind);   // a slow fetch's twin is the same session
+      kindOf.set(u, kind);
       if (ads.slow === kind) await sleep(ads.ms);
       for (const l of b.split('\n')) if (l.startsWith('https://')) kindOf.set(l.trim(), kind);
       const cut = b.indexOf('\n#WRAITH-MEDIA:');   // the first media playlist comes along with the master
