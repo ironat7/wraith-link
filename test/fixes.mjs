@@ -1,31 +1,23 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout relay (staged, needs no channel)
-// Checks for the bugs an independent code review found on 2026-11-02, on real streams with the failures staged.
+// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real streams: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout. All staged, needing no channel: relay vod cdn away screen lists.
+// Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
-import { chromium } from 'playwright-core';
-import http from 'http'; import fs from 'fs'; import path from 'path';
-import { fileURLToPath } from 'url';
-const file = fileURLToPath(new URL('../index.html', import.meta.url)), dir = path.dirname(file);
-const srv = http.createServer((q, r) => { const u = new URL(q.url, 'http://x'); const p = u.pathname === '/' ? file : path.join(dir, u.pathname); fs.readFile(p, (e, d) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': p.endsWith('.html') ? 'text/html; charset=utf-8' : p.endsWith('.svg') ? 'image/svg+xml' : p.endsWith('.png') ? 'image/png' : 'application/octet-stream', 'cache-control': 'no-store' }); r.end(d); }); });
-await new Promise(ok => srv.listen(0, '127.0.0.1', ok));
-const base = `http://127.0.0.1:${srv.address().port}/`;
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+import { serve, launch, sleep, checks, IPHONE } from './lib.mjs';
+const srv = await serve(), { base } = srv;
+const browser = await launch();
 const which = process.argv[2] || 'all', want = s => which === 'all' || which === s;
-const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1';
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (which !== 'relay' && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists'].includes(which) && (!A || !B)) {
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login } } } } }')).streams.edges.map(e => e.node.broadcaster.login);
   A ||= top[0]; B ||= top.find(x => x !== A);
 }
 if (A) console.log('channels', A, B);
-let fails = 0;
-const ok = (name, cond, extra = '') => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (extra ? ' — ' + extra : '')); if (!cond) fails++; };
+const { ok, report } = checks();
 const ALL = new Set(['site', 'popout', 'embed', 'frontpage']), NONE = new Set();
 
-async function open({ iphone = false, init, initArg, w = 900, h = 1000 } = {}) {
-  const c = await browser.newContext({ viewport: { width: w, height: h }, userAgent: iphone ? IPHONE : undefined });
+async function open({ iphone = false, init, initArg, w = 900, h = 1000, touch = false } = {}) {
+  const c = await browser.newContext({ viewport: { width: w, height: h }, userAgent: iphone ? IPHONE : undefined, hasTouch: touch, isMobile: touch });
   if (init) await c.addInitScript(init, initArg);
   const page = await c.newPage();
   page.errors = [];
@@ -56,6 +48,56 @@ async function open({ iphone = false, init, initArg, w = 900, h = 1000 } = {}) {
 const playing = (page, ms = 25000) => page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 1 && v.readyState >= 3; }, null, { timeout: ms }).catch(() => {});
 const st = page => page.evaluate(() => { const P = wraith.P, v = P.active(); return { feed: P.feed, ad: P.ad, cover: P.cover, type: P.playerType, paused: v?.paused, t: +(v?.currentTime || 0).toFixed(1), h: v?.videoHeight, lat: +(P.latency() || 0).toFixed(1), hls: !!P.hls, spin: !document.getElementById('spin').hidden, banner: !document.getElementById('banner').hidden, msg: !document.getElementById('msgbox').hidden, retries: P.retries, tried: [...P.dodged], errs: P.errs }; });
 const vis = (page, hidden) => page.evaluate(h => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }); Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => h ? 'hidden' : 'visible' }); document.dispatchEvent(new Event('visibilitychange')); }, hidden);
+
+// The background sound, as far as Chrome can stage iOS: what iOS would do to the audio player is done to it directly.
+const snd = page => page.evaluate(() => { const a = document.getElementById('aBG'), B = wraith.BG, P = wraith.P; return { on: B.on, wanted: B.wanted, held: B.held, paused: a.paused, src: !!a.getAttribute('src'), feed: P.feed, vPaused: P.active()?.paused, vMuted: document.getElementById('vLL').muted, userPaused: P.userPaused, msg: document.getElementById('msgbox').hidden ? '' : document.getElementById('msgbox').textContent }; });
+const sounding = page => page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.currentTime > 0 && a.readyState >= 3; }, null, { timeout: 25000 }).catch(() => {});
+const cc = (page, what) => page.evaluate(w => window.__ms[w](), what);
+const captureButtons = () => { window.__ms = {}; const ms = navigator.mediaSession, real = ms.setActionHandler.bind(ms); ms.setActionHandler = (a, f) => { window.__ms[a] = f; real(a, f); }; };
+
+// Twitch and the relay staged, with no real stream anywhere. Normal is ~1 s a relay call with the odd 3 s stall, and Apps Script waking up takes several.
+const MASTER = '200\n#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2",VIDEO="chunked"\nhttps://x.playlist.ttvnw.net/chunked.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=64000,CODECS="mp4a.40.2",VIDEO="audio_only"\nhttps://x.playlist.ttvnw.net/audio.m3u8\n';
+const MEDIA = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/1.ts\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/2.ts\n';
+// the audio_only feed: a live playlist of silence, two seconds a segment
+const AUDIO = () => { const n = Math.floor(Date.now() / 2000); return `200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:${n}\n` + [0, 1, 2, 3, 4, 5].map(i => `#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/${n + i}.aac\n`).join(''); };
+const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 0x40, 0x01, 0xbf, 0xfc, 0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]).flat());
+// the CDN's copy of a stream, as a finished playlist: Chrome's native HLS stalls on a growing one, and a seek can break it
+const DVR = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:VOD\n' + Array.from({ length: 300 }, (_, i) => `#EXTINF:2.000,\n${i}.aac\n`).join('') + '#EXT-X-ENDLIST\n';
+const headers = { 'access-control-allow-origin': '*' }, never = () => {};
+const answer = route => { const u = route.request().url(); return route.fulfill({ status: 200, headers, body: u.includes('usher') ? MASTER : u.includes('audio') ? AUDIO() : MEDIA }).catch(never); };
+const ago = s => new Date(Date.now() - s * 1000).toISOString();
+const ME = { token: 'TOK', id: '212375133', login: 'ironat___', name: 'Ironat___' };
+// `relay` answers relay calls; `gql(body, route)` can answer GQL itself by returning data, or true once it has fulfilled the route.
+const stage = async (relay, { sub = false, pick = false, copy, since = ago(3600), offline = false, me = false, gql, init, noPlayer = false, path = '?c=staged', w = 390, h = 844, touch = false } = {}) => {
+  const { page, done, ads } = await open({ iphone: true, w, h, touch, init: captureButtons });
+  const user = { id: '1', login: 'staged', displayName: 'Staged', profileImageURL: null, broadcastSettings: { title: '' }, stream: offline ? null : { id: '1', createdAt: since, viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
+  await page.addInitScript(([p, m]) => { window.WebSocket = class { close() {} send() {} }; if (p) localStorage.setItem('wraith.feed', '"cdn"'); if (m) localStorage.setItem('wraith.me', JSON.stringify(m)); }, [pick, me ? ME : null]);
+  if (init) await page.addInitScript(init);
+  await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, async route => {
+    const u = route.request().url(), b = route.request().postData() || '';
+    if (u.includes('cdn.jsdelivr.net')) return noPlayer ? undefined : route.continue().catch(never);   // noPlayer: the player script never answers
+    if (u.includes('script.google')) return relay(route);
+    if (u.includes('gql.twitch.tv')) {
+      const mine = gql && await gql(b, route);
+      if (mine === true) return;
+      return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: mine || (b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: sub } } } : {}) }) }).catch(never);
+    }
+    if (copy && u.endsWith('index-dvr.m3u8')) return route.fulfill(copy(u) ? { status: 200, headers, body: DVR } : { status: 403, headers, body: '' }).catch(never);
+    if (u.endsWith('.aac')) return route.fulfill({ status: 200, headers, body: SILENCE }).catch(never);
+    if (!u.endsWith('.ts')) return route.abort().catch(never);   // video segments just never come: the picture stays still
+  });
+  const t = Date.now();
+  await page.goto(base + path, { waitUntil: 'domcontentloaded' });
+  return { page, done, t, user, ads };
+};
+const toCdn = async (page, from) => { await page.waitForFunction(() => wraith.P.feed === 'cdn', null, { timeout: 60000 }).catch(never); return Date.now() - from; };
+const levels = (page, ms) => page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: ms }).catch(never);
+const backPlays = async (page, name) => {
+  await vis(page, false);
+  await page.waitForFunction(() => { const v = wraith.P.active(); return !v.paused && v.readyState >= 3; }, null, { timeout: 15000 }).catch(never);
+  const s = await snd(page);
+  ok(name, !s.on && s.paused && !s.src && !s.vPaused && !s.msg, JSON.stringify(s));
+};
 
 if (want('pause')) {
   // A pause you chose holds through ad breaks, restarts and a stream restarting.
@@ -337,8 +379,6 @@ if (want('replay')) {
   } else console.log('skip: no two VODs to try', JSON.stringify(u)?.slice(0, 120));
   await done();
 }
-
-const ME = { token: 'TOK', refresh: 'REF', exp: Date.now() + 36e5, id: '212375133', login: 'ironat___', name: 'Ironat___' };
 
 if (want('irc')) {
   const { page, done } = await open({ init: me => localStorage.setItem('wraith.me', JSON.stringify(me)), initArg: ME });
@@ -773,12 +813,6 @@ if (want('scroll')) {
   await done();
 }
 
-// The background sound, as far as Chrome can stage iOS: what iOS would do to the audio player is done to it directly.
-const snd = page => page.evaluate(() => { const a = document.getElementById('aBG'), B = wraith.BG, P = wraith.P; return { on: B.on, wanted: B.wanted, held: B.held, paused: a.paused, src: !!a.getAttribute('src'), feed: P.feed, vPaused: P.active()?.paused, vMuted: document.getElementById('vLL').muted, userPaused: P.userPaused, msg: document.getElementById('msgbox').hidden ? '' : document.getElementById('msgbox').textContent }; });
-const sounding = page => page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.currentTime > 0 && a.readyState >= 3; }, null, { timeout: 25000 }).catch(() => {});
-const cc = (page, what) => page.evaluate(w => window.__ms[w](), what);
-const captureButtons = () => { window.__ms = {}; const ms = navigator.mediaSession, real = ms.setActionHandler.bind(ms); ms.setActionHandler = (a, f) => { window.__ms[a] = f; real(a, f); }; };
-
 if (want('sound')) {
   const { page, ads, done } = await open({ iphone: true, init: captureButtons });
   await page.goto(base + `?c=${A}`); await playing(page);
@@ -1005,36 +1039,7 @@ if (want('layout')) {
 }
 
 if (want('relay')) {
-  // The relay going quiet, with Twitch and the relay staged. Normal is ~1 s a call with the odd 3 s stall, and Apps Script waking up takes several.
-  const MASTER = '200\n#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2",VIDEO="chunked"\nhttps://x.playlist.ttvnw.net/chunked.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=64000,CODECS="mp4a.40.2",VIDEO="audio_only"\nhttps://x.playlist.ttvnw.net/audio.m3u8\n';
-  const MEDIA = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/1.ts\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/2.ts\n';
-  // the audio_only feed: a live playlist of silence, two seconds a segment
-  const AUDIO = () => { const n = Math.floor(Date.now() / 2000); return `200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:${n}\n` + [0, 1, 2, 3, 4, 5].map(i => `#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/${n + i}.aac\n`).join(''); };
-  const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 0x40, 0x01, 0xbf, 0xfc, 0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]).flat());
-  // the CDN's copy of a stream, as a finished playlist: Chrome's native HLS stalls on a growing one, and a seek can break it
-  const DVR = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:VOD\n' + Array.from({ length: 300 }, (_, i) => `#EXTINF:2.000,\n${i}.aac\n`).join('') + '#EXT-X-ENDLIST\n';
-  const headers = { 'access-control-allow-origin': '*' }, never = () => {};
-  const answer = route => { const u = route.request().url(); return route.fulfill({ status: 200, headers, body: u.includes('usher') ? MASTER : u.includes('audio') ? AUDIO() : MEDIA }).catch(never); };
-  const ago = s => new Date(Date.now() - s * 1000).toISOString();
-  const stage = async (relay, { sub = false, pick = false, copy, since = ago(3600) } = {}) => {
-    const { page, done } = await open({ iphone: true, w: 390, h: 844, init: captureButtons });
-    const user = { id: '1', login: 'staged', displayName: 'Staged', broadcastSettings: { title: '' }, stream: { id: '1', createdAt: since, viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
-    await page.addInitScript(p => { window.WebSocket = class { close() {} send() {} }; if (p) localStorage.setItem('wraith.feed', '"cdn"'); }, pick);
-    await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
-      const u = route.request().url(), b = route.request().postData() || '';
-      if (u.includes('cdn.jsdelivr.net')) return route.continue().catch(never);
-      if (u.includes('script.google')) return relay(route);
-      if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: sub } } } : {} }) }).catch(never);
-      if (copy && u.endsWith('index-dvr.m3u8')) return route.fulfill(copy(u) ? { status: 200, headers, body: DVR } : { status: 403, headers, body: '' }).catch(never);
-      if (u.endsWith('.aac')) return route.fulfill({ status: 200, headers, body: SILENCE }).catch(never);
-      if (!u.endsWith('.ts')) return route.abort().catch(never);   // video segments just never come: the picture stays still
-    });
-    const t = Date.now();
-    await page.goto(base + '?c=staged');
-    return { page, done, t, user };
-  };
-  const toCdn = async (page, from) => { await page.waitForFunction(() => wraith.P.feed === 'cdn', null, { timeout: 60000 }).catch(never); return Date.now() - from; };
-  const levels = (page, ms) => page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: ms }).catch(never);
+  // The relay going quiet.
   const waking = async (secs, tries, name) => {
     let at;   // from its first ask: a machine busy starting pages doesn't shorten the wait
     const { page, done } = await stage(async route => { at ||= Date.now() + secs * 1000; await sleep(Math.max(0, at - Date.now())); await answer(route); });
@@ -1075,12 +1080,6 @@ if (want('relay')) {
     await vis(page, true); await sounding(page);
     await run(page, S, () => { user.stream = { ...user.stream, id: '2' }; return page.evaluate(() => wraith.P.refresh()); });
     await done();
-  };
-  const backPlays = async (page, name) => {
-    await vis(page, false);
-    await page.waitForFunction(() => { const v = wraith.P.active(); return !v.paused && v.readyState >= 3; }, null, { timeout: 15000 }).catch(never);
-    const s = await snd(page);
-    ok(name, !s.on && s.paused && !s.src && !s.vPaused && !s.msg, JSON.stringify(s));
   };
   const stops = {
     'stopped from the buttons': page => cc(page, 'pause'),
@@ -1138,9 +1137,11 @@ if (want('relay')) {
       ok('moving during the wait to a stream long live and not recorded: the old wait doesn’t ask as well', S.asks.length === 2, `${S.asks.map(a => a - S.asks[0])}`);
     }),
     refused({ sub: true }, async (page, S) => {
-      await vis(page, true); await sleep(14000);
+      await vis(page, true);
+      const n = S.asks.length;   // from leaving: a machine busy starting pages can have it ask once before that
+      await sleep(14000);
       const s = await snd(page);
-      ok('leaving during the wait: the sound does the asking, not the picture', s.on && S.asks.length === 1, `${S.asks.length} asks ${JSON.stringify(s)}`);
+      ok('leaving during the wait: the sound does the asking, not the picture', s.on && S.asks.length === n && !s.msg, `${S.asks.length - n} asks ${JSON.stringify(s)}`);
       S.up = true;
       ok('and the sound starts once there’s a copy', !!(await sounding(page)), JSON.stringify(await snd(page)));
       await backPlays(page, 'and coming back plays, with nothing saying it isn’t available');
@@ -1280,5 +1281,485 @@ if (want('relay')) {
   ]);
 }
 
+// A past broadcast. Chrome won't play a blob or data playlist, so the corrected copies are read as they're made, and playing falls through to the plain one.
+const VOD = { id: '123', title: 'Past', lengthSeconds: 600, createdAt: ago(86400), status: 'RECORDED', seekPreviewsURL: 'https://dvod.cloudfront.net/aaaaaaaaaaaaaaaaaaaa_staged_1_2/storyboards/1-info.json', resourceRestriction: null, game: null, owner: { id: '1', login: 'staged', displayName: 'Staged', profileImageURL: null } };
+const COPY = 'https://dvod.cloudfront.net/aaaaaaaaaaaaaaaaaaaa_staged_1_2';
+const blobs = () => { window.__blobs = []; const real = URL.createObjectURL.bind(URL); URL.createObjectURL = b => { b.text().then(t => window.__blobs.push(t)); return real(b); }; };
+const relayOf = route => new URL(route.request().url()).searchParams.get('u') || '';
+const said = (route, body) => route.fulfill({ status: 200, headers, body }).catch(never);
+const withVod = b => b.includes('video(id') ? { video: VOD } : undefined;
+
+if (want('vod')) {
+  const FMP4 = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXT-X-PLAYLIST-TYPE:EVENT\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-MAP:URI="init-0.mp4"\n#EXTINF:10.000,\n0.mp4\n#EXTINF:10.000,\n1-unmuted.mp4\n#EXTINF:10.000,\n2-muted.mp4\n#EXT-X-ENDLIST\n';
+  const TS = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10.000,\n0-unmuted.ts\n#EXTINF:10.000,\n1.ts\n#EXT-X-ENDLIST\n';
+  const PLAYS = '200\n' + DVR;   // silence, under names the stage answers
+  const listing = body => route => relayOf(route).includes('index-dvr') ? said(route, body) : answer(route);
+  const stageVod = (relay, how = {}) => stage(relay, { path: '?v=123', copy: () => true, init: blobs, gql: withVod, ...how });
+  const corrected = async page => { await page.waitForFunction(() => window.__blobs?.length, null, { timeout: 15000 }).catch(never); return page.evaluate(() => window.__blobs); };
+  const started = page => page.waitForFunction(() => { const v = document.getElementById('vCDN'); return !v.paused && v.readyState >= 3 && v.currentTime > 0; }, null, { timeout: 20000 }).catch(never);
+  await Promise.all([
+    (async () => {
+      const { page, done } = await stageVod(listing(FMP4));
+      const [text = ''] = await corrected(page);
+      ok('every address in a corrected fMP4 copy is whole, the init segment’s too', text.includes(`#EXT-X-MAP:URI="${COPY}/chunked/init-0.mp4"`) && text.includes(`\n${COPY}/chunked/0.mp4\n`), text.slice(0, 300));
+      ok('a muted fMP4 segment comes from the one file the CDN has', text.includes(`\n${COPY}/chunked/1-muted.mp4\n`) && text.includes(`\n${COPY}/chunked/2-muted.mp4\n`) && !text.includes('unmuted'), text);
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await stageVod(listing(TS));
+      const [text = ''] = await corrected(page);
+      ok('so does a muted TS one', text.includes(`\n${COPY}/chunked/0-muted.ts\n`) && text.includes(`\n${COPY}/chunked/1.ts\n`), text);
+      await done();
+    })(),
+    (async () => {
+      // Twitch keeps some copies' source only as 1080p60: "chunked" is refused, and the video still plays
+      const { page, done } = await stageVod(route => { const u = relayOf(route); return u.includes('/chunked/') ? said(route, '403\n') : u.includes('index-dvr') ? said(route, PLAYS) : answer(route); }, { copy: u => !u.includes('/chunked/') });
+      const list = await corrected(page);
+      ok('a copy with no “chunked” corrects the next best', list.some(t => t.includes('/1080p60/')) && !list.some(t => t.includes('/chunked/')), list.join(' ').slice(0, 200));
+      await started(page);
+      const s = await page.evaluate(() => { const v = document.getElementById('vCDN'); return { t: v.currentTime, paused: v.paused, msg: !document.getElementById('msgbox').hidden }; });
+      ok('and plays it', s.t > 0 && !s.paused && !s.msg, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the relay down: no corrected copy, but the player can still look under every name
+      const { page, done } = await stageVod(route => route.abort().catch(never), { copy: u => u.includes('/720p60/') || u.includes('/audio_only/') });
+      await started(page);
+      const s = await page.evaluate(() => ({ url: document.getElementById('vCDN').dataset.url, audio: wraith.P.vodAudio, msg: !document.getElementById('msgbox').hidden }));
+      ok('with the relay down it finds whichever rendition there is', s.url?.includes('/720p60/') && !s.msg, JSON.stringify(s));
+      ok('and has the sound ready', s.audio?.[0]?.includes('/audio_only/'), JSON.stringify(s.audio));
+      await done();
+    })(),
+    (async () => {
+      // listening in the background moves your place in the video, in case iOS ends the page meanwhile
+      const { page, done } = await stageVod(listing(PLAYS));
+      await started(page);
+      await page.waitForFunction(() => wraith.P.vodAudio?.length, null, { timeout: 10000 }).catch(never);
+      await vis(page, true); await sounding(page);
+      const t0 = await page.evaluate(() => document.getElementById('aBG').currentTime);
+      await page.waitForFunction(t => document.getElementById('aBG').currentTime > t + 6, t0, { timeout: 15000 }).catch(never);
+      const s = await page.evaluate(() => ({ pos: JSON.parse(localStorage.getItem('wraith.pos.123')), t: document.getElementById('aBG').currentTime }));
+      ok('your place moves on while you listen', s.pos >= Math.floor(t0) + 2 && s.pos <= s.t, `${JSON.stringify(s)} from ${t0}`);
+      await backPlays(page, 'and coming back plays the picture');
+      await done();
+    })(),
+    (async () => {
+      // a pause from the lock screen stays until something plays the video, and iOS's own controls can
+      const { page, done } = await stageVod(listing(PLAYS));
+      await started(page);
+      await page.waitForFunction(() => wraith.P.vodAudio?.length, null, { timeout: 10000 }).catch(never);
+      await vis(page, true); await sounding(page);
+      await cc(page, 'pause'); await sleep(200);
+      await vis(page, false); await sleep(300);
+      ok('paused from the lock screen, it stays paused on coming back', await page.evaluate(() => wraith.P.userPaused && document.getElementById('vCDN').paused));
+      await page.evaluate(() => { document.getElementById('vCDN').play(); }); await started(page);
+      ok('the video’s own play button ends that pause', await page.evaluate(() => !wraith.P.userPaused));
+      await vis(page, true); await sounding(page);
+      ok('so leaving again brings the sound', (await snd(page)).on);
+      await done();
+    })(),
+    (async () => {
+      // chat left scrolled up on a stream doesn't carry over to a video's replay
+      const { page, done } = await stage(answer, { copy: () => true, gql: withVod });
+      await levels(page, 15000);
+      await page.evaluate(() => { wraith.Chat.stick = false; document.getElementById('more').hidden = false; });
+      await page.evaluate(() => wraith.P.openVod('123')); await sleep(200);
+      const s = await page.evaluate(() => ({ stick: wraith.Chat.stick, pill: !document.getElementById('more').hidden }));
+      ok('a video’s chat starts out following', s.stick && !s.pill, JSON.stringify(s));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('cdn')) {
+  const onCdn = page => page.waitForFunction(() => { const v = wraith.P.active(); return wraith.P.feed === 'cdn' && !v.paused && v.readyState >= 3 && v.currentTime > 0; }, null, { timeout: 25000 }).catch(never);
+  // what the copy has, staged on the real element: a playlist's end `by` seconds past the picture, and so much of it loaded
+  const fake = (page, by, ahead) => page.evaluate(([by, ahead]) => { const v = wraith.P.active(); window.__ahead = ahead; Object.defineProperty(v, 'seekable', { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => v.currentTime + by }) }); Object.defineProperty(v, 'buffered', { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => v.currentTime + window.__ahead }) }); }, [by, ahead]);
+  const behind = (page, s) => page.evaluate(s => { const P = wraith.P; P.start = Date.now() / 1000 - P.active().currentTime - s; }, s);
+  await Promise.all([
+    (async () => {
+      // A stream with gaps in its copy reads as far behind the clock for good. Seeking to the copy's end every second made the same second play over.
+      const { page, done } = await stage(never, { sub: true, copy: () => true, since: ago(300) });
+      await onCdn(page);
+      await fake(page, 3.5, 2);
+      await behind(page, 60);
+      await page.evaluate(() => { window.__seeks = 0; wraith.P.active().addEventListener('seeking', () => window.__seeks++); });
+      const t0 = await page.evaluate(() => wraith.P.active().currentTime);
+      await sleep(6000);
+      const s = await page.evaluate(() => ({ seeks: window.__seeks, t: wraith.P.active().currentTime, rate: wraith.P.active().playbackRate }));
+      ok('a copy that can’t catch the clock isn’t seeked over and over', s.seeks === 0 && s.t > t0 + 4, JSON.stringify(s));
+      ok('nor sped up with nothing to spare', s.rate === 1, JSON.stringify(s));
+      await page.evaluate(() => { const v = wraith.P.active(); Object.defineProperty(v, 'seekable', { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => v.currentTime + 30 }) }); window.__seeks = 0; });
+      await sleep(1500);
+      ok('it still jumps when there’s somewhere to go', await page.evaluate(() => window.__seeks >= 1));
+      await done();
+    })(),
+    (async () => {
+      // the CDN adds 10 s at a time, so a speed-up has to leave enough to last until the next ten
+      const { page, done } = await stage(never, { sub: true, copy: () => true, since: ago(300) });
+      await onCdn(page);
+      await fake(page, 30, 5);
+      await behind(page, 22);
+      const rate = () => page.evaluate(() => wraith.P.active().playbackRate);
+      await sleep(1500);
+      ok('behind, with one segment’s worth loaded: normal speed', await rate() === 1, String(await rate()));
+      await page.evaluate(() => { window.__ahead = 20; });
+      await sleep(1500);
+      ok('with more than that: it catches up', await rate() === 1.1, String(await rate()));
+      await page.evaluate(() => { window.__ahead = 8; });
+      await sleep(1500);
+      ok('and stops before it eats into the next wait', await rate() === 1, String(await rate()));
+      await page.evaluate(() => { window.__ahead = 0.5; });
+      await sleep(1500);
+      ok('almost out: it slows down', await rate() < 1, String(await rate()));
+      await done();
+    })(),
+    (async () => {
+      // Some streams' copies have no "chunked".
+      const { page, done } = await stage(never, { sub: true, since: ago(240), copy: u => u.includes('/1080p60/') || u.includes('/audio_only/') });
+      await onCdn(page);
+      const s = await page.evaluate(() => ({ url: document.getElementById('vCDN').dataset.url, msg: !document.getElementById('msgbox').hidden }));
+      ok('a sub-only stream whose copy has no “chunked” plays from the next name', s.url?.includes('/1080p60/') && !s.msg, JSON.stringify(s));
+      await page.evaluate(() => wraith.P.setQuality('source'));
+      await onCdn(page);
+      ok('and keeps to it', (await page.evaluate(() => document.getElementById('vCDN').dataset.url)).includes('/1080p60/'));
+      await done();
+    })(),
+    (async () => {
+      // A copy that has been playing and then fails is a network or player hiccup: it comes back by itself.
+      const S = { up: true, asks: 0 };
+      const { page, done } = await stage(never, { sub: true, since: ago(300), copy: u => { if (u.includes('chunked')) S.asks++; return S.up; } });
+      await onCdn(page);
+      S.up = false; S.asks = 0;
+      await page.evaluate(() => wraith.P.active().load());
+      await page.waitForFunction(() => wraith.P.active().error, null, { timeout: 10000 }).catch(never);
+      await sleep(1500);
+      let s = await snd(page);
+      ok('a copy that was playing and fails doesn’t say the stream isn’t recorded', !s.msg, s.msg);
+      await page.waitForFunction(() => !document.getElementById('spin').hidden, null, { timeout: 2000 }).catch(never);
+      ok('it waits with the spinner up', await page.evaluate(() => !document.getElementById('spin').hidden));
+      S.up = true;
+      await onCdn(page);
+      s = await snd(page);
+      ok('and plays again once it’s back', !s.msg && !s.vPaused && S.asks >= 2, `${S.asks} asks ${JSON.stringify(s)}`);
+      await done();
+    })(),
+    (async () => {
+      // The picture stuck for good, with no error: the same watch the low-latency feed has.
+      const S = { asks: 0 };
+      const { page, done } = await stage(never, { sub: true, since: ago(300), copy: u => { if (u.includes('chunked')) S.asks++; return true; } });
+      await onCdn(page);
+      const n = S.asks;
+      await page.evaluate(() => { const v = wraith.P.active(); const at = v.currentTime; Object.defineProperty(v, 'currentTime', { configurable: true, get: () => at, set() {} }); });
+      await sleep(45000);
+      await page.evaluate(() => { delete wraith.P.active().currentTime; });
+      ok('a CDN picture stuck for good starts over', S.asks > n, `${S.asks - n} new asks`);
+      await done();
+    })(),
+    (async () => {
+      // Tokens last 20 minutes, and a stale one looks to usher like a sub-only stream.
+      const S = { tokens: 0, usher: 0 };
+      const { page, done } = await stage(route => { if (relayOf(route).includes('usher')) S.usher++; return answer(route); }, { pick: true, since: ago(300), copy: () => true, gql: b => { if (b.includes('streamPlaybackAccessToken')) S.tokens++; } });
+      await onCdn(page);
+      const n = S.tokens;
+      await page.evaluate(() => wraith.P.setPref('live'));
+      await levels(page, 10000);
+      ok('picking low latency, long after starting on the CDN, asks for a new token', S.tokens === n + 1 && S.usher >= 1, `${S.tokens - n} new, ${S.usher} to usher`);
+      await done();
+    })(),
+    (async () => {
+      // the player script hanging, not failing: the CDN doesn't wait for the browser to give up on it
+      const { page, done, t } = await stage(answer, { noPlayer: true, since: ago(300), copy: () => true });
+      const ms = await toCdn(page, t);
+      ok('a player script that never loads: on the CDN in about 15 s', ms < 25e3, `${ms} ms`);
+      await done();
+    })(),
+  ]);
+}
+
+if (want('away')) {
+  await Promise.all([
+    (async () => {
+      // Twitch ending the audio session after hours in the background: it needs a new one, not the old one asked for again forever.
+      const S = { dead: false, second: 0 };
+      const { page, done } = await stage(route => {
+        const u = relayOf(route);
+        if (u.includes('usher')) return said(route, S.dead ? MASTER.replace('/audio.m3u8', '/audio2.m3u8') : MASTER);
+        if (u.includes('audio2')) { S.second++; return said(route, AUDIO()); }
+        if (u.includes('audio') && S.dead) return said(route, '403\n');
+        return answer(route);
+      });
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      S.dead = true;
+      await page.waitForFunction(() => wraith.P.errs['background levelLoadError (fatal)'] || wraith.P.errs['background levelLoadError'], null, { timeout: 30000 }).catch(never);
+      for (let i = 0; i < 300 && !S.second; i++) await sleep(100);
+      ok('a background session Twitch has ended gets a new one', S.second > 0, `${S.second} calls ${JSON.stringify(await page.evaluate(() => wraith.P.errs))}`);
+      await sounding(page);
+      const s = await snd(page);
+      ok('and the sound carries on', s.on && s.wanted && !s.paused, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // stopped meanwhile: no new session
+      const S = { dead: false, usher: 0 };
+      const { page, done } = await stage(route => {
+        const u = relayOf(route);
+        if (u.includes('usher')) { S.usher++; return answer(route); }
+        if (u.includes('audio') && S.dead) return said(route, '403\n');
+        return answer(route);
+      });
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      S.dead = true;
+      await cc(page, 'pause');
+      const n = S.usher;
+      await page.evaluate(() => wraith.BG.hls.trigger(Hls.Events.ERROR, { type: Hls.ErrorTypes.NETWORK_ERROR, details: 'levelLoadError', fatal: true, response: { code: 403 } }));
+      await sleep(3000);
+      ok('with the sound stopped it doesn’t go looking for one', S.usher === n, `${S.usher - n} asks`);
+      await done();
+    })(),
+    (async () => {
+      // leaving while it looks for a clean session, and back with the ad break still on
+      const S = { ads: false };
+      const laced = b => S.ads ? b.replace(/(#EXTINF:[\d.]+),live/g, '$1,Amazon|1') : b;
+      const { page, done } = await stage(route => {
+        const u = relayOf(route);
+        return u.includes('usher') ? answer(route) : said(route, laced(u.includes('audio') ? AUDIO() : MEDIA));
+      }, { since: ago(300), copy: () => true });
+      await levels(page, 15000);
+      S.ads = true;
+      await page.waitForFunction(() => wraith.P.ad, null, { timeout: 15000 }).catch(never);
+      await vis(page, true); await sleep(1500);
+      await vis(page, false);
+      await page.waitForFunction(() => wraith.P.cover, null, { timeout: 15000 }).catch(never);
+      const s = await st(page);
+      ok('coming back during an ad break picks the search up again', s.ad && s.cover && s.feed === 'cdn', JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // vC failing behind the sound isn't news: coming back loads it again
+      const S = { up: true };
+      const { page, done } = await stage(never, { sub: true, since: ago(300), copy: u => u.includes('audio_only') || S.up });
+      await page.waitForFunction(() => { const v = wraith.P.active(); return wraith.P.feed === 'cdn' && !v.paused && v.readyState >= 3; }, null, { timeout: 25000 }).catch(never);
+      await vis(page, true); await sounding(page);
+      S.up = false;
+      await page.evaluate(() => wraith.P.active().load());
+      await page.waitForFunction(() => wraith.P.active().error, null, { timeout: 10000 }).catch(never); await sleep(300);
+      ok('the picture’s copy failing while you listen says nothing', !(await snd(page)).msg, (await snd(page)).msg);
+      S.up = true;
+      await backPlays(page, 'and coming back plays');
+      await done();
+    })(),
+  ]);
+}
+
+if (want('screen')) {
+  const ui = page => page.evaluate(() => document.getElementById('stage').classList.contains('ui'));
+  await Promise.all([
+    (async () => {
+      // A tap arrives with a mouse move ahead of it: the move brought the controls up and the tap took them down again.
+      const { page, done } = await stage(answer, { touch: true });
+      await levels(page, 15000);
+      await page.waitForFunction(() => !document.getElementById('stage').classList.contains('ui'), null, { timeout: 8000 }).catch(never);
+      await page.touchscreen.tap(195, 110); await sleep(200);
+      ok('a tap on the picture brings the controls up', await ui(page));
+      await sleep(400);
+      await page.touchscreen.tap(195, 110); await sleep(200);
+      ok('and another takes them down', !(await ui(page)));
+      await done();
+    })(),
+    (async () => {
+      // a real mouse still does
+      const { page, done } = await stage(answer, { w: 900, h: 1000 });
+      await levels(page, 15000);
+      await page.waitForFunction(() => !document.getElementById('stage').classList.contains('ui'), null, { timeout: 8000 }).catch(never);
+      await page.mouse.move(300, 200); await page.mouse.move(310, 210); await sleep(100);
+      ok('moving the mouse over the picture brings the controls up', await ui(page));
+      await page.click('#bFull'); await sleep(300);
+      ok('in fullscreen the button says it leaves', await page.evaluate(() => !!document.fullscreenElement && document.getElementById('bFull').dataset.i === 'unfull'), await page.evaluate(() => document.getElementById('bFull').dataset.i));
+      await page.evaluate(() => document.exitFullscreen()); await sleep(300);
+      ok('and back out it says it enters', await page.evaluate(() => document.getElementById('bFull').dataset.i === 'full'));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await stage(answer, { offline: true, me: true });
+      await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 10000 }).catch(never);
+      await page.evaluate(() => wraith.UI.toast('Following Someone')); await sleep(250);
+      const on = await page.evaluate(() => { const t = document.getElementById('toast'), r = t.getBoundingClientRect(); t.style.pointerEvents = 'auto'; return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.id; });
+      ok('a toast shows over a message card', on === 'toast', String(on));
+      await done();
+    })(),
+    (async () => {
+      const { page, done, user } = await stage(answer);
+      await levels(page, 15000);
+      await page.evaluate(() => wraith.UI.info(wraith.P.user));
+      user.stream = null;
+      await page.evaluate(() => wraith.P.checkEnded()); await sleep(300);
+      const s = await page.evaluate(() => ({ sub: document.getElementById('iSub').textContent, stream: wraith.P.user?.stream }));
+      ok('a stream found ended on a failed restart shows as offline, under its card', s.sub === 'Offline' && !s.stream, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await page.waitForFunction(() => !document.getElementById('spin').hidden, null, { timeout: 5000 }).catch(never);
+      await page.evaluate(() => document.getElementById('bPlay').click()); await sleep(150);
+      ok('pausing in the middle of a stall takes the spinner down', await page.evaluate(() => document.getElementById('spin').hidden && wraith.P.active().paused));
+      await done();
+    })(),
+    (async () => {
+      // started muted by the browser: the speaker button is about what you hear, so one tap brings it back
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await page.evaluate(() => { wraith.P.active().muted = true; document.getElementById('unmute').hidden = false; document.getElementById('bMute').click(); });
+      const s = await page.evaluate(() => ({ muted: wraith.P.active().muted, saved: JSON.parse(localStorage.getItem('wraith.muted') ?? 'false'), pill: !document.getElementById('unmute').hidden }));
+      ok('the speaker button unmutes a picture the browser muted', !s.muted && !s.saved && !s.pill, JSON.stringify(s));
+      await page.evaluate(() => document.getElementById('bMute').click());
+      ok('and mutes it after that', await page.evaluate(() => wraith.P.active().muted && JSON.parse(localStorage.getItem('wraith.muted'))));
+      await done();
+    })(),
+    (async () => {
+      const pick = (page, q, groups) => page.evaluate(([q, groups]) => { const P = wraith.P, was = [P.q, P.groups]; P.q = q; P.groups = groups; const i = P.levelIndex(); [P.q, P.groups] = was; return i; }, [q, groups]);
+      const LADDER = [{ i: 0, id: 'chunked', h: 1080, fps: 60, br: 8e6 }, { i: 1, id: '720p30', h: 720, fps: 30, br: 3e6 }, { i: 2, id: '480p30', h: 480, fps: 30, br: 1.5e6 }];
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      ok('a pick this stream lacks means the next one down, not the source', await pick(page, '720p60', LADDER) === 1, String(await pick(page, '720p60', LADDER)));
+      ok('with one it has, that one', await pick(page, '480p30', LADDER) === 2 && await pick(page, 'source', LADDER) === 0);
+      ok('and below the whole ladder, the lowest', await pick(page, '160p30', LADDER) === 2);
+      ok('above it, the highest', await pick(page, '1440p60', LADDER) === 0);
+      await done();
+    })(),
+    (async () => {
+      // the screen stays on with a picture playing, and stops as it stops, even with the lock still on its way
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await page.evaluate(() => { window.__rel = 0; Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: () => new Promise(r => setTimeout(() => r({ release: async () => { window.__rel++; }, addEventListener() {} }), 300)) } }); });
+      await page.evaluate(() => { const v = wraith.P.active(); v.dispatchEvent(new Event('playing')); v.pause(); });
+      await sleep(800);
+      ok('a wake lock arriving after the pause lets go', await page.evaluate(() => window.__rel === 1), await page.evaluate(() => String(window.__rel)));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('lists')) {
+  const line = (id, who, text) => `@id=${id};tmi-sent-ts=${Date.now()};user-id=${who};display-name=u${who} :u${who}!u${who}@u${who}.tmi.twitch.tv PRIVMSG #staged :${text}`;
+  const drawn = (page, id) => page.waitForFunction(i => document.querySelector(`#chat [data-id="${i}"]`), id, { timeout: 1500 }).then(() => true, () => false);
+  await Promise.all([
+    (async () => {
+      // chat keeps pace with the picture only while there's a picture to keep pace with
+      const { page, done } = await stage(answer, { w: 390 });
+      await levels(page, 15000);
+      await page.evaluate(() => { wraith.P.latency = () => 60; });
+      await page.evaluate(l => wraith.Chat.line(l), line('c1', 1, 'held back'));
+      ok('a playing picture 60 s behind holds chat back', !(await drawn(page, 'c1')));
+      await page.evaluate(() => { wraith.P.ad = true; });
+      ok('an ad break doesn’t stop it', await drawn(page, 'c1'));
+      await page.evaluate(() => { wraith.P.ad = false; });
+      await page.evaluate(l => wraith.Chat.line(l), line('c2', 2, 'paused'));
+      await page.evaluate(() => document.getElementById('bPlay').click());
+      ok('nor does a pause', await drawn(page, 'c2'));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await page.evaluate(l => wraith.Chat.line(l), line('d1', 1, 'first'));
+      await drawn(page, 'd1');
+      await page.evaluate(() => { wraith.P.latency = () => 60; });
+      await page.evaluate(l => wraith.Chat.line(l), line('d2', 2, 'still waiting'));
+      await page.evaluate(() => wraith.Chat.line(':tmi.twitch.tv CLEARCHAT #staged'));
+      await page.evaluate(() => { wraith.P.latency = () => 0; });
+      await drawn(page, 'd2');
+      const s = await page.evaluate(() => ['d1', 'd2'].map(i => document.querySelector(`#chat [data-id="${i}"]`)?.classList.contains('gone')));
+      ok('a mod clearing all of chat clears it', s[0] === true && s[1] === true, s.join());
+      await done();
+    })(),
+    (async () => {
+      // the emote services unreachable as the app starts: the next channel looks again, not only the next launch
+      const S = { up: false, asked: 0 };
+      const { page, done } = await stage(answer);
+      await page.route('https://7tv.io/v3/emote-sets/global', route => { S.asked++; return S.up ? route.fulfill({ status: 200, headers, contentType: 'application/json', body: JSON.stringify({ emotes: [{ name: 'GlobalThing', data: { host: { url: '//cdn.7tv.app/emote/x' } } }] }) }) : route.abort(); });
+      await page.evaluate(() => wraith.P.open('staged'));
+      await page.waitForFunction(() => wraith.Chat.global?.size === 0 || !wraith.Chat.global, null, { timeout: 5000 }).catch(never); await sleep(500);
+      S.up = true;
+      await page.evaluate(() => wraith.P.open('staged'));
+      await page.waitForFunction(() => wraith.Chat.global?.has('GlobalThing'), null, { timeout: 5000 }).catch(never);
+      ok('global emotes that failed are asked for again', await page.evaluate(() => wraith.Chat.global?.has('GlobalThing') && wraith.Chat.emotes.has('GlobalThing')), `${S.asked} asks`);
+      await page.evaluate(() => wraith.P.open('staged')); await sleep(400);
+      const n = S.asked; await page.evaluate(() => wraith.P.open('staged')); await sleep(400);
+      ok('and once in, they stay', S.asked === n);
+      await done();
+    })(),
+    (async () => {
+      // what your account says Twitch couldn't be trusted to have answered in full
+      const S = { status: 200 };
+      const { page, done } = await stage(answer, { me: true, gql: (b, route) => {
+        if (!(route.request().headers().authorization || '').startsWith('OAuth')) return undefined;
+        if (S.status !== 200) return route.fulfill({ status: S.status, headers, body: JSON.stringify({ error: 'Unauthorized', status: S.status, message: 'The "Authorization" token is invalid.' }) }).then(() => true);
+        if (b.includes('ChannelFollows')) return { user: { follows: { edges: S.follows ?? [], pageInfo: { hasNextPage: false } } } };
+        if (b.includes('blockedUsers')) return { currentUser: { blockedUsers: S.blocks ?? [] } };
+        return {};
+      } });
+      await levels(page, 15000);
+      S.status = 401;
+      const r = await page.evaluate(() => wraith.Me.setFollow({ id: '5', login: 'somebody', displayName: 'Somebody' }, true).then(() => 'took', e => e.message));
+      ok('a follow Twitch refused isn’t reported as done', r !== 'took' && await page.evaluate(() => !wraith.Me.following('somebody')), r);
+      S.status = 200;
+      await page.evaluate(() => { wraith.Me.follows = ['forsen', 'kaise']; });
+      await page.evaluate(() => wraith.Me.loadFollows());
+      ok('an empty follow list, with the API down, isn’t believed', await page.evaluate(() => wraith.Me.follows?.join() === 'forsen,kaise'), await page.evaluate(() => JSON.stringify(wraith.Me.follows)));
+      ok('and it says why', await page.evaluate(() => !!wraith.Me.notes.follows), await page.evaluate(() => String(wraith.Me.notes.follows)));
+      S.blocks = Array.from({ length: 1000 }, (_, i) => ({ id: String(i) }));
+      await page.evaluate(() => { wraith.Me.blocks = new Set(Array.from({ length: 1500 }, (_, i) => String(i))); });
+      await page.evaluate(() => wraith.Me.loadBlocks());
+      ok('Twitch’s capped block list, with the API down, doesn’t forget the rest', await page.evaluate(() => wraith.Me.blocks.size === 1500), await page.evaluate(() => String(wraith.Me.blocks.size)));
+      ok('and it says why', await page.evaluate(() => !!wraith.Me.notes.blocks));
+      await done();
+    })(),
+    (async () => {
+      // signing in on a sub-only stream you subscribe to
+      const S = { approved: false };
+      const { page, done } = await stage(answer, { sub: true, since: ago(300), copy: () => true, gql: (b, route) => {
+        if ((route.request().headers().authorization || '').startsWith('OAuth') && b.includes('streamPlaybackAccessToken')) return { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } };
+      } });
+      await page.route('https://id.twitch.tv/oauth2/**', route => {
+        const u = route.request().url(), json = (status, o) => route.fulfill({ status, contentType: 'application/json', headers, body: JSON.stringify(o) });
+        if (u.endsWith('/device')) return json(200, { device_code: 'DEV', expires_in: 1800, interval: 1, user_code: 'ABCD', verification_uri: 'x' });
+        if (u.endsWith('/token')) return S.approved ? json(200, { access_token: 'TOK2' }) : json(400, { message: 'authorization_pending' });
+        return json(200, { login: 'ironat___', user_id: '212375133', client_id: 'x', scopes: [], expires_in: 0 });
+      });
+      await page.waitForFunction(() => wraith.P.feed === 'cdn' && wraith.P.subOnly, null, { timeout: 25000 }).catch(never);
+      await page.evaluate(() => wraith.SignIn.start()); await sleep(300);
+      S.approved = true;
+      await page.waitForFunction(() => wraith.P.feed === 'live' && wraith.P.hls?.levels.length, null, { timeout: 15000 }).catch(never);
+      const s = await st(page);
+      ok('signing in on a sub-only stream tries low latency again', s.feed === 'live' && s.hls && await page.evaluate(() => !wraith.P.subOnly), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // a window tall enough to show a whole page has nothing to scroll, so nothing else loads the next
+      const rows = (n, more) => ({ streams: { edges: Array.from({ length: n }, (_, i) => ({ cursor: 'c' + i, node: { viewersCount: 1, type: 'live', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } })), pageInfo: { hasNextPage: more } } });
+      let calls = 0;
+      const { page, done } = await stage(answer, { path: '', w: 1200, h: 2600, gql: b => { if (b.includes('streams(first')) { calls++; return rows(30, calls < 3); } } });
+      await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' }); calls = 0;
+      await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never); await sleep(1500);
+      const n = await page.evaluate(() => document.querySelectorAll('#brList .row').length);
+      ok('Browse on a tall window keeps loading until the list passes the bottom', n > 30, `${n} rows, ${calls} pages`);
+      await done();
+    })(),
+    (async () => {
+      // the same for a page failing: no looping on a failure
+      let calls = 0;
+      const { page, done } = await stage(answer, { path: '', w: 1200, h: 2600, gql: (b, route) => { if (b.includes('streams(first')) { calls++; return route.fulfill({ status: 500, headers, body: '{}' }).then(() => true); } } });
+      await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' }); calls = 0;
+      await sleep(2500);
+      ok('and doesn’t hammer Twitch when that fails', calls <= 3, `${calls} calls`);
+      await done();
+    })(),
+  ]);
+}
+
 await browser.close(); srv.close();
-console.log(fails ? `\n${fails} FAILED` : '\nall passed');
+report();

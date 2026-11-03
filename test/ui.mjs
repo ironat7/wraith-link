@@ -1,19 +1,17 @@
 // usage: node ui.mjs home|watch|replay|signin|irc|offline [live channel]. Screenshots land in the current folder.
 // UI scenarios in headless Chrome. Twitch's sign-in endpoints are mocked; everything else is real.
-import { chromium } from 'playwright-core';
-import http from 'http'; import fs from 'fs'; import path from 'path';
-import { fileURLToPath } from 'url';
-const file = fileURLToPath(new URL('../index.html', import.meta.url)), dir = path.dirname(file);
-const srv = http.createServer((q, r) => { const u = new URL(q.url, 'http://x'); const p = u.pathname === '/' ? file : path.join(dir, u.pathname); fs.readFile(p, (e, d) => { if (e) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': p.endsWith('.html') ? 'text/html; charset=utf-8' : p.endsWith('.svg') ? 'image/svg+xml' : p.endsWith('.png') ? 'image/png' : 'application/octet-stream', 'cache-control': 'no-store' }); r.end(d); }); });
-await new Promise(ok => srv.listen(0, '127.0.0.1', ok)); const port = srv.address().port;
-const base = `http://127.0.0.1:${port}/`;
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio'] });
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-const which = process.argv[2] || 'all', CH = process.argv[3] || 'powdur';
-let fails = 0;
-const ok = (name, cond, extra = '') => { console.log((cond ? 'PASS ' : 'FAIL ') + name + (extra ? ' — ' + extra : '')); if (!cond) fails++; };
+import { serve, launch, sleep, checks, IPHONE } from './lib.mjs';
+const srv = await serve(), { base } = srv;
+const browser = await launch();
+const which = process.argv[2] || 'all', CH = process.argv[3] || await biggestLive();
+const { ok, report } = checks();
+console.log('channel', CH);
+async function biggestLive() {
+  const r = await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'query { streams(first: 1) { edges { node { broadcaster { login } } } } }' }) });
+  return (await r.json()).data.streams.edges[0].node.broadcaster.login;
+}
 async function ctx(w = 390, h = 844, touch = true, init) {
-  const c = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1.5, hasTouch: touch, isMobile: touch, userAgent: touch ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1' : undefined });
+  const c = await browser.newContext({ viewport: { width: w, height: h }, deviceScaleFactor: 1.5, hasTouch: touch, isMobile: touch, userAgent: touch ? IPHONE : undefined });
   if (init) await c.addInitScript(init);
   const page = await c.newPage();
   page.errors = [];
@@ -100,9 +98,9 @@ if (which === 'all' || which === 'replay') {
   // Chrome can't play the CDN copy, so drive the replay with a fake clock against Twitch's real chat data.
   const { c, page } = await ctx(900, 1000, false);
   await page.goto(base + `?c=${CH}`); await sleep(1500);
-  const r = await page.evaluate(async () => {
+  const r = await page.evaluate(async login => {
     const { P, Replay, Chat } = wraith;
-    const res = await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'query($l:String!){user(login:$l){id videos(first:5,type:ARCHIVE,sort:TIME){edges{node{id status}}}}}', variables: { l: 'powdur' } }) });
+    const res = await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'query($l:String!){user(login:$l){id videos(first:5,type:ARCHIVE,sort:TIME){edges{node{id status}}}}}', variables: { l: login } }) });
     const j = await res.json(), vid = j.data.user.videos.edges.map(e => e.node).find(n => n.status !== 'RECORDING')?.id;
     P.close();
     document.getElementById('home').hidden = true; document.getElementById('watch').hidden = false;
@@ -117,11 +115,11 @@ if (which === 'all' || which === 'replay') {
     const sample = [...document.querySelectorAll('#chat .m')].slice(-3).map(n => n.textContent.slice(0, 70));
     const emotes = document.querySelectorAll('#chat .m .em').length;
     Replay.tick(3000); await new Promise(r => setTimeout(r, 1500)); Replay.tick(3001);
-    log.push(['after seek to 3000', count(), Replay.q.length, Replay.next]);
+    log.push(['after seek to 3000', count(), Replay.q.length]);
     for (let t = 3001; t <= 3020; t += 2) { Replay.tick(t); await new Promise(r => setTimeout(r, 40)); }
     log.push(['20 s later', count()]);
     return { vid, log, sample, emotes };
-  });
+  }, CH);
   ok('chat replay draws lines', r.log[0][1] > 0, JSON.stringify(r));
   ok('chat replay survives a seek', r.log[2][1] > 0);
   await page.screenshot({ path: 'ui-replay.png' });
@@ -155,8 +153,8 @@ if (which === 'all' || which === 'signin') {
     if (/currentUser \{ login/.test(b.query || '')) return json({ data: { currentUser: { login: 'ironat___', displayName: 'Ironat___', profileImageURL: 'https://static-cdn.jtvnw.net/user-default-pictures-uv/294c98b5-e34d-42cd-a8f0-140b72fba9b0-profile_image-70x70.png' } } });
     if (/blockedUsers/.test(b.query || '')) return json({ data: { currentUser: { blockedUsers: [{ id: '999' }] } } });
     if (/emoteSets/.test(b.query || '')) return json({ data: { currentUser: { emoteSets: [{ owner: { login: 'powdur' }, emotes: [{ id: '25', token: 'Kappa', type: 'SUBSCRIPTIONS' }, { id: '1', token: ':)', type: 'SMILIES' }] }] } } });
-    if (/followUser/.test(b.query || '')) return json({ data: { followUser: { follow: { user: { id: '1' } }, error: null } } });
     if (/unfollowUser/.test(b.query || '')) return json({ data: { unfollowUser: { follow: { user: { id: '1' } } } } });
+    if (/followUser/.test(b.query || '')) return json({ data: { followUser: { follow: { user: { id: '1' } }, error: null } } });
     if (/blockUser/.test(b.query || '')) return json({ data: { blockUser: { targetUser: { login: 'x' } } } });
     return route.continue();
   });
@@ -217,7 +215,7 @@ if (which === 'all' || which === 'signin') {
   // autocomplete
   await page.evaluate(() => { wraith.Chat.chanEmotes = [{ name: 'powHeart', url: 'https://cdn.betterttv.net/emote/5f1b0186cf6d2144653d2970/2x' }, { name: 'powWave', url: 'https://cdn.betterttv.net/emote/5f1b0186cf6d2144653d2970/2x' }]; });
   await page.type('#sayTx', 'pow'); await sleep(150);
-  ok('typing suggests emotes', (await page.$$eval('#ac button', x => x.length)) === 2 || (await page.$$eval('#ac button', x => x.length)) >= 2);
+  ok('typing suggests emotes', (await page.$$eval('#ac button', x => x.length)) >= 2);
   await page.screenshot({ path: 'ui-complete.png' });
   await page.click('#ac button'); await sleep(100);
   ok('tap completes the word', /^pow\w+ $/.test(await page.$eval('#sayTx', x => x.value)), await page.$eval('#sayTx', x => x.value));
@@ -268,7 +266,7 @@ if (which === 'all' || which === 'signin') {
 if (which === 'all' || which === 'irc') {
   // API refuses this client: sending falls back to chat's own socket. Socket mocked.
   const { c, page } = await ctx(900, 1000, false, () => {
-    localStorage.setItem('wraith.me', JSON.stringify({ token: 'TOK', refresh: 'REF', exp: Date.now() + 36e5, id: '212375133', login: 'ironat___', name: 'Ironat___' }));
+    localStorage.setItem('wraith.me', JSON.stringify({ token: 'TOK', id: '212375133', login: 'ironat___', name: 'Ironat___' }));
   });
   await page.route('https://id.twitch.tv/oauth2/**', route => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ login: 'ironat___', user_id: '212375133', client_id: 'x' }) }));
   await page.route('https://api.twitch.tv/helix/**', route => route.fulfill({ status: 401, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ status: 401, message: 'client not allowed' }) }));
@@ -317,7 +315,6 @@ if (which === 'all' || which === 'offline') {
   const box = await page.$eval('#msgbox', x => ({ hidden: x.hidden, text: x.textContent }));
   ok('offline card', !box.hidden && /offline/i.test(box.text), box.text.slice(0, 120));
   await page.screenshot({ path: 'ui-offline.png' });
-  await page.evaluate(() => { const r = setInterval; window.__iv = 1; });
   liveNow = true;
   await page.waitForFunction(() => wraith.P.feed === 'live', null, { timeout: 40000 }).catch(() => {});
   ok('starts by itself when they go live', await page.evaluate(() => wraith.P.feed === 'live' && document.getElementById('msgbox').hidden));
@@ -328,4 +325,4 @@ if (which === 'all' || which === 'offline') {
 }
 
 await browser.close(); srv.close();
-console.log(fails ? `\n${fails} FAILED` : '\nall passed');
+report();

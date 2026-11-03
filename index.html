@@ -159,7 +159,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .unmute { position: absolute; right: max(12px, var(--sar)); bottom: 60px; display: flex; align-items: center; gap: 7px; height: 36px; padding: 0 14px 0 11px; border-radius: 999px; background: #fff; color: #000; font-size: 13.5px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
 .unmute svg { width: 18px; height: 18px; }
 .toast.gt { position: fixed; z-index: 30; bottom: calc(24px + var(--sab)); }
-.toast { position: absolute; left: 50%; bottom: 60px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 8px 14px; border-radius: 10px; background: rgba(24,24,28,.88); color: #fff; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: fade .2s; }
+.toast { position: absolute; z-index: 1; left: 50%; bottom: 60px; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 8px 14px; border-radius: 10px; background: rgba(24,24,28,.88); color: #fff; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; animation: fade .2s; }
 .msgbox { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 18px; text-align: center; background: #000; color: var(--fg-2); font-size: 14px; line-height: 1.45; }
 .msgbox img { width: 60px; height: 60px; border-radius: 50%; background: var(--bg-2); }
 .msgbox b { color: var(--fg); font-size: 16px; font-weight: 600; }
@@ -170,8 +170,8 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 /* the channel under the picture: one thin row, the rest of it a tap away */
 .info { display: flex; align-items: center; gap: 4px; padding: 2px max(10px, var(--sar)) 2px max(4px, var(--sal)); background: var(--bg); border-bottom: 1px solid var(--line); }
 .info .cb { color: var(--fg-2); width: 36px; height: 40px; }
-.who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; height: 40px; text-align: left; border-radius: 10px; }
-.who:active { opacity: .7; }
+.info .who { flex: 1; gap: 9px; height: 40px; text-align: left; border-radius: 10px; }
+.info .who:active { opacity: .7; }
 .info .av { width: 28px; height: 28px; }
 .info .meta { flex: 1; display: flex; align-items: baseline; gap: 8px; }
 .info .nm { flex: none; max-width: 60%; font-size: 15px; }
@@ -615,26 +615,41 @@ const Quota = {
 fetch(RELAY + '?ping=1').catch(() => {});   // Apps Script wakes faster when warm
 
 const attr = (line, k) => (line.match(new RegExp(`[:,]${k}="?([^",]*)`)) || [])[1] || '';
+const audioIn = master => master?.match(/VIDEO="audio_only"[^\n]*\n(\S+)/)?.[1] || null;
 
-async function relayText(url) {   // the body, or null on any failure
+async function relayGet(url) {   // { code, body }, with code 0 if the relay couldn't be reached
   try {
     const t = await (await fetch(relayUrl(url), { cache: 'no-store', signal: AbortSignal.timeout(10e3) })).text(), nl = t.indexOf('\n');
-    return t.slice(0, nl) === '200' ? t.slice(nl + 1) : null;
-  } catch { return null; }
+    return { code: parseInt(t.slice(0, nl), 10) || 0, body: t.slice(nl + 1) };
+  } catch { return { code: 0, body: '' }; }
+}
+async function relayText(url) {   // the body, or null on any failure
+  const r = await relayGet(url);
+  return r.code === 200 ? r.body : null;
 }
 
-// Finished VODs list segments as N-unmuted.ts, which the CDN refuses; the files are N.ts (which also
-// keeps the original audio where Twitch muted a stretch). Safari gets a corrected copy, as a blob and
-// failing that as a data URL, with Twitch's own playlist as the last resort.
-async function vodSources(base, rend = 'chunked') {
-  const direct = `${base}/${rend}/index-dvr.m3u8`, text = await relayText(direct);
-  if (!cdnLive || !text || !text.includes('#EXTINF')) return [direct];
-  const fixed = text.split('\n').map(l => {
-    const s = l.trim();
-    return !s || s.startsWith('#') ? s : `${base}/${rend}/${s.replace(/-(un)?muted(?=\.ts$)/, '')}`;
-  }).join('\n');
-  const type = 'application/vnd.apple.mpegurl';
-  return [URL.createObjectURL(new Blob([fixed], { type })), `data:${type};base64,${btoa(fixed)}`, direct];
+// What a stream's copy on the CDN can be under, best first. The source is usually "chunked", but some copies only have it as "1080p60".
+const CDN_RENDITIONS = ['chunked', '1080p60', '1080p30', '720p60', '720p30', '480p30', '360p30', '160p30'];
+
+// Finished VODs list the segments Twitch muted as N-unmuted, which the CDN refuses, and N is gone too (2026-11-03, 50 VODs
+// of 50): the one file left is N-muted. Safari gets a corrected copy, as a blob and failing that as a data URL, with Twitch's
+// own playlist as the last resort. A blob or data URL has no folder to be relative to, so every address in it is made whole,
+// the init segment's on fMP4 streams too. Everywhere else the player has to take Twitch's own, so it looks under each name.
+async function vodSources(base, rends = CDN_RENDITIONS) {
+  const direct = r => `${base}/${r}/index-dvr.m3u8`;
+  if (cdnLive) for (const r of rends) {
+    const { code, body } = await relayGet(direct(r));
+    if (!code) break;
+    if (code !== 200 || !body.includes('#EXTINF')) continue;
+    const whole = name => `${base}/${r}/${name.replace(/-unmuted(?=\.\w+$)/, '-muted')}`;
+    const fixed = body.split('\n').map(l => {
+      const s = l.trim();
+      return !s ? s : s[0] === '#' ? s.replace(/URI="([^"]+)"/, (_, u) => `URI="${whole(u)}"`) : whole(s);
+    }).join('\n');
+    const type = 'application/vnd.apple.mpegurl';
+    return [URL.createObjectURL(new Blob([fixed], { type })), `data:${type};base64,${btoa(fixed)}`, direct(r)];
+  }
+  return rends.map(direct);
 }
 
 // Each playlist's segments, by number, under the URL the player first saw them. On some streams (the
@@ -748,7 +763,7 @@ class RelayLoader {
       if (status === '200') primed = { url, text: rest.slice(eol + 1), at: Date.now() };
       body = body.slice(0, cut);
     }
-    if (!this.quiet && body.includes('#EXT-X-STREAM-INF')) P.audioUrl = (body.match(/VIDEO="audio_only"[^\n]*\n(\S+)/) || [])[1] || null;
+    if (!this.quiet && body.includes('#EXT-X-STREAM-INF')) P.audioUrl = audioIn(body);
     this.done(real, body.includes('#EXTINF') ? rewrite(body, real, this.quiet) : body);
   }
   done(url, data) {
@@ -774,7 +789,7 @@ class QuietRelayLoader extends RelayLoader { get quiet() { return true; } }
 const hlsReady = new Promise((res, rej) => {
   const s = $('hlsjs');
   const check = () => window.Hls ? res(window.Hls) : s.dataset.err ? rej(new Error('player script failed')) : null;
-  if (check() === null) { s.addEventListener('load', check); s.addEventListener('error', check); setTimeout(check, 15000); }
+  if (check() === null) { s.addEventListener('load', check); s.addEventListener('error', check); setTimeout(() => rej(new Error('player script timed out')), 15000); }
 });
 hlsReady.catch(() => {});
 
@@ -847,7 +862,7 @@ const P = {
     const gen = ++this.gen;
     if (gesture) unlock();
     UI.watch(null);
-    Chat.box.textContent = '';
+    Chat.clear();
     try {
       const d = await gql(`query($id: ID!) { video(id: $id) { id title lengthSeconds createdAt status seekPreviewsURL resourceRestriction { type } game { displayName } owner { id login displayName profileImageURL(width: 150) } } }`, { id });
       if (gen !== this.gen) return;
@@ -868,7 +883,7 @@ const P = {
       const srcs = await vodSources(base);
       if (gen !== this.gen) { srcs.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u)); return; }
       this.feed = 'vod'; this.vodSrcs = srcs;
-      if (ios) vodSources(base, 'audio_only').then(a => {   // ready for when the app goes to the background
+      if (ios) vodSources(base, ['audio_only']).then(a => {   // ready for when the app goes to the background
         if (gen === this.gen) this.vodAudio = a; else a.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
       });
       stage.classList.add('vod'); $('watch').classList.add('vodw');
@@ -901,7 +916,7 @@ const P = {
       if (!tok || tok.authorization?.isForbidden) { this.subOnly = true; return this.fallback('Sub-only stream'); }
     }
     let Hls;
-    try { Hls = await hlsReady; } catch { return this.fallback('The player didn’t load'); }
+    try { Hls = window.Hls || await hlsReady; } catch { if (!stale()) this.fallback('The player didn’t load'); return; }   // it can still arrive, for the next try
     if (stale()) return;
     if (!Hls.isSupported()) return this.fallback('This browser can’t run the low-latency player');
     const hls = this.hls = new Hls({
@@ -932,15 +947,25 @@ const P = {
     if (document.hidden && Pages.shown) queueMicrotask(() => BG.start());
   },
 
+  ladder() { return this.groups.filter(x => x.h).sort((a, b) => b.br - a.br); },
+
   qualities() {
-    const g = [...this.groups].filter(x => x.h).sort((a, b) => b.br - a.br);
-    return g.map(x => ({ id: x.id, label: x.id === 'chunked' ? `${x.h}p${x.fps > 30 ? x.fps : ''} · source` : x.id }));
+    return this.ladder().map(x => ({ id: x.id, label: x.id === 'chunked' ? `${x.h}p${x.fps > 30 ? x.fps : ''} · source` : x.id }));
+  },
+
+  // Where the picked quality sits on this stream's ladder. Channels differ in what they have, and one
+  // this stream lacks means the next one down: someone saving data on 720p60 doesn't want 1080p.
+  pickAt(list) {
+    const at = list.findIndex(x => x.id === this.q);
+    if (at >= 0 || !/^\d/.test(this.q)) return Math.max(0, at);
+    const [h, fps = 60] = this.q.match(/\d+/g).map(Number), below = list.findIndex(x => x.h < h || (x.h === h && x.fps <= fps));
+    return below >= 0 ? below : list.length - 1;
   },
 
   levelIndex() {   // the hls.js level for the picked quality, less any step down from buffering
-    const list = [...this.groups].filter(x => x.h).sort((a, b) => b.br - a.br);
+    const list = this.ladder();
     if (!list.length) return this.groups[0].i;
-    return list[Math.min(Math.max(0, list.findIndex(x => x.id === this.q)) + this.cap, list.length - 1)].i;
+    return list[Math.min(this.pickAt(list) + this.cap, list.length - 1)].i;
   },
 
   applyQuality(gently) {   // gently: from the next segment on, keeping what's buffered
@@ -953,7 +978,7 @@ const P = {
   },
 
   setQuality(id) {
-    this.q = id; this.cap = 0; store.set('quality', id);
+    this.q = id; this.cap = 0; this.rend = null; store.set('quality', id);
     this.quietUntil = Date.now() + 6000;   // the switch's own buffering isn't a bad connection
     if (this.feed === 'live' || this.cover) this.applyQuality();
     if (this.feed === 'cdn') this.playCdn({ cover: this.cover, reload: true });
@@ -1073,15 +1098,48 @@ const P = {
 
   playCdn({ cover = false, reload = false } = {}) {
     if (!this.base || !cdnLive) return cover ? null : UI.needsSafari(this.base ? 'The ad-free CDN feed needs Safari' : 'There’s no CDN copy of this stream');
-    const g = this.q === 'source' || this.q === 'auto' || !this.groups.some(x => x.id === this.q) ? 'chunked' : this.q;
-    const url = `${this.base}/${g}/index-dvr.m3u8`;
-    if (reload || vC.dataset.url !== url) { vC.dataset.url = url; vC.src = url; this.seekPending = true; }
+    if (!cover) this.tokenP = null;   // tokens last 20 minutes, and low latency may not be picked for hours
+    const url = `${this.base}/${this.cdnRendition()}/index-dvr.m3u8`;
+    if (reload || vC.dataset.url !== url) { vC.dataset.url = url; vC.src = url; this.seekPending = true; this.moved = Date.now(); }
     vC.muted = Sound.muted;
     this.show('cdn');
     UI.spin(vC.paused || vC.readyState < 3);
     // the stream (re)started while the app was in the background, and there's no relay to come back and bring the sound
     if (document.hidden && Pages.shown && (this.subOnly || this.pref === 'cdn')) BG.start();
     this.play(vC);
+  },
+
+  cdnRendition() {
+    if (this.rend) return this.rend;
+    const list = this.ladder();
+    return this.q === 'source' || this.q === 'auto' || !list.length ? 'chunked' : list[this.pickAt(list)].id;
+  },
+
+  // The copy isn't under this name: on to the next one down, or false with none left.
+  nextRendition() {
+    this.rend = CDN_RENDITIONS[CDN_RENDITIONS.indexOf(this.cdnRendition()) + 1] || null;
+    if (this.rend) this.playCdn({ cover: this.cover });
+    return !!this.rend;
+  },
+
+  // The CDN's copy wouldn't load, or stopped.
+  cdnFailed() {
+    if (this.cover) {
+      if (this.nextRendition()) return;
+      this.cover = false; this.stopCdn(); this.show('live'); UI.spin(false); UI.banner();
+      return;
+    }
+    if (this.feed !== 'cdn' || BG.on) return;   // while away the sound does the asking, and coming back loads the picture again
+    const again = () => askAgain(vC, () => { if (!BG.on) this.playCdn({ reload: true }); });
+    // A copy that has played hasn't gone anywhere: a network or player hiccup, which it can wait out.
+    if (this.cdnPlayed === vC.dataset.url) {
+      if (this.asks++ < 10) { UI.spin(true); return again(); }
+      return UI.msg(null, 'The CDN feed stopped', 'Twitch’s CDN isn’t answering.', () => { $('msgbox').hidden = true; this.asks = 0; this.playCdn({ reload: true }); });
+    }
+    // In a stream's first 3 minutes, or with no start time to go by, it gets two more asks, so about 25 s, before going on to say there's no copy.
+    if (!(Date.now() / 1000 - this.start > 180) && this.asks++ < 2) return again();
+    if (this.nextRendition()) return;
+    UI.msg(null, 'The CDN feed isn’t available', this.subOnly ? 'This channel’s stream isn’t being recorded, so there is no ad-free copy to play.' : 'Try the low-latency feed instead.', this.subOnly ? null : () => this.setPref('live'));
   },
 
   nextVodSource() {
@@ -1101,11 +1159,17 @@ const P = {
     vC.pause(); vC.removeAttribute('src'); delete vC.dataset.url; vC.load();
   },
 
+  // To where the CDN feed should be: behind the clock by its target, and a little short of the copy's end. Past its first
+  // load it only ever moves on, and by enough to be worth it: a copy with gaps in it stays behind the clock for good, and
+  // going back to its end every time that's noticed plays the same second over and over.
   cdnSeek() {
     const s = vC.seekable;
     if (!s.length) return;
     const end = s.end(s.length - 1), want = Date.now() / 1000 - this.start - TARGET.cdn;
-    if (Number.isFinite(end)) vC.currentTime = Math.max(s.start(0), Math.min(want, end - 3));
+    if (Number.isFinite(end)) {
+      const to = Math.max(s.start(0), Number.isFinite(want) ? Math.min(want, end - 3) : end - 3);
+      if (this.seekPending || to > vC.currentTime + 3) vC.currentTime = to;
+    }
     this.seekPending = false;
   },
 
@@ -1124,12 +1188,13 @@ const P = {
   },
 
   play(v) {
-    if (this.userPaused || BG.on) return;   // a pause you chose holds until you undo it, and the pictures stay out of the background sound
+    if (!v || this.userPaused || BG.on) return;   // a pause you chose holds until you undo it, and the pictures stay out of the background sound
     v.muted = Sound.muted;
+    Sound.icon(v.muted);
     const p = v.play();
     if (p) p.catch(err => {
       if (err.name !== 'NotAllowedError' || v.classList.contains('off')) return;
-      v.muted = true; UI.unmute(true);          // browsers still allow muted autoplay
+      v.muted = true; UI.unmute(true); Sound.icon(true);   // browsers still allow muted autoplay
       v.play().catch(() => UI.big(true));
     });
   },
@@ -1138,13 +1203,16 @@ const P = {
 
   latency() {
     if (this.feed === 'live') { const d = this.hls?.playingDate; return d ? (Date.now() - d.getTime()) / 1000 : null; }
-    if (this.feed === 'cdn' && vC.readyState > 0) return Date.now() / 1000 - this.start - vC.currentTime;
+    if (this.feed === 'cdn' && vC.readyState > 0 && Number.isFinite(this.start)) return Date.now() / 1000 - this.start - vC.currentTime;
     return null;
   },
 
-  // Chat shows up as late as the picture: Twitch viewers sit ~2.5 s behind, so delay by the rest.
+  // Chat shows up as late as the picture: Twitch viewers sit ~2.5 s behind, so delay by the rest. A picture
+  // that's paused, or held through an ad break, has no pace to keep.
   chatDelay() {
-    const l = this.feed === 'vod' ? null : this.latency();
+    const v = this.active();
+    if (!v || this.feed === 'vod' || v.paused || (this.ad && !this.cover)) return 0;
+    const l = this.latency();
     return l == null ? 0 : Math.max(0, l - 2.5) * 1000;
   },
 
@@ -1166,8 +1234,8 @@ const P = {
     const lat = this.latency(), live = this.feed === 'live', T = live ? this.liveT : TARGET.cdn;
     if (lat == null) return;
     if (lat > T + 10) {
-      if (live) this.toLiveEdge(); else this.cdnSeek();
-      return;
+      if (live) return this.toLiveEdge();
+      this.cdnSeek();
     }
     if (live && this.liveT > TARGET.live && now - this.calm > 45e3) {   // smooth for a while: edge back in
       this.liveT = Math.max(TARGET.live, this.liveT - 0.5); this.calm = now;
@@ -1177,16 +1245,28 @@ const P = {
       this.applyQuality(true);
       if (!this.cap) UI.toast('Back to the quality you picked');
     }
-    const ahead = bufAhead(v);
-    let s = this.rate;
-    // slow down when the buffer runs thin, or when live starts closer than the target (no cushion)
-    if ((ahead < 0.5 && lat < T + 4) || (live && lat < T - 0.5)) s = 'slow';
-    else if (s === 'slow') { if ((ahead > 1.2 || lat > T + 0.8) && !(live && lat < T - 0.1)) s = 'normal'; }
-    else if (lat > T + (live ? 0.6 : 1.2)) s = 'fast';
-    else if (s === 'fast' && lat < T + (live ? 0.15 : 0.3)) s = 'normal';
-    this.rate = s;
+    const ahead = bufAhead(v), s = this.rate = live ? this.liveRate(lat, T, ahead) : this.cdnRate(lat, T, ahead);
     const r = s === 'fast' ? 1.1 : s === 'slow' ? 0.93 : 1;
     if (v.playbackRate !== r) v.playbackRate = r;
+  },
+
+  // Slows down when the buffer runs thin, or when it starts closer than the target (no cushion).
+  liveRate(lat, T, ahead) {
+    const s = this.rate;
+    if ((ahead < 0.5 && lat < T + 4) || lat < T - 0.5) return 'slow';
+    if (s === 'slow') return (ahead > 1.2 || lat > T + 0.8) && lat >= T - 0.1 ? 'normal' : s;
+    if (lat > T + 0.6) return 'fast';
+    return s === 'fast' && lat < T + 0.15 ? 'normal' : s;
+  },
+
+  // The CDN adds 10 s at a time, so what's loaded swings by that much whatever the speed, and catching up can only
+  // use what's over one swing, or it runs out before the next ten arrive.
+  cdnRate(lat, T, ahead) {
+    const s = this.rate;
+    if (ahead < 1) return 'slow';
+    if (s === 'slow') return ahead > 3 ? 'normal' : s;
+    if (ahead > 13 && lat > T + 1.2) return 'fast';
+    return s === 'fast' && (ahead < 11 || lat < T + 0.3) ? 'normal' : s;
   },
 
   noteErr(d, where = '') {   // routine stall notices, the page's own aborts and cut-out ads left out
@@ -1202,7 +1282,7 @@ const P = {
     if (this.q === 'auto') return;
     this.stalls = this.stalls.filter(t => now - t < 60e3).concat(now);
     if (this.stalls.length < 3) return;
-    const list = this.qualities(), at = Math.max(0, list.findIndex(x => x.id === this.q)) + this.cap;
+    const list = this.qualities(), at = this.pickAt(this.ladder()) + this.cap;
     if (at >= list.length - 1) return;
     this.stalls = [];
     this.cap++;   // not your setting: the next stream starts on what you picked, and so does this one once it's calm
@@ -1212,16 +1292,17 @@ const P = {
 
   // The player can wedge in ways that raise no error (a socket left dead by a network change, a buffer
   // iOS threw away). A picture that hasn't moved for 10 s while it should be playing starts over, once there's
-  // a playlist to play: before that, the wait is the playlist load's own timeout.
+  // a playlist to play: before that, the wait is the playlist load's own timeout. The CDN feed gets 40 s, as
+  // its copy only grows every 10 and a stream can pause for a bit at the source.
   watch(v, now) {
-    const moving = v.currentTime !== this.pos;
+    const moving = v.currentTime !== this.pos, live = this.feed === 'live';
     this.pos = v.currentTime;
-    if (moving && this.feed === 'live' && now - this.began > 8e3) this.retries = this.fixes = 0;   // it really is playing: the last restart worked
-    if (this.feed !== 'live' || !this.hls?.levels.length || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
-    if (now - this.moved < 10e3) return;
+    if (moving && live && now - this.began > 8e3) this.retries = this.fixes = 0;   // it really is playing: the last restart worked
+    if (!(live ? this.hls?.levels.length : !v.error) || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
+    if (now - this.moved < (live ? 10e3 : 40e3)) return;
     this.moved = now;
     this.noteErr({ details: 'stuck' });
-    this.restart();
+    if (live) this.restart(); else this.playCdn({ reload: true });
   },
 
   async refresh() {
@@ -1233,8 +1314,8 @@ const P = {
       // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
       if (!u.stream && this.user?.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
       this.gone = 0;
+      if (!u.stream) return this.ended(u);
       this.user = u; UI.info(u);
-      if (!u.stream) this.ended(u);
     } catch {}
   },
 
@@ -1258,6 +1339,7 @@ const P = {
     BG.stop(true);
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
     this.feed = null; this.cover = this.ad = false; this.adEnd = 0; UI.banner();
+    this.user = u; UI.info(u);
     UI.offline(u, true);
     Awake.sync();
     this.awaitLive();
@@ -1276,7 +1358,7 @@ const P = {
     this.vodAudio?.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
     vC.controls = false; vL.pause(); vL.removeAttribute('src'); vL.load();
     Object.assign(this, { login: null, user: null, feed: null, groups: [], base: null, subOnly: false, ad: false, adEnd: 0,
-      cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, asks: 0, vod: null, tokenP: null, seekPending: false,
+      cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, asks: 0, rend: null, cdnPlayed: null, vod: null, tokenP: null, seekPending: false,
       liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null, quietUntil: 0, errs: {},
       cap: 0, capWait: 180e3, lastStall: 0, pos: -1, moved: 0, gone: 0, dodging: false });
     this.dodged = new Set();
@@ -1327,7 +1409,10 @@ const BG = {
         P.noteErr(d, 'background ');
         if (!d.fatal || this.hls !== h) return;
         if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) { h.recoverMediaError(); if (this.wanted) aBG.play().catch(() => {}); }
-        else setTimeout(() => { if (this.hls === h && this.wanted) this.load(h); }, 2000);
+        else setTimeout(() => {
+          if (this.hls !== h || !this.wanted) return;
+          if (d.response?.code >= 400 && d.response.code < 500) this.renew(h); else this.load(h);
+        }, 2000);
       });
       h.loadSource(P.audioUrl);
       h.attachMedia(aBG);
@@ -1342,6 +1427,17 @@ const BG = {
     vL.muted = vC.muted = true;
   },
   load(h) { if (h.levels.length) h.startLoad(-1); else h.loadSource(h.url); },   // with no playlist yet, startLoad does nothing
+  // Twitch has ended this session, after hours away perhaps, and asking for it again won't change that: it takes a new one.
+  async renew(h) {
+    let tok = await getToken(P.login).catch(() => null);
+    if (tok?.authorization?.isForbidden) tok = await Me.streamToken(P.login);
+    const url = tok && audioIn(await relayText(usherUrl(P.login, tok)));
+    if (this.hls !== h || !this.wanted) return;
+    if (!url) return void setTimeout(() => { if (this.hls === h && this.wanted) this.renew(h); }, 5000);
+    P.audioUrl = url;
+    h.loadSource(url);
+    aBG.play().catch(() => {});
+  },
   next() {
     const u = this.srcs?.shift();
     if (!u) return false;
@@ -1365,7 +1461,8 @@ const BG = {
       if (!P.hls.media) P.hls.attachMedia(vL);
       P.hls.once(window.Hls.Events.LEVEL_UPDATED, () => P.toLiveEdge());   // to the edge once the playlist is fresh
       P.hls.startLoad(-1);
-      if (!this.held) UI.spin(true);
+      if (P.ad) P.dodge();   // leaving stopped the search for a clean session, and the break is still on
+      else if (!this.held) UI.spin(true);
     }
     else if (P.feed === 'vod' && at) vC.currentTime = at;
     else if (P.feed === 'cdn' && vC.error) { $('msgbox').hidden = true; P.playCdn({ reload: true }); }   // it had no copy to show when the stream restarted while away
@@ -1472,9 +1569,10 @@ const Sound = {
   set(m) {
     this.muted = m; store.set('muted', m);
     vL.muted = vC.muted = m;
-    setIcon($('bMute'), m ? 'mute' : 'vol');
+    this.icon(m);
     if (!m) UI.unmute(false);
   },
+  icon(m) { setIcon($('bMute'), m ? 'mute' : 'vol'); },
   setLevel(x, touched) {
     this.level = x = Math.min(1, Math.max(0, x)); store.set('volume', x);
     vL.volume = vC.volume = aBG.volume = x;
@@ -1493,6 +1591,7 @@ const Awake = {
     this.asking = true;
     try { this.lock = await navigator.wakeLock.request('screen'); this.lock.addEventListener('release', () => { this.lock = null; }); } catch {}
     this.asking = false;
+    if (this.lock) this.sync();   // the picture may have stopped while that was on its way
   },
 };
 document.addEventListener('visibilitychange', () => Awake.sync());
@@ -1506,7 +1605,11 @@ window.addEventListener('online', () => {
 for (const v of [vL, vC]) {
   v.addEventListener('timeupdate', () => P.tick());
   v.addEventListener('playing', () => {
-    if (P.active() === v) { UI.spin(false); UI.big(false); }
+    if (P.active() === v) {
+      if (!v.paused) P.userPaused = false;   // only you can have started a paused picture, with iOS's own controls
+      if (v === vC) P.asks = 0;
+      UI.spin(false); UI.big(false);
+    }
     UI.playIcon(); Awake.sync();
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
@@ -1527,23 +1630,27 @@ for (const v of [vL, vC]) {
     if (v === vL && v.currentTime > 3) P.noteStall();
   });
 }
-vC.addEventListener('loadedmetadata', () => { if (P.seekPending && P.feed === 'cdn') P.cdnSeek(); });
+vC.addEventListener('loadedmetadata', () => {
+  if (P.feed !== 'cdn') return;
+  P.cdnPlayed = vC.dataset.url;
+  if (P.seekPending) P.cdnSeek();
+});
 vC.addEventListener('error', () => {
   if (!vC.dataset.url) return;
   if (P.feed === 'vod') {
     if (P.nextVodSource()) return;   // that copy didn't take: try the next
     return cdnLive ? UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.') : UI.needsSafari(`https://www.twitch.tv/videos/${P.vod.id}`, true);
   }
-  if (P.cover) { P.cover = false; P.stopCdn(); P.show('live'); UI.spin(false); UI.banner(); return; }
-  // In a stream's first 3 minutes, or with no start time to go by, twice, so about 25 s, before saying there's no copy. While away the sound does the asking, and coming back loads the picture again.
-  if (P.feed === 'cdn' && !BG.on && !(Date.now() / 1000 - P.start > 180) && P.asks++ < 2) return askAgain(vC, () => { if (!BG.on) P.playCdn({ reload: true }); });
-  if (P.feed === 'cdn') UI.msg(null, 'The CDN feed isn’t available', P.subOnly ? 'This channel’s stream isn’t being recorded, so there is no ad-free copy to play.' : 'Try the low-latency feed instead.', P.subOnly ? null : () => P.setPref('live'));
+  P.cdnFailed();
 });
+// Your place in a video, from whichever player has the sound: iOS can end the page while you listen.
+function savePlace(t) { if (P.vod && t >= 1 && Math.floor(t) % 5 === 0) store.set('pos.' + P.vod.id, Math.floor(t)); }
 vC.addEventListener('timeupdate', () => {
   if (P.feed !== 'vod' || !P.vod) return;
-  if (Math.floor(vC.currentTime) % 5 === 0) store.set('pos.' + P.vod.id, Math.floor(vC.currentTime));
+  savePlace(vC.currentTime);
   Replay.tick(vC.currentTime);
 });
+aBG.addEventListener('timeupdate', () => { if (BG.on && P.feed === 'vod') savePlace(aBG.currentTime); });
 setInterval(() => {
   if (BG.on && !document.hidden) BG.stop();   // iOS doesn't always say the app came back (WebKit 207256)
   if (P.feed) { P.tick(); UI.banner(); }
@@ -1588,7 +1695,7 @@ const Chat = {
 
   open(login) {
     this.close();
-    this.login = login; this.stick = true; this.box.textContent = ''; $('more').hidden = true;
+    this.login = login; this.clear();
     this.note('Connecting to chat…').classList.add('wait');
     this.connect();
     this.history(60);
@@ -1598,6 +1705,8 @@ const Chat = {
     this.loadGlobal();
     Talk.show();
   },
+
+  clear() { this.box.textContent = ''; this.stick = true; this.top = 0; $('more').hidden = true; },
 
   note(text) {
     const d = el('div', 'm note', text);
@@ -1654,11 +1763,9 @@ const Chat = {
         if (this.behind) { this.behind = false; this.history(300); }
         break;
       case 'PRIVMSG': case 'USERNOTICE': this.add(m); break;
-      case 'CLEARCHAT':   // on screen, and among the lines still waiting for the picture
-        if (m.text) {
-          this.box.querySelectorAll(`[data-l="${CSS.escape(m.text)}"]`).forEach(n => n.classList.add('gone'));
-          for (const q of this.queue) if (q.m.prefix.startsWith(m.text + '!')) q.m.tags['rm-deleted'] = '1';
-        }
+      case 'CLEARCHAT':   // one person, or everyone; on screen, and among the lines still waiting for the picture
+        this.box.querySelectorAll(m.text ? `[data-l="${CSS.escape(m.text)}"]` : '[data-l]').forEach(n => n.classList.add('gone'));
+        for (const q of this.queue) if (!m.text || q.m.prefix.startsWith(m.text + '!')) q.m.tags['rm-deleted'] = '1';
         break;
       case 'CLEARMSG':
         if (m.tags['target-msg-id']) {
@@ -1762,7 +1869,7 @@ const Chat = {
     const late = lines.filter(q => q.m.old && q.ts < this.newest), next = late.length ? lines.filter(q => !late.includes(q)) : lines;
     if (late.length) this.insert(late);
     for (const q of next) if (q.ts > this.newest) this.newest = q.ts;
-    this.append(next.map(q => this.render(q.m)));
+    if (next.length) this.append(next.map(q => this.render(q.m)));
   },
 
   insert(late) {   // both in time order
@@ -1912,6 +2019,7 @@ const Chat = {
     for (const e of stv?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
     this.gbadges = new Map((badges?.badges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
     for (const [k, v] of this.global) if (!this.emotes.has(k)) this.emotes.set(k, v);
+    if (!this.global.size) this.global = null;   // none of them answered: the next channel opened asks again
     Picker.refresh();
   },
 
@@ -1967,7 +2075,7 @@ const Replay = {
     if (this.last < 0 || t < this.last - 2 || t > this.last + 8) {   // just started, or a seek
       this.run++; this.busy = false; this.wait = 0;
       this.q = []; this.seen = new Set(); this.at = Math.floor(t); this.cursor = null; this.done = false;
-      Chat.box.textContent = '';
+      Chat.clear();
     }
     this.last = t;
     let n = 0;
@@ -2134,6 +2242,7 @@ const Me = {
         cursor = f.pageInfo?.hasNextPage ? f.edges[f.edges.length - 1]?.cursor : null;
         if (!cursor) break;
       }
+      if (!logins.length) throw new Error('empty follow list');   // only believed from the API, like blocks
       list = logins; this.notes.follows = null;
     } catch (e) {
       try { list = await this.helixAll(`/channels/followed?user_id=${me}`, x => x.broadcaster_login); this.notes.follows = null; }
@@ -2148,7 +2257,7 @@ const Me = {
   async loadBlocks() {   // Twitch's own query stops at 1,000; the API pages through the rest
     this.at.blocks = Date.now();
     const me = this.acct?.id, ids = new Set();
-    let sure = false;   // an empty list is only believed from the API
+    let sure = false, why = null;   // an empty list is only believed from the API, and one at the cap only adds to what you had
     try {
       const list = (await this.gql({ query: 'query { currentUser { blockedUsers { id } } }' }))?.data?.currentUser?.blockedUsers;
       for (const u of list || []) ids.add(u.id);
@@ -2156,9 +2265,12 @@ const Me = {
     } catch {}
     if (!sure) {
       try { for (const id of await this.helixAll(`/users/blocks?broadcaster_id=${me}`, x => x.user_id)) ids.add(id); sure = true; }
-      catch (e) { if (!ids.size) this.notes.blocks = e.message; }
+      catch (e) { why = e.message; }
     }
-    if ((sure || ids.size) && this.acct?.id === me) { this.blocks = ids; this.notes.blocks = null; store.set('blocks', [...ids]); }
+    if (this.acct?.id !== me) return;
+    if (!sure) for (const id of this.blocks) ids.add(id);
+    this.blocks = ids; this.notes.blocks = why;
+    store.set('blocks', [...ids]);
   },
   async loadEmotes() {
     this.at.emotes = Date.now();
@@ -2189,7 +2301,8 @@ const Me = {
     const j = await this.gql(on
       ? { query: 'mutation($i: FollowUserInput!) { followUser(input: $i) { follow { user { id } } error { code } } }', variables: { i: { targetID: u.id, disableNotifications: false } } }
       : { query: 'mutation($i: UnfollowUserInput!) { unfollowUser(input: $i) { follow { user { id } } } }', variables: { i: { targetID: u.id } } });
-    if (j?.errors?.length || j?.data?.followUser?.error) throw new Error(j.errors?.[0]?.message || j.data.followUser.error.code);
+    const did = on ? j?.data?.followUser : j?.data?.unfollowUser;
+    if (!did || did.error) throw new Error(j?.errors?.[0]?.message || did?.error?.code || j?.message || 'no answer');
     this.follows = on ? [u.login, ...(this.follows || FOLLOWS).filter(x => x !== u.login)] : (this.follows || FOLLOWS).filter(x => x !== u.login);
     store.set('follows', this.follows);
     Home.at = 0;
@@ -2206,6 +2319,7 @@ const Me = {
     store.set('blocks', [...this.blocks]);
     Chat.box.querySelectorAll(`[data-u="${CSS.escape(uid)}"]`).forEach(n => n.remove());
     Chat.queue = Chat.queue.filter(q => q.m.tags['user-id'] !== uid);
+    Replay.q = Replay.q.filter(c => c.commenter?.id !== uid);
     return true;
   },
   // A sub-only stream, or an ad break Turbo skips: Twitch decides by account, so this asks as you.
@@ -2258,22 +2372,26 @@ const SignIn = {
   async poll(f) {
     if (f !== this.flow || $('sheet').hidden) return;
     if (Date.now() > f.until) return this.start();
+    let spent = false;
     try {
       const r = await Me.post('https://id.twitch.tv/oauth2/token', { client_id: TV_CID, device_code: f.device, grant_type: 'urn:ietf:params:oauth:grant-type:device_code', scopes: SCOPES });
       const j = await r.json().catch(() => ({}));
       if (f !== this.flow) return;
       if (r.ok && j.access_token) {
+        spent = true; this.flow = null;   // a code only works once, so a second look at it mustn't start this over
         await Me.accept(j);
-        this.flow = null;
         Sheet.close();
         UI.toast(`Signed in as ${Me.acct.login}`);
         Talk.show();
         await Me.sync(true);
         if (!$('home').hidden) Home.load(true);
+        if (P.subOnly && P.login) P.open(P.login);   // your account may be in
         return;
       }
       if (/invalid device code|expired/i.test(j.message || '')) return this.start();
-    } catch {}
+    } catch (e) {
+      if (spent) { this.flow = { error: e.message }; if (!$('sheet').hidden) Sheet.render(); return; }
+    }
     this.wait();
   },
   cancel() { clearTimeout(this.timer); this.flow = null; },
@@ -2768,7 +2886,8 @@ stage.addEventListener('click', e => {
   lastTap = now;
   hud(!stage.classList.contains('ui'));
 });
-stage.addEventListener('mousemove', () => hud(true));
+// A real mouse only: a tap arrives with a mouse move ahead of it, which would bring the controls up for the tap to take down.
+stage.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') hud(true); });
 
 function togglePlay() {
   const v = P.active();
@@ -2777,12 +2896,12 @@ function togglePlay() {
     if (P.feed === 'live') P.toLiveEdge(); else if (P.feed === 'cdn') P.cdnSeek();
     P.userPaused = false;
     P.play(v);
-  } else { P.userPaused = true; v.pause(); }   // a pause you chose: leaving the app won't start the sound
+  } else { P.userPaused = true; v.pause(); UI.spin(false); }   // a pause you chose: leaving the app won't start the sound
   hud(true);
 }
 $('bPlay').onclick = togglePlay;
 $('bigPlay').onclick = () => { UI.big(false); unlock(); P.userPaused = false; P.play(P.active() || vL); };
-$('bMute').onclick = () => { unlock(); Sound.set(!Sound.muted); };
+$('bMute').onclick = () => { unlock(); Sound.set(!(P.active()?.muted ?? Sound.muted)); };   // what you hear, which a browser's autoplay rules can have muted
 $('vol').addEventListener('input', e => { Sound.setLevel(+e.target.value, true); hud(true); });
 $('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); };
 $('bBack').onclick = $('bBack2').onclick = () => back();
@@ -2814,6 +2933,7 @@ $('bFull').onclick = () => {
     try { P.active().webkitEnterFullscreen(); } catch { UI.fill(true); }
   }
 };
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => setIcon($('bFull'), document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full'));
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('sheet').hidden) return Sheet.close();
   if ($('watch').hidden || e.target.closest('input') || e.metaKey || e.ctrlKey) return;
@@ -3069,6 +3189,7 @@ const Browse = {
   async page(first) {
     if (this.busy || this.end) return;
     this.busy = true;
+    let loaded = false;
     const run = this.run, box = $('brList'), lang = this.lang();
     const after = this.cursor ? `, after: ${JSON.stringify(this.cursor)}` : '';
     const opts = `{ sort: VIEWER_COUNT${lang === 'all' ? '' : `, freeformTags: [${JSON.stringify(lang)}]`} }`;
@@ -3086,9 +3207,12 @@ const Browse = {
       this.cursor = edges[edges.length - 1]?.cursor || null;
       this.end = !res?.pageInfo?.hasNextPage || !this.cursor;
       if (first && !edges.length) box.append(el('p', 'note', 'Nothing live here in this language.'));
+      loaded = true;
     } catch (e) {
       if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
     } finally { if (run === this.run) this.busy = false; }
+    // A window tall enough to show the whole page has nothing to scroll, so the observer below won't be calling again.
+    if (loaded && run === this.run && !$('vBrowse').hidden && $('brEnd').getBoundingClientRect().top < innerHeight + 600) this.page();
   },
 };
 new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' }).observe($('brEnd'));

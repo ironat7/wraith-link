@@ -1,18 +1,15 @@
 // Runs a copy of the Wraith page in headless Chrome against a real channel and samples the player.
 // usage: node harness.mjs <index.html path> <channel> <seconds> [quality] [label]
-import { chromium } from 'playwright-core';
-import http from 'http'; import fs from 'fs'; import path from 'path';
-import { fileURLToPath } from 'url';
-const [file, channel='powdur', secs='120', quality='source', label='run'] = process.argv.slice(2); // usage: node harness.mjs <path to index.html> <channel> <seconds> [quality] [label]
-const dir = path.dirname(file);
-const srv = http.createServer((q,r)=>{ const u=new URL(q.url,'http://x'); const p=u.pathname==='/'?file:path.join(dir,u.pathname); fs.readFile(p,(e,d)=>{ if(e){r.writeHead(404);return r.end();} r.writeHead(200,{'content-type':p.endsWith('.html')?'text/html; charset=utf-8':p.endsWith('.svg')?'image/svg+xml':'application/octet-stream','cache-control':'no-store'}); r.end(d);}); });
-await new Promise(ok=>srv.listen(0,'127.0.0.1',ok)); const port=srv.address().port;
-const browser = await chromium.launch({ channel:'chrome', headless:true, args:['--autoplay-policy=no-user-gesture-required','--mute-audio'] });
+import fs from 'fs';
+import { serve, launch } from './lib.mjs';
+const [file, channel='powdur', secs='120', quality='source', label='run'] = process.argv.slice(2);
+const srv = await serve(file);
+const browser = await launch();
 const ctx = await browser.newContext({ viewport:{width:1280,height:720} });
 await ctx.addInitScript(q=>{ try{ localStorage.setItem('wraith.quality', JSON.stringify(q)); }catch{} }, quality);
 const page = await ctx.newPage();
 const logs=[]; page.on('pageerror',e=>logs.push('PAGEERROR '+e.message)); page.on('console',m=>{ if(m.type()==='error') logs.push('console.error '+m.text().slice(0,200)); });
-await page.goto(`http://127.0.0.1:${port}/?c=${channel}`);
+await page.goto(`${srv.base}?c=${channel}`);
 await page.evaluate(()=>{ // hook hls events once the player exists
   window.__ev={errors:[],levels:[],stalls:0,frags:0,reloads:0};
   const hook=setInterval(()=>{ const h=window.wraith?.P?.hls; if(!h||h.__hooked) return; h.__hooked=true; const H=window.Hls;

@@ -1,15 +1,10 @@
 // usage: node playback.mjs start|quality|relaydown|segdown|bg [channel] [channel2]. Needs live channels.
 // Scenario tests against real streams in headless Chrome.
-import { chromium } from 'playwright-core';
-import http from 'http'; import fs from 'fs'; import path from 'path';
-import { fileURLToPath } from 'url';
-const file = fileURLToPath(new URL('../index.html', import.meta.url)), dir=path.dirname(file);
-const srv=http.createServer((q,r)=>{const u=new URL(q.url,'http://x');const p=u.pathname==='/'?file:path.join(dir,u.pathname);fs.readFile(p,(e,d)=>{if(e){r.writeHead(404);return r.end();}r.writeHead(200,{'content-type':p.endsWith('.html')?'text/html; charset=utf-8':p.endsWith('.svg')?'image/svg+xml':'application/octet-stream','cache-control':'no-store'});r.end(d);});});
-await new Promise(ok=>srv.listen(0,'127.0.0.1',ok));const port=srv.address().port;
-const browser=await chromium.launch({channel:'chrome',headless:true,args:['--autoplay-policy=no-user-gesture-required','--mute-audio']});
+import { serve, launch, sleep } from './lib.mjs';
+const srv=await serve();
+const browser=await launch();
 const which=process.argv[2]||'all', chA=process.argv[3]||'powdur', chB=process.argv[4]||'smugalana';
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function open(ch,opts={}){const ctx=await browser.newContext({viewport:{width:1280,height:720},...opts});const page=await ctx.newPage();const logs=[];page.on('pageerror',e=>logs.push('PAGEERROR '+e.message));await page.goto(`http://127.0.0.1:${port}/?c=${ch}`);return{ctx,page,logs};}
+async function open(ch,opts={}){const ctx=await browser.newContext({viewport:{width:1280,height:720},...opts});const page=await ctx.newPage();const logs=[];page.on('pageerror',e=>logs.push('PAGEERROR '+e.message));await page.goto(`${srv.base}?c=${ch}`);return{ctx,page,logs};}
 const state=p=>p.evaluate(()=>{const P=wraith.P,v=P.active();let ahead=0;if(v)for(let i=0;i<v.buffered.length;i++)if(v.buffered.start(i)<=v.currentTime+.25&&v.buffered.end(i)>v.currentTime)ahead=v.buffered.end(i)-v.currentTime;return{feed:P.feed,lat:+(P.latency()||0).toFixed(2),ahead:+ahead.toFixed(2),h:v?.videoHeight,lvl:P.hls?.currentLevel,cap:P.cap,T:P.liveT,paused:v?.paused,t:+(v?.currentTime||0).toFixed(1),errs:P.errs,rs:v?.readyState,q:P.q,retries:P.retries}});
 const log=(n,s)=>console.log(n.padEnd(26),JSON.stringify(s));
 async function waitPlaying(p,ms=15000){const t0=Date.now();for(;;){const s=await state(p).catch(()=>null);if(s&&s.h&&s.t>0&&!s.paused&&s.rs>=3)return Date.now()-t0;if(Date.now()-t0>ms)return -1;await sleep(100);}}
