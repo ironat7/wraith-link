@@ -1,4 +1,4 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes
+// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll
 // Checks for the bugs an independent code review found on 2026-11-02, on real streams with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { chromium } from 'playwright-core';
@@ -643,6 +643,82 @@ if (want('emotes')) {
   const via = await page.evaluate(() => wraith.Me.emotes);
   ok('the API stands in for GQL', via.find(e => e.name === 'xqcL')?.sub === true && via.find(e => e.name === 'xqcL')?.by === 'xQc' && via.find(e => e.name === 'LUL')?.sub === false && via.find(e => e.name === 'xqcLL')?.owner === 'xqc', JSON.stringify(via));
   await page.evaluate(() => wraith.UI.owner?.());
+  await done();
+}
+
+if (want('fullscreen')) {
+  // An iPhone, staged: no element fullscreen, only the video's own player, which pauses the video some time around closing.
+  const { page, done } = await open({ iphone: true, w: 951, h: 669, init: () => {
+    delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen;
+    HTMLVideoElement.prototype.webkitEnterFullscreen = function () { if (window.__refuse) throw new DOMException('not ready', 'InvalidStateError'); window.__full = this.id; };
+  } });
+  await page.goto(base + `?c=${A}`); await playing(page);
+  const paused = () => page.evaluate(() => wraith.P.active().paused);
+  const fill = () => page.evaluate(() => document.getElementById('watch').classList.contains('full'));
+  const closes = script => page.evaluate(script);
+  const closed = "wraith.P.active().dispatchEvent(new Event('webkitendfullscreen'))";
+
+  await page.evaluate(() => document.getElementById('bFull').click());
+  ok('the button hands the video to iOS’s player', await page.evaluate(() => window.__full === wraith.P.active().id) && !(await fill()), await page.evaluate(() => String(window.__full)));
+
+  await closes(`${closed}; setTimeout(() => wraith.P.active().pause(), 300);`); await sleep(1000);
+  ok('closing it plays on when the pause comes after', !(await paused()));
+  await closes(`wraith.P.active().pause(); ${closed};`); await sleep(700);
+  ok('and when it comes first', !(await paused()));
+  await closes(`${closed}; setTimeout(() => wraith.P.active().pause(), 100); setTimeout(() => wraith.P.active().pause(), 700);`); await sleep(1400);
+  ok('and when it comes again after the first play', !(await paused()));
+  await sleep(2500);
+
+  await page.evaluate(() => wraith.P.active().pause()); await sleep(1800);
+  await closes(closed); await sleep(800);
+  ok('a pause from well before closing holds', await paused());
+  await page.evaluate(() => wraith.P.active().play()); await playing(page);
+
+  await closes(closed); await sleep(100);
+  await page.evaluate(() => document.getElementById('bPlay').click()); await sleep(1000);
+  ok('pausing just after closing holds', await paused() && await page.evaluate(() => wraith.P.userPaused));
+  await page.evaluate(() => document.getElementById('bPlay').click()); await playing(page);
+  await sleep(2600);
+
+  // going to the Home Screen hands sound to the background player, and the picture stays out of it
+  await page.evaluate(() => { const P = wraith.P, real = P.play; window.__plays = 0; P.play = function (v) { window.__plays++; return real.call(this, v); }; });
+  await closes(closed); await vis(page, true); await sleep(800);
+  ok('leaving the app as it closes doesn’t start the picture', await page.evaluate(() => window.__plays === 0), await page.evaluate(() => String(window.__plays)));
+  await vis(page, false); await playing(page);
+
+  // nothing to hand over yet: it fills the screen instead, and the button undoes that
+  await page.evaluate(() => { window.__refuse = true; window.__full = null; document.getElementById('bFull').click(); });
+  ok('with the player refusing, the picture fills the screen', await fill());
+  await page.evaluate(() => document.getElementById('bFull').click());
+  ok('and the button undoes it', !(await fill()));
+  await done();
+}
+
+if (want('scroll')) {
+  // Chat follows until you scroll up, whatever the lines do meanwhile.
+  const { page, done } = await open({ w: 390, h: 844 });
+  await page.goto(base + `?c=${A}`); await playing(page);
+  await page.evaluate(ch => { for (let i = 0; i < 80; i++) wraith.Chat.line(`@id=s${i};user-id=${i};tmi-sent-ts=${Date.now() - 60e3};display-name=u${i} :u${i}!u${i}@u${i}.tmi.twitch.tv PRIVMSG #${ch} :line ${i}`); }, A);
+  await sleep(600);
+  const state = () => page.evaluate(() => ({ stick: wraith.Chat.stick, pill: !document.getElementById('more').hidden }));
+  const frame = () => page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const grow = px => page.evaluate(px => { const b = wraith.Chat.box, d = document.createElement('div'); b.scrollTop = b.scrollHeight; d.style.height = px + 'px'; b.append(d); }, px);
+  await page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollHeight - 200; }); await frame();
+  await page.evaluate(() => { document.getElementById('more').click(); }); await frame();
+  await grow(90); await frame(); await sleep(50);
+  let s = await state();
+  ok('lines growing after a scroll to the end don’t stop it following', s.stick && !s.pill, JSON.stringify(s));
+  await page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollHeight; }); await frame();
+  await page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop -= 300; }); await frame(); await sleep(50);
+  s = await state();
+  ok('scrolling up does', !s.stick, JSON.stringify(s));
+  await page.evaluate(ch => wraith.Chat.line(`@id=after;user-id=7;tmi-sent-ts=${Date.now() - 60e3};display-name=u7 :u7!u7@u7.tmi.twitch.tv PRIVMSG #${ch} :one more`), A);
+  await page.waitForFunction(() => !document.getElementById('more').hidden, null, { timeout: 8000 }).catch(() => {});
+  s = await state();
+  ok('and new lines then wait behind the pill', !s.stick && s.pill, JSON.stringify(s));
+  await page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollHeight; }); await frame(); await sleep(50);
+  s = await state();
+  ok('scrolling back down follows again', s.stick && !s.pill, JSON.stringify(s));
   await done();
 }
 

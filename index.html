@@ -269,7 +269,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 /* short screens give the channel row's height to the picture, except on videos, where it holds the only way back */
 @media (orientation: landscape) and (max-height: 560px) { #watch:not(.vodw) .info { display: none; } #watch:not(.vodw) .stage { max-height: 100%; } }
 @media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
-/* iPhone fullscreen: the player fills the screen (see UI.fill) */
+/* fullscreen with nothing to hand to iOS's player yet: the player fills the screen (see UI.fill) */
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; max-height: none; aspect-ratio: auto; }
 #watch.full .hud { padding: var(--sat) 0 var(--sab); }
 #watch.full #bChat { display: none; }
@@ -1413,7 +1413,18 @@ for (const v of [vL, vC]) {
     UI.playIcon(); Awake.sync();
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
-  v.addEventListener('pause', () => { UI.playIcon(); Awake.sync(); });
+  let pausedAt = 0;
+  v.addEventListener('pause', () => { pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
+  // iOS's fullscreen player pauses the video as you close it, some time around telling the page it closed,
+  // so the video is kept going for a moment after, unless it was already paused
+  v.addEventListener('webkitendfullscreen', () => {
+    if (v.paused && performance.now() - pausedAt > 1500) return;
+    const until = performance.now() + 2500;
+    const t = setInterval(() => {
+      if (performance.now() > until || P.active() !== v || BG.on || document.hidden) return clearInterval(t);
+      if (v.paused) P.play(v);
+    }, 200);
+  });
   v.addEventListener('waiting', () => {
     if (P.active() !== v) return;
     UI.spin(true);
@@ -1473,6 +1484,7 @@ const Chat = {
   said: [], sampled: false, sampleT: 0,   // who said what lately, for which emotes people use; the long look back
   room: {}, names: new Map(),             // chat modes; who has been talking, for @ completion
   newest: 0,                              // the time of the latest line drawn
+  top: 0,                                 // where chat was last scrolled to, to tell you scrolling up from lines growing
 
   open(login) {
     this.close();
@@ -1670,6 +1682,7 @@ const Chat = {
       const extra = this.box.children.length - 220;
       for (let i = 0; i < extra; i++) this.box.firstChild.remove();
       this.box.scrollTop = this.box.scrollHeight;
+      this.top = this.box.scrollTop;
     } else $('more').hidden = false;
   },
 
@@ -1835,9 +1848,11 @@ window.addEventListener('online', () => Chat.wake());
 let chatResized = 0;   // turning the phone or unfolding moves the scroll position; that isn't you scrolling up
 new ResizeObserver(() => { chatResized = performance.now(); if (Chat.stick) Chat.box.scrollTop = Chat.box.scrollHeight; }).observe(Chat.box);
 Chat.box.addEventListener('scroll', () => {
+  const b = Chat.box, up = b.scrollTop < Chat.top;
+  Chat.top = b.scrollTop;
   if (performance.now() - chatResized < 250) return;
-  Chat.stick = Chat.box.scrollHeight - Chat.box.scrollTop - Chat.box.clientHeight < 40;
-  if (Chat.stick) $('more').hidden = true;
+  if (b.scrollHeight - b.scrollTop - b.clientHeight < 40) { Chat.stick = true; $('more').hidden = true; }
+  else if (up) Chat.stick = false;   // short of the end without moving up is only lines growing as their emotes load
 }, { passive: true });
 $('more').onclick = () => { Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true; };
 
@@ -2650,8 +2665,8 @@ const UI = {
   spin(on) { $('spin').hidden = !on || P.userPaused; },
   big(on) { $('bigPlay').hidden = !on; if (on) this.spin(false); },
   unmute(on) { $('unmute').hidden = !on; },
-  // iPhone can't make part of a page fullscreen, only hand the video to its own player, which pauses
-  // it on closing. The Home Screen app has no browser bar to hide, so the player just fills the screen.
+  // For when there's no fullscreen to be had yet: the Home Screen app has no browser bar to hide, so the player just
+  // fills the screen. The status bar stays, and on an iPhone Duo that's a pill over the picture.
   fill(on) { $('watch').classList.toggle('full', on); setIcon($('bFull'), on ? 'unfull' : 'full'); },
   playIcon() { const v = P.active(); setIcon($('bPlay'), v && !v.paused ? 'pause' : 'play'); },
   feed() {
@@ -2736,7 +2751,9 @@ $('bFull').onclick = () => {
   if (document.fullscreenElement || document.webkitFullscreenElement) return (document.exitFullscreen || document.webkitExitFullscreen).call(document);
   if (stage.requestFullscreen) stage.requestFullscreen().catch(() => UI.fill(true));
   else if (stage.webkitRequestFullscreen) stage.webkitRequestFullscreen();
-  else UI.fill(true);
+  else {   // an iPhone can't make part of a page fullscreen, only hand the video to iOS's own player
+    try { P.active().webkitEnterFullscreen(); } catch { UI.fill(true); }
+  }
 };
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('sheet').hidden) return Sheet.close();
