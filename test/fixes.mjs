@@ -988,7 +988,8 @@ if (want('relay')) {
   const toCdn = async (page, from) => { await page.waitForFunction(() => wraith.P.feed === 'cdn', null, { timeout: 60000 }).catch(never); return Date.now() - from; };
   const levels = (page, ms) => page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: ms }).catch(never);
   const waking = async (secs, tries, name) => {
-    const at = Date.now() + secs * 1000, { page, done } = await stage(async route => { await sleep(Math.max(0, at - Date.now())); await answer(route); });
+    let at;   // from its first ask: a machine busy starting pages doesn't shorten the wait
+    const { page, done } = await stage(async route => { at ||= Date.now() + secs * 1000; await sleep(Math.max(0, at - Date.now())); await answer(route); });
     await levels(page, (secs + 3) * 1000);
     const s = await st(page);
     ok(name, s.feed === 'live' && s.retries === tries && await page.evaluate(() => wraith.P.hls?.levels.length === 1), JSON.stringify(s));
@@ -1035,7 +1036,7 @@ if (want('relay')) {
   };
   const stops = {
     'stopped from the buttons': page => cc(page, 'pause'),
-    'with another app having taken the sound': page => page.evaluate(() => document.getElementById('aBG').pause()),
+    'another app having taken the sound': page => page.evaluate(() => document.getElementById('aBG').pause()),
   };
   await Promise.all([
     ...[[{ sub: true }, 'a sub-only stream restarting while you’re away: the sound comes back'], [{ pick: true }, 'a stream you picked the CDN for: the same']].map(([how, name]) => restarting(how, async (page, S, restart) => {
@@ -1056,7 +1057,7 @@ if (want('relay')) {
       await stop(page); await sleep(300); S.audio = 0;
       await restart(); await sleep(3000);
       const s = await snd(page);
-      ok(`${how}, it restarting stays quiet`, !s.on && s.paused && s.userPaused && !S.audio, `${S.audio} asks ${JSON.stringify(s)}`);
+      ok(`${how}, the restart stays quiet`, !s.on && s.paused && s.userPaused && !S.audio, `${S.audio} asks ${JSON.stringify(s)}`);
       await cc(page, 'play');
       ok('until the button starts it', !!(await sounding(page)), JSON.stringify(await snd(page)));
     })),
