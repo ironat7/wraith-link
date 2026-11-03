@@ -1,4 +1,4 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll
+// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages
 // Checks for the bugs an independent code review found on 2026-11-02, on real streams with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { chromium } from 'playwright-core';
@@ -719,6 +719,162 @@ if (want('scroll')) {
   await page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollHeight; }); await frame(); await sleep(50);
   s = await state();
   ok('scrolling back down follows again', s.stick && !s.pill, JSON.stringify(s));
+  await done();
+}
+
+// The background sound, as far as Chrome can stage iOS: what iOS would do to the audio player is done to it directly.
+const snd = page => page.evaluate(() => { const a = document.getElementById('aBG'), B = wraith.BG, P = wraith.P; return { on: B.on, wanted: B.wanted, held: B.held, paused: a.paused, src: !!a.getAttribute('src'), feed: P.feed, vPaused: P.active()?.paused, vMuted: document.getElementById('vLL').muted, userPaused: P.userPaused, msg: document.getElementById('msgbox').hidden ? '' : document.getElementById('msgbox').textContent }; });
+const sounding = page => page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.currentTime > 0 && a.readyState >= 3; }, null, { timeout: 25000 }).catch(() => {});
+const cc = (page, what) => page.evaluate(w => window.__ms[w](), what);
+const captureButtons = () => { window.__ms = {}; const ms = navigator.mediaSession, real = ms.setActionHandler.bind(ms); ms.setActionHandler = (a, f) => { window.__ms[a] = f; real(a, f); }; };
+
+if (want('sound')) {
+  const { page, ads, done } = await open({ iphone: true, init: captureButtons });
+  await page.goto(base + `?c=${A}`); await playing(page);
+  await vis(page, true); await sounding(page);
+  let s = await snd(page);
+  ok('leaving the app hands over the sound', s.on && s.wanted && !s.paused && s.vPaused && s.vMuted, JSON.stringify(s));
+
+  // another app takes the sound
+  await page.evaluate(() => document.getElementById('aBG').pause()); await sleep(300);
+  s = await snd(page);
+  ok('another app taking the sound stops it', s.on && !s.wanted && s.paused && !s.held, JSON.stringify(s));
+  let r0 = ads.relay; await sleep(5000);
+  ok('and stops polling the relay', ads.relay - r0 <= 1, `${ads.relay - r0} calls in 5 s`);
+  await page.evaluate(() => document.getElementById('aBG').play()); await sleep(800);
+  ok('iOS starting it again when that app stops doesn’t take', (await snd(page)).paused);
+  await page.evaluate(() => { wraith.P.user.stream.id = 'older'; wraith.P.refresh(); });
+  await page.waitForFunction(() => wraith.P.hls?.levels?.length, null, { timeout: 15000 }).catch(() => {}); await sleep(2500);
+  s = await snd(page);
+  ok('nor does the stream restarting', !s.on && s.paused, JSON.stringify(s));
+  await vis(page, false); await sleep(500);
+  await page.evaluate(() => { wraith.P.userPaused = false; wraith.P.play(wraith.P.active()); }); await playing(page);
+
+  await vis(page, true); await sounding(page);
+  await page.evaluate(() => document.getElementById('aBG').pause()); await sleep(300);
+  await cc(page, 'play'); await sounding(page);
+  s = await snd(page);
+  ok('Control Center brings it back', s.wanted && !s.paused && !s.held, JSON.stringify(s));
+  await page.evaluate(() => document.getElementById('aBG').pause()); await sleep(300);
+  await vis(page, false); await playing(page);
+  s = await snd(page);
+  ok('so does coming back, since you didn’t pause it', !s.on && !s.vPaused && !s.userPaused && !s.vMuted && s.paused && !s.src, JSON.stringify(s));
+
+  // every button stops what you hear, whatever iOS thinks is playing
+  await vis(page, true); await sounding(page);
+  await cc(page, 'play'); await sleep(300);
+  s = await snd(page);
+  ok('with sound playing, the play button stops it', s.paused && s.held && !s.wanted, JSON.stringify(s));
+  r0 = ads.relay; await sleep(4000);
+  ok('and stops polling the relay', ads.relay - r0 <= 1, `${ads.relay - r0} calls in 4 s`);
+  await page.evaluate(() => wraith.BG.hls.trigger(Hls.Events.ERROR, { type: Hls.ErrorTypes.NETWORK_ERROR, details: 'levelLoadError', fatal: true })); await sleep(3000);
+  ok('a load failing just then doesn’t start it polling again', ads.relay - r0 <= 1, `${ads.relay - r0} calls`);
+  await cc(page, 'play'); await sounding(page);
+  ok('pressed again it starts', !(await snd(page)).paused);
+  await cc(page, 'stop'); await sleep(300);
+  ok('stop stops it', (await snd(page)).paused);
+  await cc(page, 'play'); await sounding(page);
+  await cc(page, 'pause'); await sleep(300);
+  ok('pause stops it', (await snd(page)).paused);
+  await vis(page, false); await sleep(1500);
+  s = await snd(page);
+  ok('and your pause holds on coming back', s.vPaused && s.userPaused && !s.on, JSON.stringify(s));
+
+  await vis(page, true); await sleep(600);
+  ok('leaving while paused stays quiet', !(await snd(page)).on);
+  await cc(page, 'play'); await sounding(page);
+  s = await snd(page);
+  ok('and Control Center’s play starts the sound', s.on && !s.paused && !s.userPaused, JSON.stringify(s));
+  await page.evaluate(() => wraith.P.play(document.getElementById('vLL'))); await sleep(800);
+  s = await snd(page);
+  ok('the picture can’t start over the sound', s.vPaused && s.vMuted, JSON.stringify(s));
+  // the stream restarting while you listen carries on
+  await page.evaluate(() => { wraith.P.user.stream.id = 'older'; wraith.P.refresh(); }); await sleep(800); await sounding(page);
+  s = await snd(page);
+  ok('a stream restarting while you listen carries on', s.on && !s.paused && !s.userPaused, JSON.stringify(s));
+  // iOS not saying the app came back
+  await page.evaluate(() => Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }));
+  await playing(page);
+  s = await snd(page);
+  ok('a lost “you’re back” still hands the sound back', !s.on && s.paused && !s.vPaused, JSON.stringify(s));
+  await vis(page, false);
+
+  // what was playing as you left decides
+  await page.evaluate(() => wraith.P.active().pause()); await sleep(2500);
+  await vis(page, true); await sleep(600);
+  ok('a picture iOS paused well before you left has no sound to carry on', !(await snd(page)).on);
+  await vis(page, false); await page.evaluate(() => wraith.P.active().play()); await playing(page);
+  await page.evaluate(() => { wraith.P.active().pause(); }); await vis(page, true); await sounding(page);
+  ok('one iOS paused as you left does', (await snd(page)).on);
+  await vis(page, false); await playing(page);
+  await page.evaluate(() => { wraith.P.active().muted = true; }); await vis(page, true); await sleep(600);
+  ok('one still muted from starting by itself doesn’t', !(await snd(page)).on);
+  await vis(page, false); await page.evaluate(() => { wraith.P.active().muted = false; });
+  await page.evaluate(() => document.getElementById('bSet').click()); await sleep(1500);
+  const sheet = await page.$eval('#sheetBody', x => x.textContent);
+  ok('the settings sheet shows the record', /Away: .*\b(left|back|sound on)\b/.test(sheet), sheet.slice(-160));
+  await page.evaluate(() => document.getElementById('scrim').click());
+  await done();
+}
+
+if (want('sound')) {
+  // Leaving from iOS's fullscreen player: it comes out of it, or Control Center stays with the paused picture.
+  const { page, done } = await open({ iphone: true, w: 951, h: 669, init: () => {
+    delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen;
+    Object.defineProperty(HTMLVideoElement.prototype, 'webkitDisplayingFullscreen', { configurable: true, get() { return window.__fs === this; } });
+    HTMLVideoElement.prototype.webkitEnterFullscreen = function () { window.__fs = this; };
+    HTMLVideoElement.prototype.webkitExitFullscreen = function () { window.__fs = null; window.__exits = (window.__exits || 0) + 1; this.dispatchEvent(new Event('webkitendfullscreen')); };
+  } });
+  await page.goto(base + `?c=${A}`); await playing(page);
+  await page.evaluate(() => document.getElementById('bFull').click());
+  ok('fullscreen hands the video to iOS’s player', await page.evaluate(() => window.__fs === wraith.P.active()));
+  await vis(page, true); await sounding(page);
+  let s = await snd(page);
+  ok('leaving brings it out of that player', await page.evaluate(() => window.__fs === null && window.__exits === 1) && s.on && !s.paused && s.vPaused, JSON.stringify(s));
+  await vis(page, false); await playing(page);
+  s = await snd(page);
+  ok('and coming back plays', !s.on && !s.vPaused && !s.vMuted, JSON.stringify(s));
+  await done();
+}
+
+if (want('pages')) {
+  // iOS leaving a page running behind a new one.
+  const { c, page, ads, done } = await open({ iphone: true });
+  await page.goto(base + `?c=${A}`); await playing(page);
+  await vis(page, true); await sounding(page);
+  const second = await c.newPage();
+  await second.goto(base); await sleep(1000);
+  let s = await snd(page);
+  ok('a page coming up stops the one out of sight', !s.on && s.paused && !s.src && !s.feed, JSON.stringify(s));
+  ok('which says so if you get back to it', /another window/.test(s.msg), s.msg);
+  const r0 = ads.relay; await sleep(4000);
+  ok('and stops polling the relay', ads.relay === r0, `${ads.relay - r0} calls in 4 s`);
+  await vis(page, false);
+  await page.evaluate(() => document.querySelector('#msgbox button').click()); await playing(page);
+  s = await snd(page);
+  ok('its button plays it there', s.feed === 'live' && !s.vPaused && !s.msg, JSON.stringify(s));
+
+  await second.reload(); await sleep(1000);
+  ok('a page coming up leaves one in view alone', !(await snd(page)).vPaused);
+  // the new page came up first, then this one went out of sight
+  await vis(page, true); await sleep(1000);
+  s = await snd(page);
+  ok('going out of sight with another page on screen makes no sound', !s.on && s.paused && /another window/.test(s.msg), JSON.stringify(s));
+  await vis(page, false);
+  await page.evaluate(() => document.querySelector('#msgbox button').click()); await playing(page);
+  await second.goto(base + `?c=${B}`); await playing(second);
+  s = await snd(page);
+  ok('a page starting a stream stops the other', !s.feed && /another window/.test(s.msg), JSON.stringify(s));
+  ok('and plays', !(await snd(second)).vPaused);
+
+  // out of sight from the start: it doesn't play, and doesn't stop the one you're watching
+  const third = await c.newPage();
+  await third.addInitScript(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); });
+  await third.goto(base + `?c=${A}`);
+  await third.waitForFunction(() => wraith.P.hls?.levels?.length, null, { timeout: 15000 }).catch(() => {}); await sleep(2500);
+  ok('a page never on screen makes no sound', !(await snd(third)).on);
+  ok('and leaves the one playing alone', !(await snd(second)).vPaused);
+  await third.close(); await second.close();
   await done();
 }
 

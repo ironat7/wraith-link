@@ -769,6 +769,7 @@ const P = {
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
   began: 0,                          // when the live player last started
+  pausedAt: 0,                       // when the picture last paused
   errs: {},                          // player errors this stream, for the stats panel
 
   open(login, gesture, cached) {
@@ -907,7 +908,7 @@ const P = {
   onManifest() {
     this.groups = this.hls.levels.map((l, i) => ({ i, id: l.attrs?.VIDEO || `${l.height}p`, h: l.height || 0, fps: Math.round(l.frameRate || 0), br: l.bitrate }));
     this.applyQuality();
-    if (document.hidden) BG.start();   // the stream (re)started while the app was in the background
+    if (document.hidden && Pages.shown) BG.start();   // the stream (re)started while the app was in the background
   },
 
   qualities() {
@@ -1094,7 +1095,7 @@ const P = {
   },
 
   play(v) {
-    if (this.userPaused) return;   // a pause you chose holds until you undo it
+    if (this.userPaused || BG.on) return;   // a pause you chose holds until you undo it, and the pictures stay out of the background sound
     v.muted = Sound.muted;
     const p = v.play();
     if (p) p.catch(err => {
@@ -1198,7 +1199,7 @@ const P = {
     try {
       const [u] = await getUsers([this.login]);
       if (gen !== this.gen || !u) return;
-      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) { const paused = this.userPaused; this.open(this.login); this.userPaused = paused; return; }
+      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) { const paused = this.userPaused || (document.hidden && !(BG.on && BG.wanted)); this.open(this.login); this.userPaused = paused; return; }
       // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
       if (!u.stream && this.user?.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
       this.gone = 0;
@@ -1269,6 +1270,7 @@ const P = {
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
+  wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back
   claim() {
     const ms = navigator.mediaSession, m = ms?.metadata;
     if (!ms) return;
@@ -1278,7 +1280,9 @@ const BG = {
     const v = P.active();
     if (!this.ios || this.on || !v || Sound.muted || P.userPaused) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
-    this.on = true; this.held = false;
+    this.on = this.wanted = true; this.held = false;
+    // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
+    if (v.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}
     aBG.muted = false;
     if (P.feed === 'live') {
       // the picture's player lets go of its stream while away: the relay isn't polled twice, iOS gets
@@ -1293,7 +1297,7 @@ const BG = {
         P.noteErr(d, 'background ');
         if (!d.fatal || this.hls !== h) return;
         if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) h.recoverMediaError();
-        else setTimeout(() => { if (this.hls === h) h.startLoad(-1); }, 2000);
+        else setTimeout(() => { if (this.hls === h && this.wanted) h.startLoad(-1); }, 2000);
       });
       h.loadSource(P.audioUrl);
       h.attachMedia(aBG);
@@ -1316,7 +1320,7 @@ const BG = {
   },
   stop(silent) {
     if (!this.on) return;
-    this.on = false;
+    this.on = this.wanted = false;
     const at = aBG.currentTime;
     if (this.hls) { this.hls.destroy(); this.hls = null; }
     aBG.pause(); aBG.removeAttribute('src'); aBG.load(); this.srcs = null;
@@ -1338,20 +1342,71 @@ const BG = {
   },
 };
 aBG.addEventListener('error', () => { if (BG.on && BG.srcs) BG.next(); });
+// Anything else pausing it is iOS giving the sound to another app (YouTube, a call). iOS plays it again once that app
+// stops, unless it's paused again now, and a play from here would take the sound back off that app.
+aBG.addEventListener('pause', () => {
+  if (!BG.on || !BG.wanted || aBG.ended) return;
+  Away.add('iOS paused the sound');
+  BG.wanted = false;
+  aBG.pause();
+  BG.hls?.stopLoad();
+});
+aBG.addEventListener('play', () => {
+  if (!BG.on || BG.wanted) return;
+  Away.add('stopped a restart');
+  aBG.pause();
+});
 aBG.addEventListener('playing', () => {
   if (!BG.on) return;
   BG.claim();
   setTimeout(() => { if (BG.on) BG.claim(); }, 2000);   // and again, in case it wasn't ready for the first
 });
+// iOS can leave a page running with its sound on behind a new one (2026-11-02: one played on for 13 minutes under three
+// fresh starts of the same stream), and no button in the new page reaches it. So only one page plays: a page coming on
+// screen stops any that's out of sight, a page going out of sight asks if one's on screen, and a page starting a stream
+// stops all the others.
+const Pages = {
+  id: Math.random().toString(36).slice(2, 6),
+  shown: !document.hidden,
+  ch: ios && window.BroadcastChannel ? new BroadcastChannel('wraith') : null,
+  tell(what) { if (!document.hidden) this.ch?.postMessage(what); },
+  heard(what) {
+    if (what === 'anyone') return this.tell('here');
+    if (!P.login && !P.feed && !P.vod) return;
+    if (what === 'here' && !document.hidden && document.hasFocus()) return;
+    Away.add('another page took over');
+    P.close();
+    UI.msg(null, 'Playing in another window', 'Only one Wraith plays at a time.', () => route(true), 'Play here');
+  },
+};
+if (Pages.ch) Pages.ch.onmessage = e => Pages.heard(e.data);
+// What each page did about leaving and coming back. The settings sheet shows it, so a screenshot says what iOS did.
+const Away = {
+  add(what) {
+    if (ios) store.set('away', [...store.get('away', []), `${new Date().toTimeString().slice(0, 8)} ${Pages.id} ${what}`].slice(-24));
+  },
+};
 document.addEventListener('visibilitychange', () => {
+  Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}` : 'back');
+  if (!document.hidden) { Pages.shown = true; Pages.tell('here'); }
   if ($('watch').hidden) return;
-  if (document.hidden) BG.start(); else BG.stop();
+  if (!document.hidden) return BG.stop();
+  // only a picture that was playing as you left has sound to carry on (iOS pauses it just before saying the app has
+  // left), and one still muted because it started by itself has none
+  const v = P.active();
+  if (v && !v.muted && (!v.paused || performance.now() - P.pausedAt < 2000)) BG.start();
+  if (BG.on) Away.add('sound on');
+  Pages.ch?.postMessage('anyone');
 });
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const ms = navigator.mediaSession;
+  const hold = () => { BG.held = true; BG.wanted = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
   ms.setActionHandler('play', () => {
+    Away.add('button: play');
+    if (document.hidden && !BG.on) { P.userPaused = false; BG.start(); if (BG.on) return; }
     if (BG.on) {
-      BG.held = false;
+      if (!aBG.paused) return hold();   // iOS is showing something else as paused: its button still has to stop what you hear
+      BG.held = false; BG.wanted = true;
       const h = BG.hls;
       if (h) {   // live: back at the edge as soon as the playlist has reloaded
         h.once(window.Hls.Events.LEVEL_UPDATED, () => {
@@ -1363,10 +1418,13 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
       aBG.play().catch(() => {});
     } else if (P.active()?.paused) togglePlay();
   });
-  ms.setActionHandler('pause', () => {
-    if (BG.on) { BG.held = true; aBG.pause(); BG.hls?.stopLoad(); }   // stopped: no relay polling while paused
+  const pause = () => {
+    Away.add('button: pause');
+    if (BG.on) hold();
     else if (P.active() && !P.active().paused) togglePlay();
-  });
+  };
+  ms.setActionHandler('pause', pause);
+  try { ms.setActionHandler('stop', pause); } catch {}
 }
 
 const Sound = {
@@ -1413,12 +1471,11 @@ for (const v of [vL, vC]) {
     UI.playIcon(); Awake.sync();
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
-  let pausedAt = 0;
-  v.addEventListener('pause', () => { pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
+  v.addEventListener('pause', () => { P.pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
   // iOS's fullscreen player pauses the video as you close it, some time around telling the page it closed,
   // so the video is kept going for a moment after, unless it was already paused
   v.addEventListener('webkitendfullscreen', () => {
-    if (v.paused && performance.now() - pausedAt > 1500) return;
+    if (v.paused && performance.now() - P.pausedAt > 1500) return;
     const until = performance.now() + 2500;
     const t = setInterval(() => {
       if (performance.now() > until || P.active() !== v || BG.on || document.hidden) return clearInterval(t);
@@ -1447,7 +1504,10 @@ vC.addEventListener('timeupdate', () => {
   if (Math.floor(vC.currentTime) % 5 === 0) store.set('pos.' + P.vod.id, Math.floor(vC.currentTime));
   Replay.tick(vC.currentTime);
 });
-setInterval(() => { if (P.feed) { P.tick(); UI.banner(); } }, 1000);
+setInterval(() => {
+  if (BG.on && !document.hidden) BG.stop();   // iOS doesn't always say the app came back (WebKit 207256)
+  if (P.feed) { P.tick(); UI.banner(); }
+}, 1000);
 
 // ── chat ────────────────────────────────────────────
 const COLORS = ['#FF4D4D', '#5B8CFF', '#3DDC97', '#FF8A3D', '#B3E35A', '#FF6B3D', '#3FBF7F', '#E8B23A', '#E07B39', '#5FB8BF', '#3DA0FF', '#FF7EB6', '#A877FF', '#3DFFA0', '#FFB13D'];
@@ -2560,6 +2620,7 @@ document.querySelector('.tabs').addEventListener('click', e => { const b = e.tar
 let hudTimer = 0, toastTimer = 0;
 const UI = {
   watch(login, u) {
+    Pages.tell('play');
     $('home').hidden = true; $('watch').hidden = false;
     document.title = (u?.displayName || login || 'Video') + ' · Wraith';
     $('twLink').href = 'https://www.twitch.tv/' + (login || '');
@@ -2633,13 +2694,13 @@ const UI = {
     }).catch(() => {});
     Tabs.show('vods');
   },
-  msg(avatar, title, body, retry) {
+  msg(avatar, title, body, retry, label = 'Try again') {
     const box = $('msgbox');
     box.textContent = '';
     if (avatar) box.append(pic(avatar));
     box.append(el('b', null, title));
     if (body) box.append(el('div', null, body));
-    if (retry) { const a = el('div', 'acts'), b = el('button', 'btn pri', 'Try again'); b.type = 'button'; b.onclick = retry; a.append(b); box.append(a); }
+    if (retry) { const a = el('div', 'acts'), b = el('button', 'btn pri', label); b.type = 'button'; b.onclick = retry; a.append(b); box.append(a); }
     box.hidden = false;
     this.spin(false);
   },
@@ -2836,6 +2897,8 @@ const Sheet = {
     if (Quota.n) lines.push(`Relay today: ${Quota.n.toLocaleString()} of 20,000`);
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
+    const away = store.get('away', []);
+    if (away.length) lines.push('Away: ' + away.slice(-6).join(' · '));
     s.textContent = '';
     for (const x of lines) s.append(el('div', null, x));
   },
@@ -3167,7 +3230,9 @@ Me.save(Me.acct);
 Me.check();
 Me.sync();
 setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Talk, Me, Replay, Browse, Search, SignIn, Clips, UI, Card, Picker };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, Clips, UI, Card, Picker };   // for poking at playback from devtools
+Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
+Pages.tell('here');
 route(false);
 })();
 </script>
