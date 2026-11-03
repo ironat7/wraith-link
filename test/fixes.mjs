@@ -1,4 +1,4 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages
+// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout
 // Checks for the bugs an independent code review found on 2026-11-02, on real streams with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { chromium } from 'playwright-core';
@@ -323,14 +323,14 @@ if (want('replay')) {
   await page.unroute('https://gql.twitch.tv/gql');
 
   // backing out of a past broadcast before it has loaded doesn't seek the next thing
-  const u = (await gqlNode(`query { user(login: ${JSON.stringify(process.argv[5] || 'zackrawrr')}) { videos(first: 3, type: ARCHIVE) { edges { node { id lengthSeconds status } } } clips(first: 1, criteria: { period: LAST_MONTH }) { edges { node { slug } } } } }`)).user;
-  const vod = u?.videos?.edges?.map(e => e.node).find(v => v.status !== 'RECORDING' && v.lengthSeconds > 3000), slug = u?.clips?.edges?.[0]?.node?.slug;
-  if (vod && slug) {
-    await page.evaluate(({ id, slug }) => { localStorage.setItem(`wraith.pos.${id}`, '2000'); const v = document.getElementById('vCDN'); return (async () => { wraith.P.openVod(id); for (let i = 0; i < 2000 && !v.dataset.url; i++) await new Promise(r => setTimeout(r, 5)); await wraith.P.openClip(slug); })(); }, { id: vod.id, slug });
+  const u = (await gqlNode(`query { user(login: ${JSON.stringify(process.argv[5] || 'zackrawrr')}) { videos(first: 5, type: ARCHIVE) { edges { node { id lengthSeconds status } } } } }`)).user;
+  const vods = (u?.videos?.edges || []).map(e => e.node).filter(v => v.status !== 'RECORDING' && v.lengthSeconds > 3000);
+  if (vods.length > 1) {
+    await page.evaluate(({ id, next }) => { localStorage.setItem(`wraith.pos.${id}`, '2000'); localStorage.removeItem(`wraith.pos.${next}`); const v = document.getElementById('vCDN'); return (async () => { wraith.P.openVod(id); for (let i = 0; i < 2000 && !v.dataset.url; i++) await new Promise(r => setTimeout(r, 5)); await wraith.P.openVod(next); })(); }, { id: vods[0].id, next: vods[1].id });
     await sleep(3500);
-    const c = await page.evaluate(() => { const v = document.getElementById('vCDN'); return { t: v.currentTime, d: v.duration, ended: v.ended, feed: wraith.P.feed }; });
-    ok('the clip after it starts at the start', c.feed === 'clip' && c.t < 15 && !c.ended, JSON.stringify(c));
-  } else console.log('skip: no VOD and clip to try', JSON.stringify(u)?.slice(0, 120));
+    const c = await page.evaluate(() => { const v = document.getElementById('vCDN'); return { t: v.currentTime, ended: v.ended, id: wraith.P.vod?.id }; });
+    ok('the video after it starts at the start', c.id === vods[1].id && c.t < 15 && !c.ended, JSON.stringify(c));
+  } else console.log('skip: no two VODs to try', JSON.stringify(u)?.slice(0, 120));
   await done();
 }
 
@@ -606,7 +606,7 @@ if (want('emotes')) {
   ok('and each only once', new Set(await complete('KE')).size === (await complete('KE')).length, (await complete('KE')).join());
 
   // chat itself is left alone
-  await page.waitForFunction(() => [...document.querySelectorAll('#chat .em')].some(i => i.alt === 'GayPride'), null, { timeout: 8000 }).catch(() => {});
+  await page.waitForFunction(() => [...document.querySelectorAll('#chat .em')].some(i => i.alt === 'Gayge'), null, { timeout: 8000 }).catch(() => {});
   ok('chat still draws what people post', await page.evaluate(() => [...document.querySelectorAll('#chat .em')].some(i => i.alt === 'Gayge')));
 
   // the long look back only counts: 800 lines, none drawn, and it can't get in the way of the history that is
@@ -875,6 +875,77 @@ if (want('pages')) {
   ok('a page never on screen makes no sound', !(await snd(third)).on);
   ok('and leaves the one playing alone', !(await snd(second)).vPaused);
   await third.close(); await second.close();
+  await done();
+}
+
+if (want('layout')) {
+  // Every shape of screen, with Apple's safe areas: what takes up the room, and what stays clear of the status pill.
+  const { c, page, done } = await open({ iphone: true, w: 951, h: 669, init: me => localStorage.setItem('wraith.me', JSON.stringify(me)), initArg: ME });
+  await page.route('https://id.twitch.tv/oauth2/**', route => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ login: 'ironat___', user_id: '212375133', client_id: 'x' }) }));
+  const cdp = await c.newCDPSession(page);
+  const shape = async (width, height, insets) => { await page.setViewportSize({ width, height }); await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 0, left: 0, ...insets } }); await sleep(400); };
+  const box = () => page.evaluate(() => { const r = s => { const n = document.querySelector(s); if (!n || (!n.offsetParent && getComputedStyle(n).position !== 'fixed')) return null; const b = n.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height) }; }; return { stage: r('#stage'), log: r('.log'), info: r('.info'), say: r('#say'), tabs: r('.tabs'), x: r('#bChanX'), follow: r('#bFollow'), side: r('.side'), vods: r('#paneVods') }; });
+  const near = (a, b, by = 2) => Math.abs(a - b) <= by;
+  await shape(951, 669, { right: 84, bottom: 34 });
+  await page.goto(base + `?c=${A}`); await playing(page);
+  await page.evaluate(() => { document.getElementById('watch').classList.add('nochat'); });   // however side chat was left
+  let b = await box();
+  ok('Duo open, on its side: picture top left, as wide as the status strip allows', b.stage.x === 0 && b.stage.y === 0 && near(b.stage.w, 867) && near(b.stage.h, 488), JSON.stringify(b.stage));
+  ok('chat under it, messages using the whole height', b.log && near(b.log.y, b.stage.b, 2) && near(b.log.b, 669) && b.log.x === 0 && b.log.w >= 600, JSON.stringify(b.log));
+  ok('the box to their right, on screen', b.say && b.say.x >= b.log.r - 1 && b.say.y >= b.stage.b && b.say.b <= 669 && b.say.r <= 951, JSON.stringify(b.say));
+  ok('the channel row above the box', b.info && b.info.y >= b.stage.b && b.info.b <= b.say.y + 1 && b.info.x >= b.log.r - 1, JSON.stringify(b.info));
+  ok('no tabs, follow button', !b.tabs && !b.follow, JSON.stringify([b.tabs, b.follow]));
+  await page.screenshot({ path: 'fixes-duo-inner.png', timeout: 8000 }).catch(() => {});
+  await page.click('#bChan'); await sleep(400);
+  b = await box();
+  ok('tapping the channel leaves the picture where it is', near(b.stage.w, 867) && b.stage.y === 0, JSON.stringify(b.stage));
+  ok('it opens in chat’s place', b.vods && b.vods.x === 0 && b.vods.y >= 488 && b.vods.b <= 669 && !b.log, JSON.stringify(b.vods));
+  await page.waitForFunction(() => document.querySelectorAll('#vods a.vod').length > 4, null, { timeout: 8000 }).catch(() => {});
+  ok('its videos scroll sideways in the strip, nothing cut off', await page.evaluate(() => { const v = document.getElementById('vods'), a = v.querySelector('a.vod').getBoundingClientRect(), last = [...v.querySelectorAll('a.vod')].slice(0, 2).pop().getBoundingClientRect(); return v.scrollWidth > v.clientWidth && a.height < 80 && last.bottom <= 669 && v.scrollHeight <= v.clientHeight + 1; }));
+  ok('the tabs and follow button beside them, above the home bar', b.tabs.x >= b.vods.r - 1 && b.tabs.b <= 669 && b.x.r <= 951 && b.follow && b.follow.y >= 488 && b.follow.r <= 951, JSON.stringify([b.tabs, b.x, b.follow]));
+  await page.click('.tabs [data-pane=about]'); await sleep(1500);
+  ok('about opens there too', await page.evaluate(() => { const a = document.getElementById('paneAbout').getBoundingClientRect(); return a.y >= 488 && a.x === 0 && document.getElementById('about').textContent.length > 10; }));
+  await page.click('.tabs [data-pane=vods]'); await sleep(200);
+  await page.screenshot({ path: 'fixes-duo-channel.png', timeout: 8000 }).catch(() => {});
+  await page.click('#bChanX'); await sleep(300);
+  b = await box();
+  ok('the x brings it all back', near(b.stage.w, 867) && !b.tabs, JSON.stringify(b.stage));
+  // the keyboard
+  await page.evaluate(() => { const vv = window.visualViewport; Object.defineProperty(vv, 'height', { configurable: true, get: () => 370 }); });
+  await page.focus('#sayTx'); await page.evaluate(() => window.visualViewport.dispatchEvent(new Event('resize'))); await sleep(300);
+  b = await box();
+  ok('with the keyboard up, picture and chat fit above it', b.stage.b <= 371 && b.say.b <= 371 && b.log.h > 100 && b.stage.h > 200, JSON.stringify([b.stage, b.log, b.say]));
+  await page.evaluate(() => { document.getElementById('sayTx').blur(); delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event('resize')); }); await sleep(300);
+  // the other way up: the strip on the left
+  await shape(951, 669, { left: 84, bottom: 34 });
+  b = await box();
+  ok('turned around, clear of the strip on the left', b.stage.x === 84 && b.stage.r === 951 && near(b.stage.h, 488), JSON.stringify(b.stage));
+  await shape(678, 466, { right: 84, bottom: 21 });
+  b = await box();
+  ok('Duo closed, on its side: clear of the strip, and chat has room', b.stage.r <= 594 && b.log.h >= 140 && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.log, b.say, b.info]));
+  await page.screenshot({ path: 'fixes-duo-closed.png', timeout: 8000 }).catch(() => {});
+  await shape(669, 951, { top: 59, bottom: 34 });
+  b = await box();
+  ok('Duo open, upright: picture, one thin row, chat', b.stage.w === 669 && b.info.h <= 46 && near(b.info.y, b.stage.b) && near(b.side.y, b.info.b) && !b.tabs, JSON.stringify([b.stage, b.info, b.side]));
+  await page.screenshot({ path: 'fixes-duo-upright.png', timeout: 8000 }).catch(() => {});
+  await shape(390, 844, { top: 59, bottom: 34 });
+  b = await box();
+  ok('a phone upright: the same', b.stage.w === 390 && b.info.h <= 46 && !b.tabs, JSON.stringify([b.stage, b.info]));
+  await page.screenshot({ path: 'fixes-phone.png', timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => document.getElementById('watch').classList.remove('nochat'));
+  await shape(844, 390, { left: 59, right: 59, bottom: 21 });
+  b = await box();
+  ok('a phone on its side: picture and chat side by side, no row', b.side && b.side.x >= b.stage.r - 1 && !b.info && b.stage.h >= 200, JSON.stringify([b.stage, b.side]));
+  await page.evaluate(() => { document.getElementById('stage').classList.add('ui'); document.getElementById('hudName').click(); }); await sleep(300);
+  b = await box();
+  ok('there the name in the controls opens the channel', !!b.tabs && !!b.info, JSON.stringify(b.tabs));
+  await page.click('#bChanX'); await sleep(200);
+  await shape(1440, 900, {});
+  b = await box();
+  ok('a desktop window: side by side', b.side && b.side.x >= b.stage.r - 1 && b.stage.w > 900, JSON.stringify([b.stage, b.side]));
+  await page.evaluate(() => document.getElementById('watch').classList.add('nochat')); await sleep(200);
+  b = await box();
+  ok('and chat can still be hidden there', !b.side, JSON.stringify(b.side));
   await done();
 }
 

@@ -1,4 +1,4 @@
-// usage: node ui.mjs home|watch|clip|replay|signin|irc|offline [live channel]. Screenshots land in the current folder.
+// usage: node ui.mjs home|watch|replay|signin|irc|offline [live channel]. Screenshots land in the current folder.
 // UI scenarios in headless Chrome. Twitch's sign-in endpoints are mocked; everything else is real.
 import { chromium } from 'playwright-core';
 import http from 'http'; import fs from 'fs'; import path from 'path';
@@ -73,14 +73,17 @@ if (which === 'all' || which === 'watch') {
   ok('chat opens with history', s.old > 0, `${s.old} old of ${s.lines}`);
   ok('joined the room', !!s.room);
   await page.screenshot({ path: 'ui-watch.png' });
-  for (const t of ['vods', 'clips', 'about']) {
+  ok('under the picture: only the channel’s name and chat', await page.evaluate(() => { const gone = s => { const n = document.querySelector(s); return !n || !n.offsetParent; }; return gone('.tabs') && gone('#bFollow') && gone('#iTitle') && ![...document.querySelectorAll('a[href*="twitch.tv"]')].some(x => x.offsetParent && !x.closest('#chat')) && !document.querySelector('[data-pane=clips]'); }));
+  await page.click('#bChan'); await sleep(300);
+  for (const t of ['vods', 'about']) {
     await page.click(`.tabs [data-pane=${t}]`); await sleep(1800);
     const txt = await page.$eval(`#pane${t[0].toUpperCase() + t.slice(1)}`, x => x.textContent.slice(0, 90));
     ok(`${t} tab fills`, txt.length > 10 && !/Couldn/.test(txt), txt);
     await page.screenshot({ path: `ui-${t}.png` });
   }
   // a chatter's card
-  await page.click('.tabs [data-pane=chat]'); await sleep(300);
+  await page.click('#bChanX'); await sleep(300);
+  ok('the x goes back to chat', await page.evaluate(() => !document.getElementById('watch').classList.contains('chan') && !document.getElementById('paneChat').hidden));
   const hasName = await page.$('#chat .m .n');
   if (hasName) { await hasName.click(); await sleep(900); ok('tapping a name opens the card', !(await page.$eval('#sheet', x => x.hidden))); await page.screenshot({ path: 'ui-card.png' }); await page.evaluate(() => document.getElementById('scrim').click()); }
   // settings sheet
@@ -89,25 +92,6 @@ if (which === 'all' || which === 'watch') {
   ok('stats panel', /Behind live/.test(stats) && /Picture/.test(stats), stats.slice(0, 160));
   await page.screenshot({ path: 'ui-sheet.png' });
   await page.evaluate(() => document.getElementById('scrim').click());
-  ok('no page errors', page.errors.length === 0, page.errors.join(' | '));
-  await c.close();
-}
-
-if (which === 'all' || which === 'clip') {
-  const { c, page } = await ctx(900, 1000, false);
-  await page.goto(base + `?c=${CH}`); await sleep(2500);
-  await page.click('.tabs [data-pane=clips]'); await page.waitForSelector('#clips a.vod', { timeout: 10000 }).catch(() => {});
-  let first = await page.$('#clips a.vod');
-  if (!first) { await page.click('#clips .pchips button:nth-child(2)'); await page.waitForSelector('#clips a.vod', { timeout: 10000 }).catch(() => {}); first = await page.$('#clips a.vod'); }
-  ok('clips list', !!first);
-  if (first) {
-    await first.click(); await sleep(4500);
-    const s = await page.evaluate(() => { const v = document.getElementById('vCDN'); return { feed: wraith.P.feed, t: v.currentTime, h: v.videoHeight, paused: v.paused, url: !!v.currentSrc, err: v.error?.message, title: document.getElementById('iTitle').textContent }; });
-    ok('clip plays', s.feed === 'clip' && s.t > 0 && s.h > 0, JSON.stringify(s));
-    await page.screenshot({ path: 'ui-clip.png' });
-    await page.click('#bBack2'); await sleep(1000);
-    ok('back from a clip resumes the channel', /c=/.test(page.url()) && await page.evaluate(() => wraith.P.feed !== 'clip'));
-  }
   ok('no page errors', page.errors.length === 0, page.errors.join(' | '));
   await c.close();
 }
@@ -210,11 +194,20 @@ if (which === 'all' || which === 'signin') {
   await page.evaluate(ch => document.querySelector(`a[href="?c=${ch}"]`)?.click() ?? history.pushState(null, '', `?c=${ch}`), CH);
   await page.goto(base + `?c=${CH}`); await sleep(5000);
   ok('send box shows', !(await page.$eval('#sayTx', x => x.hidden)) && (await page.$eval('#signin', x => x.hidden)));
-  ok('follow button says Following', (await page.$eval('#bFollow', x => x.textContent)) === 'Following' && !(await page.$eval('#bFollow', x => x.hidden)));
+  ok('no follow button until the channel is open', !(await page.isVisible('#bFollow')));
+  await page.click('#bChan'); await sleep(300);
+  ok('follow button says Following', (await page.$eval('#bFollow', x => x.textContent)) === 'Following' && await page.isVisible('#bFollow'));
+  await page.click('#bFollow'); await sleep(300);
+  const asked = await page.$eval('#sheetBody', x => x.textContent);
+  ok('one tap only asks', /Unfollow .*\?/i.test(asked) && (await page.$eval('#bFollow', x => x.textContent)) === 'Following' && await page.evaluate(ch => wraith.Me.follows.includes(ch), CH), asked);
+  await page.click('#sheetBody .opt:nth-child(2)'); await sleep(300);
+  ok('keep following keeps it', (await page.$eval('#bFollow', x => x.textContent)) === 'Following' && await page.evaluate(ch => wraith.Me.follows.includes(ch), CH) && await page.$eval('#sheet', x => x.hidden));
+  await page.click('#bFollow'); await sleep(300);
+  await page.click('#sheetBody .opt:nth-child(1)'); await sleep(400);
+  ok('unfollow works once confirmed', (await page.$eval('#bFollow', x => x.textContent)) === 'Follow' && await page.evaluate(ch => !wraith.Me.follows.includes(ch), CH));
   await page.click('#bFollow'); await sleep(400);
-  ok('unfollow works', (await page.$eval('#bFollow', x => x.textContent)) === 'Follow' && await page.evaluate(ch => !wraith.Me.follows.includes(ch), CH));
-  await page.click('#bFollow'); await sleep(400);
-  ok('follow works', (await page.$eval('#bFollow', x => x.textContent)) === 'Following');
+  ok('follow is one tap', (await page.$eval('#bFollow', x => x.textContent)) === 'Following' && await page.$eval('#sheet', x => x.hidden));
+  await page.click('#bChanX'); await sleep(300);
   await page.fill('#sayTx', 'hello there'); await page.press('#sayTx', 'Enter'); await sleep(500);
   ok('message goes through the API', sent.some(s => s.message === 'hello there' && s.sender_id === '212375133'));
   ok('box clears after sending', (await page.$eval('#sayTx', x => x.value)) === '');

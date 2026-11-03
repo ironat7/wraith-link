@@ -167,24 +167,35 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 38px; padding: 0 16px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line-2); font-size: 14px; font-weight: 600; color: var(--fg); }
 .btn.pri { background: var(--fg); color: #000; border-color: transparent; }
 .btn:active { opacity: .8; }
-.info { display: flex; align-items: center; gap: 12px; padding: 11px max(14px, var(--sar)) 11px max(8px, var(--sal)); background: var(--bg); border-bottom: 1px solid var(--line); }
-.info .cb { color: var(--fg-2); width: 36px; margin-right: -4px; }
-.info .av { width: 40px; height: 40px; }
-.info .meta { flex: 1; }
-.info .nm { font-size: 16px; }
-.info .tt { -webkit-line-clamp: 1; margin-top: 1px; }
-.info .gm { margin-top: 2px; }
-.fl { flex: none; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--fg); color: #000; font-size: 13.5px; font-weight: 600; }
+/* the channel under the picture: one thin row, the rest of it a tap away */
+.info { display: flex; align-items: center; gap: 4px; padding: 2px max(10px, var(--sar)) 2px max(4px, var(--sal)); background: var(--bg); border-bottom: 1px solid var(--line); }
+.info .cb { color: var(--fg-2); width: 36px; height: 40px; }
+.who { flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px; height: 40px; text-align: left; border-radius: 10px; }
+.who:active { opacity: .7; }
+.info .av { width: 28px; height: 28px; }
+.info .meta { flex: 1; display: flex; align-items: baseline; gap: 8px; }
+.info .nm { flex: none; max-width: 60%; font-size: 15px; }
+.info .tt { display: none; }
+.info .gm { flex: 1; min-width: 0; margin: 0; }
+.fl { display: none; flex: none; height: 34px; padding: 0 14px; border-radius: 999px; background: var(--fg); color: #000; font-size: 13.5px; font-weight: 600; }
 .fl.on { background: var(--bg-2); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line-2); }
 .fl:disabled { opacity: .5; }
+#watch.chan .info { gap: 8px; padding-top: 9px; padding-bottom: 9px; }
+#watch.chan .who { height: auto; }
+#watch.chan .info .av { width: 40px; height: 40px; }
+#watch.chan .info .meta { display: block; }
+#watch.chan .info .nm { max-width: none; font-size: 16px; }
+#watch.chan .info .tt { display: -webkit-box; -webkit-line-clamp: 1; margin-top: 1px; }
+#watch.chan .info .gm { margin-top: 2px; }
+#watch.chan .fl:not([hidden]) { display: block; }
 #bChat2 { display: none; }
 @media (orientation: landscape) and (min-width: 640px) { #watch.vodw #bChat2 { display: grid; } }
 .side { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
-.tabs { display: flex; align-items: center; gap: 6px; padding: 8px max(12px, var(--sar)) 8px max(12px, var(--sal)); border-bottom: 1px solid var(--line); }
-.tabs button { height: 32px; padding: 0 12px; border-radius: 999px; color: var(--fg-2); font-size: 13.5px; font-weight: 600; }
-.tabs button.on { background: var(--bg-2); color: var(--fg); }
-.tw { display: flex; align-items: center; gap: 5px; height: 32px; padding: 0 6px; color: var(--fg-3); font-size: 13px; }
-.tw svg { width: 15px; height: 15px; }
+.tabs { display: none; align-items: center; gap: 6px; padding: 8px max(12px, var(--sar)) 8px max(12px, var(--sal)); border-bottom: 1px solid var(--line); }
+#watch.chan .tabs { display: flex; }
+.tabs [data-pane] { height: 32px; padding: 0 12px; border-radius: 999px; color: var(--fg-2); font-size: 13.5px; font-weight: 600; }
+.tabs [data-pane].on { background: var(--bg-2); color: var(--fg); }
+.tabs .cb { width: 36px; height: 32px; color: var(--fg-2); }
 .pane { position: relative; flex: 1; min-height: 0; }
 #paneChat { display: flex; flex-direction: column; }
 .log { position: relative; flex: 1; min-height: 0; }
@@ -246,9 +257,6 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .vod .thumb { border-radius: 8px; }
 .vod .tt { margin-top: 0; color: var(--fg); font-size: 14px; }
 .pr { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--live); }
-.pchips { display: flex; gap: 6px; margin-bottom: 8px; }
-.pchips button { height: 30px; padding: 0 12px; border-radius: 999px; color: var(--fg-2); font-size: 13px; font-weight: 600; }
-.pchips button.on { background: var(--bg-2); color: var(--fg); }
 .facts { color: var(--fg-2); font-size: 13.5px; font-weight: 600; }
 .desc { margin-top: 10px; color: var(--fg); font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-line; }
 .desc.dim { color: var(--fg-3); font-size: 13px; }
@@ -257,17 +265,59 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .st { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .04em; line-height: 16px; vertical-align: 1px; background: var(--bg-3); color: var(--fg-2); }
 .st.lv { background: var(--live); color: #fff; }
 
-/* any screen wider than tall with room for both (a phone on its side, an unfolded screen, a
-   desktop window): video on the left, chat docked on the right */
+/* a screen with room for both (a phone on its side, a desktop window): video on the left, the panel docked on the right */
 @media (orientation: landscape) and (min-width: 640px) {
   #watch { flex-direction: row; }
   .main { flex: 1; min-height: 0; justify-content: center; }   /* picture and channel row as one block */
-  .stage { flex: none; max-height: calc(100% - 64px); }
+  .stage { flex: none; max-height: calc(100% - 46px); }
+  #watch.chan .stage { max-height: calc(100% - 78px); }
   .side { flex: none; width: clamp(300px, 32vw, 380px); border-left: 1px solid var(--line); }
-  #watch.nochat .side { display: none; }
 }
+@media (orientation: landscape) and (min-aspect-ratio: 8/5) { #watch.nochat:not(.chan) .side { display: none; } }
 /* short screens give the channel row's height to the picture, except on videos, where it holds the only way back */
-@media (orientation: landscape) and (max-height: 560px) { #watch:not(.vodw) .info { display: none; } #watch:not(.vodw) .stage { max-height: 100%; } }
+@media (orientation: landscape) and (max-height: 560px) and (min-aspect-ratio: 8/5) { #watch:not(.vodw, .chan) .info { display: none; } #watch:not(.vodw, .chan) .stage { max-height: 100%; } }
+/* A screen too square for that, like the inner screen of an iPhone Duo (951×669, with 84 down one side for iOS's status
+   pill and clock), would be a third black. So the picture fills the width beside that strip and stays there, with a strip
+   along the bottom: chat or the channel on the left, the box or the channel's tabs on the right, the channel row above
+   those. Chat costs the picture nothing here, so there's no hiding it. With the keyboard up it goes back to side by side,
+   which is what fits above it. */
+@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) {
+  #watch { container-type: size; --col: min(300px, 38cqw); }
+  #watch:not(.kb) { flex-direction: column; }
+  #watch:not(.kb) .main { flex: none; justify-content: flex-start; }
+  #watch:not(.kb, .full) .stage { max-height: none; margin-left: var(--sal); width: min(calc(100cqw - var(--sar) - var(--sal)), calc((100cqh - 150px) * 16 / 9)); }
+  #watch:not(.kb) .bar { padding-left: 6px; padding-right: 6px; }
+  #watch:not(.kb) .unmute { right: 12px; }
+  #watch:not(.kb) .side { flex: 1; width: auto; min-height: 0; border-left: 0; border-top: 1px solid var(--line); }
+  #watch:not(.kb) #paneChat { display: grid; grid-template-columns: minmax(0, 1fr) var(--col); grid-template-rows: minmax(0, 1fr) auto auto auto; }
+  #watch:not(.kb) .log { grid-column: 1; grid-row: 1 / -1; border-right: 1px solid var(--line); }
+  #watch:not(.kb) .chat { padding-bottom: max(10px, calc(var(--sab) - 14px)); }
+  #watch:not(.kb) .m { padding-right: 14px; }
+  #watch:not(.kb) .rpb, #watch:not(.kb) .ac, #watch:not(.kb) .say { grid-column: 2; position: relative; z-index: 1; background: var(--bg); }
+  #watch:not(.kb) .rpb { grid-row: 2; }
+  #watch:not(.kb) .ac { grid-row: 3; }
+  #watch:not(.kb) .say { grid-row: 4; border-top: 0; padding: 8px 16px 14px 10px; }
+  #watch:not(.kb) .ep { position: absolute; z-index: 2; right: 0; bottom: 62px; width: min(360px, 45cqw); height: min(60cqh, 360px); border: 1px solid var(--line); border-right: 0; border-radius: 12px 0 0 0; }
+  #watch:not(.kb) .info { position: absolute; z-index: 1; right: 0; bottom: 8px; width: var(--col); padding: 0 12px 0 4px; border: 0; background: none; }
+  #watch:not(.kb):has(#paneChat.talk) .info, #watch.chan:not(.kb) .info { bottom: 62px; }
+  /* the channel, in chat's place */
+  #watch:not(.kb) #paneVods, #watch:not(.kb) #paneAbout { margin-right: var(--col); border-right: 1px solid var(--line); }
+  #watch:not(.kb) .vods { padding: 8px 14px 8px max(14px, var(--sal)); }
+  #watch:not(.kb) #vods { display: grid; grid-auto-flow: column; grid-auto-columns: 290px; grid-template-rows: repeat(auto-fill, 72px); gap: 0 12px; align-content: start; overflow: auto hidden; }
+  #watch:not(.kb) #vods .vod { grid-template-columns: 112px minmax(0, 1fr); gap: 10px; padding: 4px 0; }
+  #watch:not(.kb) #vods .note { grid-row: 1; }
+  #watch:not(.kb) .tabs { position: absolute; right: 0; bottom: 0; width: var(--col); height: 62px; padding: 8px 16px 14px 10px; border: 0; }
+  #bChat, #watch.vodw #bChat2 { display: none; }
+}
+/* where that strip is tall, the row has room above the box for all of it */
+@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (min-height: 600px) {
+  #watch:not(.kb) .who { height: auto; }
+  #watch:not(.kb) .info .av { width: 40px; height: 40px; }
+  #watch:not(.kb) .info .meta { display: block; }
+  #watch:not(.kb) .info .nm { max-width: none; font-size: 15px; }
+  #watch:not(.kb) .info .tt { display: -webkit-box; -webkit-line-clamp: 2; margin-top: 1px; font-size: 13px; }
+  #watch:not(.kb) .info .gm { margin-top: 2px; }
+}
 @media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
 /* fullscreen with nothing to hand to iOS's player yet: the player fills the screen (see UI.fill) */
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; max-height: none; aspect-ratio: auto; }
@@ -372,20 +422,20 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
     </div>
     <div class="info">
       <button class="cb" id="bBack2" type="button" aria-label="Back" data-i="back"></button>
-      <img class="av" id="iAv" alt="">
-      <div class="meta"><div class="nm" id="iName"></div><div class="tt" id="iTitle"></div><div class="gm" id="iSub"></div></div>
+      <button class="who" id="bChan" type="button" aria-label="Channel">
+        <img class="av" id="iAv" alt="">
+        <div class="meta"><div class="nm" id="iName"></div><div class="tt" id="iTitle"></div><div class="gm" id="iSub"></div></div>
+      </button>
       <button class="fl" id="bFollow" type="button" hidden>Follow</button>
       <button class="cb" id="bChat2" type="button" aria-label="Show or hide the side panel" data-i="chat"></button>
     </div>
   </div>
   <aside class="side">
     <nav class="tabs">
-      <button type="button" class="on" data-pane="chat">Chat</button>
       <button type="button" data-pane="vods">Videos</button>
-      <button type="button" data-pane="clips">Clips</button>
       <button type="button" data-pane="about">About</button>
       <span class="sp"></span>
-      <a class="tw" id="twLink" target="_blank" rel="noopener">Twitch <span data-i="ext"></span></a>
+      <button class="cb" id="bChanX" type="button" aria-label="Back to chat" data-i="x"></button>
     </nav>
     <div class="pane" id="paneChat">
       <div class="log"><div class="chat" id="chat"></div><button class="more" id="more" type="button" hidden>New messages</button></div>
@@ -400,7 +450,6 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
       </form>
     </div>
     <div class="pane" id="paneVods" hidden><div class="vods" id="vods"></div></div>
-    <div class="pane" id="paneClips" hidden><div class="vods" id="clips"></div></div>
     <div class="pane" id="paneAbout" hidden><div class="vods" id="about"></div></div>
   </aside>
 </main>
@@ -449,7 +498,6 @@ const PATHS = {
   unfull: '<path d="M9 4v4a1 1 0 0 1-1 1H4M15 4v4a1 1 0 0 0 1 1h4M20 15h-4a1 1 0 0 0-1 1v4M4 15h4a1 1 0 0 1 1 1v4"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
-  ext: '<path d="M14 5h5v5M19 5l-8 8M17 14v4a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h4"/>',
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   chat: '<path d="M5 5h14a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-8l-4 3v-3H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/>',
@@ -758,7 +806,7 @@ const P = {
   gen: 0, login: null, user: null, hls: null, tokenP: null, liveRun: 0,
   playerType: PLAYER_TYPES.includes(store.get('playerType', '')) ? store.get('playerType', '') : PLAYER_TYPES[0],
   dodged: new Set(), dodging: false,  // kinds of session already tried on this ad break
-  feed: null,                        // what's on screen: 'live' | 'cdn' | 'vod' | 'clip'
+  feed: null,                        // what's on screen: 'live' | 'cdn' | 'vod'
   pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
   cap: 0, capWait: 180e3, lastStall: 0,   // renditions below the pick that buffering has forced, for this stream only
@@ -785,7 +833,7 @@ const P = {
       if (gen !== this.gen) return;
       if (!u) return UI.msg(null, `No channel called “${login}”`, 'Check the spelling and try again.');
       this.user = u;
-      UI.info(u); Recent.add(u); Chat.channel(u.id); Vods.channel(u.login); Clips.channel(u.login); About.channel(u.login);
+      UI.info(u); Recent.add(u); Chat.channel(u.id); Vods.channel(u.login); About.channel(u.login);
       if (!u.stream) { UI.offline(u); return this.awaitLive(); }
       this.start = Date.parse(u.stream.createdAt) / 1000;
       this.base = await cdnBase(u);
@@ -811,7 +859,7 @@ const P = {
         return this.open(v.owner.login, false);
       }
       this.vod = v;
-      UI.vodInfo(v); Vods.channel(v.owner?.login); Clips.channel(v.owner?.login); About.channel(v.owner?.login);
+      UI.vodInfo(v); Vods.channel(v.owner?.login); About.channel(v.owner?.login);
       Chat.loadGlobal();
       if (v.owner?.id) Chat.channel(v.owner.id);
       const base = cdnPath(v.seekPreviewsURL);
@@ -833,33 +881,6 @@ const P = {
       this.nextVodSource();
     } catch (e) {
       if (gen === this.gen) UI.msg(null, 'Couldn’t load the video', e.message, () => this.openVod(id));
-    }
-  },
-
-  async openClip(slug, gesture) {
-    this.close();
-    const gen = ++this.gen;
-    if (gesture) unlock();
-    UI.watch(null);
-    Chat.box.textContent = '';
-    Chat.note('Clips don’t have chat.');
-    try {
-      const d = await gql(`query($s: ID!) { clip(slug: $s) { slug title viewCount createdAt game { displayName } curator { displayName } broadcaster { id login displayName profileImageURL(width: 150) } videoQualities { quality sourceURL } playbackAccessToken(params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) { signature value } } }`, { s: slug });
-      if (gen !== this.gen) return;
-      const c = d.clip, best = c?.videoQualities?.slice().sort((a, b) => parseFloat(b.quality) - parseFloat(a.quality))[0];
-      if (!best) return UI.msg(null, 'Clip not found', 'It may have been deleted.');
-      UI.clipInfo(c); Vods.channel(c.broadcaster?.login); Clips.channel(c.broadcaster?.login); About.channel(c.broadcaster?.login);
-      Tabs.show('clips');
-      this.feed = 'clip';
-      stage.classList.add('vod'); $('watch').classList.add('vodw');
-      vC.controls = true;
-      vL.classList.add('off'); vC.classList.remove('off');
-      const t = c.playbackAccessToken, u = `${best.sourceURL}?${new URLSearchParams({ sig: t?.signature || '', token: t?.value || '' })}`;
-      vC.dataset.url = u; vC.src = u;
-      UI.spin(true);
-      this.play(vC);
-    } catch (e) {
-      if (gen === this.gen) UI.msg(null, 'Couldn’t load the clip', e.message, () => this.openClip(slug));
     }
   },
 
@@ -1124,7 +1145,7 @@ const P = {
   tick() {
     UI.lat();
     const v = this.active(), now = Date.now();
-    if (!v || this.feed === 'vod' || this.feed === 'clip') return;
+    if (!v || this.feed === 'vod') return;
     this.watch(v, now);
     if (v.paused) return;
     // a picked quality stays picked, whatever hls.js decides after an error
@@ -1491,7 +1512,6 @@ for (const v of [vL, vC]) {
 vC.addEventListener('loadedmetadata', () => { if (P.seekPending && P.feed === 'cdn') P.cdnSeek(); });
 vC.addEventListener('error', () => {
   if (!vC.dataset.url) return;
-  if (P.feed === 'clip') return UI.msg(null, 'The clip wouldn’t play', 'Twitch’s CDN refused it.');
   if (P.feed === 'vod') {
     if (P.nextVodSource()) return;   // that copy didn't take: try the next
     return cdnLive ? UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.') : UI.needsSafari(`https://www.twitch.tv/videos/${P.vod.id}`, true);
@@ -2516,54 +2536,12 @@ const Vods = {
     }
   },
 };
-for (const id of ['vods', 'clips']) $(id).addEventListener('click', e => {
+$('vods').addEventListener('click', e => {
   const a = e.target.closest('a.vod');
   if (!a) return;
   e.preventDefault();
   go(a.getAttribute('href'), true);
 });
-
-const Clips = {
-  login: null, loaded: null, period: store.get('clipPeriod', 'LAST_WEEK'),
-  PERIODS: [['LAST_WEEK', '7 days'], ['LAST_MONTH', '30 days'], ['ALL_TIME', 'All time']],
-  channel(login) { this.login = login; this.loaded = null; if (!$('paneClips').hidden) this.load(); },
-  async load() {
-    const login = this.login, box = $('clips'), key = login + this.period;
-    if (!login || this.loaded === key) return;
-    this.loaded = key;
-    box.textContent = '';
-    const chips = el('div', 'pchips');
-    for (const [id, label] of this.PERIODS) {
-      const b = el('button', id === this.period ? 'on' : '', label); b.type = 'button';
-      b.onclick = () => { this.period = id; store.set('clipPeriod', id); this.load(); };
-      chips.append(b);
-    }
-    const list = el('div');
-    list.append(el('p', 'note', 'Loading…'));
-    box.append(chips, list);
-    try {
-      const d = await gql(`query($l: String!) { user(login: $l) { clips(first: 40, criteria: { period: ${this.period} }) { edges { node { slug title viewCount durationSeconds createdAt thumbnailURL(width: 320, height: 180) curator { displayName } game { displayName } } } } } }`, { l: login });
-      if (this.loaded !== key) return;
-      const clips = (d.user?.clips?.edges || []).map(e => e.node);
-      list.textContent = '';
-      if (!clips.length) return list.append(el('p', 'note', 'No clips from this stretch.'));
-      for (const c of clips) {
-        const a = el('a', 'vod'); a.href = `?clip=${encodeURIComponent(c.slug)}`;
-        const th = el('div', 'thumb'), bits = [`${count(c.viewCount)} views`, ago(c.createdAt), c.curator?.displayName && `by ${c.curator.displayName}`];
-        th.append(pic(c.thumbnailURL), el('span', 'vc r', clock(c.durationSeconds)));
-        const meta = el('div', 'meta');
-        meta.append(el('div', 'tt', c.title || 'Untitled'), el('div', 'gm', bits.filter(Boolean).join(' · ')));
-        a.append(th, meta);
-        list.append(a);
-      }
-    } catch (e) {
-      if (this.loaded !== key) return;
-      this.loaded = null; list.textContent = '';
-      const p = el('p', 'note', 'Couldn’t load clips. '), b = el('button', null, 'Retry'); b.type = 'button'; b.onclick = () => this.load();
-      p.append(b); list.append(p);
-    }
-  },
-};
 
 const About = {
   login: null, loaded: null,
@@ -2601,20 +2579,23 @@ const About = {
   },
 };
 
+// Chat is what shows. A tap on the channel opens its videos and about, and the follow button with them.
 const Tabs = {
   show(name) {
+    $('watch').classList.toggle('chan', name !== 'chat');
     document.querySelectorAll('.tabs [data-pane]').forEach(b => b.classList.toggle('on', b.dataset.pane === name));
     $('paneChat').hidden = name !== 'chat';
     $('paneVods').hidden = name !== 'vods';
-    $('paneClips').hidden = name !== 'clips';
     $('paneAbout').hidden = name !== 'about';
     if (name === 'vods') Vods.load();
-    if (name === 'clips') Clips.load();
     if (name === 'about') About.load();
     if (name === 'chat' && Chat.stick) Chat.box.scrollTop = Chat.box.scrollHeight;
   },
+  toggle() { this.show($('watch').classList.contains('chan') ? 'chat' : 'vods'); },
 };
 document.querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('[data-pane]'); if (b) Tabs.show(b.dataset.pane); });
+$('bChan').onclick = () => Tabs.toggle();
+$('bChanX').onclick = () => Tabs.show('chat');
 
 // ── watch screen ────────────────────────────────────
 let hudTimer = 0, toastTimer = 0;
@@ -2623,7 +2604,6 @@ const UI = {
     Pages.tell('play');
     $('home').hidden = true; $('watch').hidden = false;
     document.title = (u?.displayName || login || 'Video') + ' · Wraith';
-    $('twLink').href = 'https://www.twitch.tv/' + (login || '');
     if (u) this.info(u);
     else { $('iName').textContent = login || ''; $('iTitle').textContent = ''; $('iSub').textContent = ''; $('iAv').removeAttribute('src'); $('hudName').textContent = login || ''; $('hudSub').textContent = ''; this.owner(null); }
     Tabs.show('chat');
@@ -2635,10 +2615,9 @@ const UI = {
     $('iName').textContent = u.displayName || u.login;
     $('iTitle').textContent = u.broadcastSettings?.title || '';
     const s = u.stream;
-    $('iSub').textContent = s ? [s.game?.displayName, `${count(s.viewersCount)} watching`, uptime(s.createdAt)].filter(Boolean).join(' · ') : 'Offline';
+    $('iSub').textContent = s ? [s.game?.displayName, count(s.viewersCount), uptime(s.createdAt)].filter(Boolean).join(' · ') : 'Offline';
     $('hudName').textContent = u.displayName || u.login;
     $('hudSub').textContent = s ? `· ${count(s.viewersCount)}` : '';
-    $('twLink').href = 'https://www.twitch.tv/' + u.login;
     document.title = (u.displayName || u.login) + ' · Wraith';
     this.owner(u);
     if ('mediaSession' in navigator && u.stream) {
@@ -2650,22 +2629,11 @@ const UI = {
     $('iName').textContent = v.owner?.displayName || '';
     $('iTitle').textContent = v.title || '';
     $('iSub').textContent = [day(v.createdAt), dur(v.lengthSeconds), v.game?.displayName].filter(Boolean).join(' · ');
-    $('twLink').href = `https://www.twitch.tv/videos/${v.id}`;
     document.title = (v.title || 'Video') + ' · Wraith';
     this.owner(v.owner);
     if ('mediaSession' in navigator) {
       try { navigator.mediaSession.metadata = new MediaMetadata({ title: v.title || 'Past broadcast', artist: v.owner?.displayName || '', artwork: v.owner?.profileImageURL ? [{ src: v.owner.profileImageURL, sizes: '150x150' }] : [] }); } catch {}
     }
-  },
-  clipInfo(c) {
-    const b = c.broadcaster;
-    $('iAv').src = b?.profileImageURL || '';
-    $('iName').textContent = b?.displayName || '';
-    $('iTitle').textContent = c.title || '';
-    $('iSub').textContent = [`${count(c.viewCount)} views`, ago(c.createdAt), c.curator?.displayName && `clipped by ${c.curator.displayName}`].filter(Boolean).join(' · ');
-    $('twLink').href = `https://clips.twitch.tv/${c.slug}`;
-    document.title = (c.title || 'Clip') + ' · Wraith';
-    this.owner(b);
   },
   // Who the follow button is about, if you're signed in to use it.
   owner(u) {
@@ -2767,6 +2735,7 @@ function hud(on) {
 let lastTap = 0;
 stage.addEventListener('click', e => {
   if (e.target.closest('.msgbox')) return;
+  if (e.target.closest('.hudt')) { Tabs.toggle(); return hud(true); }
   if (e.target.closest('button,a,input')) return hud(true);
   const now = performance.now();
   if (now - lastTap < 300) {   // a double tap: fullscreen, without the controls the first tap brought up
@@ -2795,17 +2764,24 @@ $('bMute').onclick = () => { unlock(); Sound.set(!Sound.muted); };
 $('vol').addEventListener('input', e => { Sound.setLevel(+e.target.value, true); hud(true); });
 $('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); };
 $('bBack').onclick = $('bBack2').onclick = () => back();
-$('bFollow').onclick = async () => {
-  const u = UI.chan, on = !Me.following(u?.login);
-  if (!u) return;
+async function follow(u, on) {
   $('bFollow').disabled = true;
   try { await Me.setFollow(u, on); UI.toast(on ? `Following ${u.displayName}` : `Unfollowed ${u.displayName}`); }
   catch (e) { UI.toast(`Twitch didn’t take it (${e.message})`); }
   $('bFollow').disabled = false;
   UI.owner();
+}
+$('bFollow').onclick = () => {
+  const u = UI.chan;
+  if (!u) return;
+  if (!Me.following(u.login)) return follow(u, true);
+  Sheet.show(body => Sheet.group(body, `Unfollow ${u.displayName}?`, [
+    { label: 'Unfollow', pick: () => { Sheet.close(); follow(u, false); } },
+    { label: 'Keep following', pick: () => Sheet.close() },
+  ]));
 };
 $('watch').classList.toggle('nochat', !store.get('sideChat', false));   // side chat: hidden until you show it, then as you left it
-$('bChat').onclick = $('bChat2').onclick = () => store.set('sideChat', !$('watch').classList.toggle('nochat'));
+$('bChat').onclick = $('bChat2').onclick = () => { Tabs.show('chat'); store.set('sideChat', !$('watch').classList.toggle('nochat')); };
 $('bLat').onclick = $('bSet').onclick = () => Sheet.open();
 $('bFull').onclick = () => {
   if ($('watch').classList.contains('full')) return UI.fill(false);
@@ -2858,7 +2834,7 @@ const Sheet = {
     body.append(box);
   },
   playback(body) {
-    const live = P.user?.stream, past = P.feed === 'vod' || P.feed === 'clip';
+    const live = P.user?.stream, past = P.feed === 'vod';
     if (!past) this.group(body, 'Feed', [
       { label: 'Low latency', desc: `About ${TARGET.live} s behind. Ads are cut out${cdnLive ? '; during a break you watch the ad-free feed' : ''}.`,
         on: P.pref === 'live', disabled: P.subOnly, pick: () => P.setPref('live') },
@@ -2888,7 +2864,7 @@ const Sheet = {
     if (!s || !this.fn || !P.feed) return;
     const v = P.active(), l = P.latency(), lines = [];
     const lvl = P.hls?.levels?.[P.hls.currentLevel];
-    lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : { live: 'low-latency feed', cdn: 'CDN feed', vod: 'past broadcast', clip: 'clip' }[P.feed]}`);
+    lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : { live: 'low-latency feed', cdn: 'CDN feed', vod: 'past broadcast' }[P.feed]}`);
     if (l != null) lines.push(`Behind live: ${l.toFixed(1)} s${P.feed === 'live' ? ` (aiming for ${P.liveT} s)` : ''}`);
     if (v && v.videoHeight) lines.push(`Picture: ${v.videoWidth}×${v.videoHeight}${lvl ? ` · ${(lvl.bitrate / 1e6).toFixed(1)} Mbps · ${lvl.details?.fragments?.[0]?.initSegment ? 'fMP4' : 'TS'}` : ''}${v.playbackRate !== 1 ? ` · speed ${v.playbackRate}×` : ''}`);
     if (P.cap) lines.push(`Held ${P.cap} step${P.cap > 1 ? 's' : ''} below your pick after buffering`);
@@ -3136,10 +3112,9 @@ const Search = {
   },
   submit() {
     const raw = $('q').value.trim(), picked = $('sgl').children[this.at] || null;
-    const video = raw.match(/twitch\.tv\/(?:\w+\/)?videos?\/(\d+)/), clip = raw.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/\w+\/clip\/)([\w-]+)/);
+    const video = raw.match(/twitch\.tv\/(?:\w+\/)?videos?\/(\d+)/);
     let url = picked?.getAttribute('href');
     if (!url && video) url = `?v=${video[1]}`;
-    if (!url && clip) url = `?clip=${clip[1]}`;
     if (!url && validLogin(norm(raw))) url = `?c=${norm(raw)}`;
     if (!url) url = $('sgl').firstElementChild?.getAttribute('href');
     if (!url) { $('q').focus(); return; }
@@ -3197,11 +3172,10 @@ let depth = 0;
 history.scrollRestoration = 'manual';
 function route(gesture) {
   const q = new URLSearchParams(location.search);
-  const c = norm(q.get('c') || q.get('channel') || ''), v = q.get('v'), clip = q.get('clip'), g = q.get('g');
+  const c = norm(q.get('c') || q.get('channel') || ''), v = q.get('v'), g = q.get('g');
   if (Sheet && !$('sheet').hidden) Sheet.close();
   if (validLogin(c)) P.open(c, gesture, Home.find(c));
   else if (/^\d+$/.test(v || '')) P.openVod(v, gesture);
-  else if (clip) P.openClip(clip, gesture);
   else {
     P.close();
     $('watch').hidden = true; $('home').hidden = false;
@@ -3230,7 +3204,7 @@ Me.save(Me.acct);
 Me.check();
 Me.sync();
 setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, Clips, UI, Card, Picker };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);
