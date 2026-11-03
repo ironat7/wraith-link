@@ -968,9 +968,10 @@ if (want('relay')) {
   const DVR = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:VOD\n' + Array.from({ length: 300 }, (_, i) => `#EXTINF:2.000,\n${i}.aac\n`).join('') + '#EXT-X-ENDLIST\n';
   const headers = { 'access-control-allow-origin': '*' }, never = () => {};
   const answer = route => { const u = route.request().url(); return route.fulfill({ status: 200, headers, body: u.includes('usher') ? MASTER : u.includes('audio') ? AUDIO() : MEDIA }).catch(never); };
-  const stage = async (relay, { sub = false, pick = false, copy } = {}) => {
+  const ago = s => new Date(Date.now() - s * 1000).toISOString();
+  const stage = async (relay, { sub = false, pick = false, copy, since = ago(3600) } = {}) => {
     const { page, done } = await open({ iphone: true, w: 390, h: 844, init: captureButtons });
-    const user = { id: '1', login: 'staged', displayName: 'Staged', broadcastSettings: { title: '' }, stream: { id: '1', createdAt: new Date(Date.now() - 36e5).toISOString(), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
+    const user = { id: '1', login: 'staged', displayName: 'Staged', broadcastSettings: { title: '' }, stream: { id: '1', createdAt: since, viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
     await page.addInitScript(p => { window.WebSocket = class { close() {} send() {} }; if (p) localStorage.setItem('wraith.feed', '"cdn"'); }, pick);
     await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
       const u = route.request().url(), b = route.request().postData() || '';
@@ -1041,9 +1042,9 @@ if (want('relay')) {
   // A stream the CDN has no copy of yet, in view: it's asked again before anything says there's none.
   const refused = async (how, run) => {
     const S = { up: false, asks: [] };
-    const { page, done } = await stage(never, { ...how, copy: u => { if (u.includes('chunked')) S.asks.push(Date.now()); return S.up; } });
+    const { page, done, user } = await stage(never, { since: ago(0), ...how, copy: u => { if (u.includes('chunked')) S.asks.push(Date.now()); return S.up; } });
     await page.waitForFunction(() => wraith.P.active()?.error, null, { timeout: 15000 }).catch(never);
-    await run(page, S);
+    await run(page, S, user);
     await done();
   };
   const asked = async (S, n) => { for (let i = 0; i < 400 && S.asks.length < n; i++) await sleep(100); };
@@ -1070,7 +1071,25 @@ if (want('relay')) {
         await sleep(13000);
         ok('and it stops asking', n === 3 && S.asks.length === n, `${S.asks.length} asks`);
       }),
+      refused({ ...how, since: ago(240) }, async (page, S) => {
+        await told(page);
+        const ms = Date.now() - S.asks[0], { msg } = await snd(page), { spin } = await st(page);
+        await sleep(13000);
+        ok(`${name} live for minutes that isn’t recorded: its message straight away, word for word, and no more asks`, ms < 5e3 && msg === words && !spin && S.asks.length === 1, `${ms} ms, ${S.asks.length} asks, spin ${spin}: ${msg}`);
+      }),
     ]),
+    ...[[ago(120), 'two minutes old'], [null, 'with no known start']].map(([since, name]) => refused({ sub: true, since }, async (page, S) => {
+      await told(page);
+      const ms = Date.now() - S.asks[0];
+      ok(`a stream ${name} still gets its asks first`, ms > 20e3 && ms < 30e3 && S.asks.length === 3, `${ms} ms, ${S.asks.length} asks`);
+    })),
+    refused({ sub: true }, async (page, S, user) => {
+      await sleep(3000);
+      user.stream = { ...user.stream, id: '2', createdAt: ago(240) };
+      await page.evaluate(() => wraith.P.open('staged'));
+      await asked(S, 2); await told(page); await sleep(13000);
+      ok('moving during the wait to a stream long live and not recorded: the old wait doesn’t ask as well', S.asks.length === 2, `${S.asks.map(a => a - S.asks[0])}`);
+    }),
     refused({ sub: true }, async (page, S) => {
       await vis(page, true); await sleep(14000);
       const s = await snd(page);

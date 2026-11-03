@@ -1272,7 +1272,7 @@ const P = {
     this.gen++;
     clearInterval(this.timer);
     BG.stop(true);
-    this.destroyHls(); this.stopCdn();
+    this.destroyHls(); this.stopCdn(); clearTimeout(vC.again);
     this.vodAudio?.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
     vC.controls = false; vL.pause(); vL.removeAttribute('src'); vL.load();
     Object.assign(this, { login: null, user: null, feed: null, groups: [], base: null, subOnly: false, ad: false, adEnd: 0,
@@ -1535,8 +1535,8 @@ vC.addEventListener('error', () => {
     return cdnLive ? UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.') : UI.needsSafari(`https://www.twitch.tv/videos/${P.vod.id}`, true);
   }
   if (P.cover) { P.cover = false; P.stopCdn(); P.show('live'); UI.spin(false); UI.banner(); return; }
-  // Twice, so about 25 s, before saying there's no copy. While away the sound does the asking, and coming back loads the picture again.
-  if (P.feed === 'cdn' && !BG.on && P.asks++ < 2) return askAgain(vC, () => { if (!BG.on) P.playCdn({ reload: true }); });
+  // In a stream's first 3 minutes, or with no start time to go by, twice, so about 25 s, before saying there's no copy. While away the sound does the asking, and coming back loads the picture again.
+  if (P.feed === 'cdn' && !BG.on && !(Date.now() / 1000 - P.start > 180) && P.asks++ < 2) return askAgain(vC, () => { if (!BG.on) P.playCdn({ reload: true }); });
   if (P.feed === 'cdn') UI.msg(null, 'The CDN feed isn’t available', P.subOnly ? 'This channel’s stream isn’t being recorded, so there is no ad-free copy to play.' : 'Try the low-latency feed instead.', P.subOnly ? null : () => P.setPref('live'));
 });
 vC.addEventListener('timeupdate', () => {
