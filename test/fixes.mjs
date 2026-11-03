@@ -198,7 +198,9 @@ if (want('misc')) {
   // a media error that keeps coming back ends in a restart, not a loop of recoveries
   const mediaError = () => page.evaluate(() => wraith.P.hls.trigger('hlsError', { type: 'mediaError', details: 'bufferAppendError', fatal: true }));
   await page.evaluate(() => { wraith.P.fixes = 0; wraith.P.retries = 0; window.__old = wraith.P.hls; });
-  for (let i = 0; i < 3; i++) { await mediaError(); await sleep(i < 2 ? 2500 : 200); }
+  await mediaError(); await playing(page, 8000);
+  ok('one recovery plays on by itself', await page.evaluate(() => wraith.P.fixes === 1 && wraith.P.hls === window.__old && !wraith.P.active().paused), JSON.stringify(await st(page)));
+  for (let i = 1; i < 3; i++) { await mediaError(); await sleep(i < 2 ? 2500 : 200); }
   ok('recoveries that don’t hold end in a restart', await page.evaluate(() => wraith.P.fixes === 3 && wraith.P.retries === 1), JSON.stringify(await page.evaluate(() => [wraith.P.fixes, wraith.P.retries])));
   await sleep(2500); await playing(page);
   ok('which plays', await page.evaluate(() => wraith.P.hls !== window.__old) && !(await st(page)).paused);
@@ -734,6 +736,10 @@ if (want('sound')) {
   await vis(page, true); await sounding(page);
   let s = await snd(page);
   ok('leaving the app hands over the sound', s.on && s.wanted && !s.paused && s.vPaused && s.vMuted, JSON.stringify(s));
+  await page.evaluate(() => wraith.BG.hls.trigger(Hls.Events.ERROR, { type: Hls.ErrorTypes.MEDIA_ERROR, details: 'bufferAppendError', fatal: true }));
+  await sounding(page);
+  s = await snd(page);
+  ok('a media error while away: the sound carries on', s.on && s.wanted && !s.paused, JSON.stringify(s));
 
   // another app takes the sound
   await page.evaluate(() => document.getElementById('aBG').pause()); await sleep(300);

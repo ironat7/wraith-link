@@ -971,7 +971,11 @@ const P = {
     this.noteErr(d);
     if (/too many times/i.test(String(d.response?.text || ''))) return this.fallback('The relay hit Google’s daily limit');
     if (!d.fatal) return;
-    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) { this.began = Date.now(); return this.hls.recoverMediaError(); }
+    if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) {   // the recovery reloads the video, which leaves it paused
+      this.began = Date.now(); this.hls.recoverMediaError();
+      if (this.feed === 'live') this.play(vL);
+      return;
+    }
     if (d.response?.code === 403 && d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) { this.subOnly = true; return this.fallback('Sub-only stream'); }
     this.restart();
   },
@@ -1317,7 +1321,7 @@ const BG = {
       h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly
         P.noteErr(d, 'background ');
         if (!d.fatal || this.hls !== h) return;
-        if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) h.recoverMediaError();
+        if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) { h.recoverMediaError(); if (this.wanted) aBG.play().catch(() => {}); }
         else setTimeout(() => { if (this.hls === h && this.wanted) h.startLoad(-1); }, 2000);
       });
       h.loadSource(P.audioUrl);
