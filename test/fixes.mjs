@@ -964,23 +964,26 @@ if (want('relay')) {
   // the audio_only feed: a live playlist of silence, two seconds a segment
   const AUDIO = () => { const n = Math.floor(Date.now() / 2000); return `200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:${n}\n` + [0, 1, 2, 3, 4, 5].map(i => `#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/${n + i}.aac\n`).join(''); };
   const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 0x40, 0x01, 0xbf, 0xfc, 0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]).flat());
+  // the CDN's copy of a stream, as a finished playlist: Chrome's native HLS stalls on a growing one, and a seek can break it
+  const DVR = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:VOD\n' + Array.from({ length: 300 }, (_, i) => `#EXTINF:2.000,\n${i}.aac\n`).join('') + '#EXT-X-ENDLIST\n';
   const headers = { 'access-control-allow-origin': '*' }, never = () => {};
   const answer = route => { const u = route.request().url(); return route.fulfill({ status: 200, headers, body: u.includes('usher') ? MASTER : u.includes('audio') ? AUDIO() : MEDIA }).catch(never); };
-  const stage = async relay => {
+  const stage = async (relay, { sub = false, pick = false, copy } = {}) => {
     const { page, done } = await open({ iphone: true, w: 390, h: 844, init: captureButtons });
     const user = { id: '1', login: 'staged', displayName: 'Staged', broadcastSettings: { title: '' }, stream: { id: '1', createdAt: new Date(Date.now() - 36e5).toISOString(), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
-    await page.addInitScript(() => { window.WebSocket = class { close() {} send() {} }; });
+    await page.addInitScript(p => { window.WebSocket = class { close() {} send() {} }; if (p) localStorage.setItem('wraith.feed', '"cdn"'); }, pick);
     await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
       const u = route.request().url(), b = route.request().postData() || '';
       if (u.includes('cdn.jsdelivr.net')) return route.continue().catch(never);
       if (u.includes('script.google')) return relay(route);
-      if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } } : {} }) }).catch(never);
+      if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: sub } } } : {} }) }).catch(never);
+      if (copy && u.endsWith('index-dvr.m3u8')) return route.fulfill(copy(u) ? { status: 200, headers, body: DVR } : { status: 403, headers, body: '' }).catch(never);
       if (u.endsWith('.aac')) return route.fulfill({ status: 200, headers, body: SILENCE }).catch(never);
       if (!u.endsWith('.ts')) return route.abort().catch(never);   // video segments just never come: the picture stays still
     });
     const t = Date.now();
     await page.goto(base + '?c=staged');
-    return { page, done, t };
+    return { page, done, t, user };
   };
   const toCdn = async (page, from) => { await page.waitForFunction(() => wraith.P.feed === 'cdn', null, { timeout: 60000 }).catch(never); return Date.now() - from; };
   const levels = (page, ms) => page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: ms }).catch(never);
@@ -1015,7 +1018,58 @@ if (want('relay')) {
     ok(name, await page.evaluate(() => wraith.P.hls?.levels.length === 1) && want(s), JSON.stringify(s));
     await done();
   };
+  // A sub-only or CDN-picked stream restarting while you're away: no relay brings the sound back, so it comes from the CDN once that has a copy of the new stream.
+  const restarting = async (how, run) => {
+    const S = { up: true, audio: 0 };
+    const { page, done, user } = await stage(never, { ...how, copy: u => { if (u.includes('audio_only')) S.audio++; return S.up || !u.includes('_2_'); } });
+    await page.waitForFunction(() => wraith.P.feed === 'cdn' && wraith.P.active().readyState >= 3, null, { timeout: 15000 }).catch(never);
+    await vis(page, true); await sounding(page);
+    await run(page, S, () => { user.stream = { ...user.stream, id: '2' }; return page.evaluate(() => wraith.P.refresh()); });
+    await done();
+  };
+  const backPlays = async (page, name) => {
+    await vis(page, false);
+    await page.waitForFunction(() => { const v = wraith.P.active(); return !v.paused && v.readyState >= 3; }, null, { timeout: 15000 }).catch(never);
+    const s = await snd(page);
+    ok(name, !s.on && s.paused && !s.src && !s.vPaused && !s.msg, JSON.stringify(s));
+  };
+  const stops = {
+    'stopped from the buttons': page => cc(page, 'pause'),
+    'with another app having taken the sound': page => page.evaluate(() => document.getElementById('aBG').pause()),
+  };
   await Promise.all([
+    ...[[{ sub: true }, 'a sub-only stream restarting while you’re away: the sound comes back'], [{ pick: true }, 'a stream you picked the CDN for: the same']].map(([how, name]) => restarting(how, async (page, S, restart) => {
+      await restart();
+      ok(name, !!(await sounding(page)), JSON.stringify(await snd(page)));
+      await backPlays(page, 'and coming back plays');
+    })),
+    restarting({ sub: true }, async (page, S, restart) => {
+      S.up = false; S.audio = 0;
+      await restart(); await sleep(14000);
+      const s = await snd(page);
+      ok('one the CDN has no copy of yet: it asks again', s.on && s.wanted && S.audio >= 2, `${S.audio} asks ${JSON.stringify(s)}`);
+      S.up = true;
+      ok('and the sound starts once it has one', !!(await sounding(page)), JSON.stringify(await snd(page)));
+      await backPlays(page, 'and coming back plays, with nothing saying it isn’t available');
+    }),
+    ...Object.entries(stops).map(([how, stop]) => restarting({ sub: true }, async (page, S, restart) => {
+      await stop(page); await sleep(300); S.audio = 0;
+      await restart(); await sleep(3000);
+      const s = await snd(page);
+      ok(`${how}, it restarting stays quiet`, !s.on && s.paused && s.userPaused && !S.audio, `${S.audio} asks ${JSON.stringify(s)}`);
+      await cc(page, 'play');
+      ok('until the button starts it', !!(await sounding(page)), JSON.stringify(await snd(page)));
+    })),
+    restarting({ pick: true }, async (page, S, restart) => {
+      S.up = false;
+      await restart();
+      await page.waitForFunction(() => wraith.BG.on && document.getElementById('aBG').error, null, { timeout: 15000 }).catch(never);
+      await cc(page, 'pause'); S.up = true; S.audio = 0; await sleep(13000);
+      const s = await snd(page);
+      ok('stopped while it waits for the copy, nothing asks for it', s.on && !s.wanted && s.paused && !S.audio, `${S.audio} asks ${JSON.stringify(s)}`);
+      await cc(page, 'play');
+      ok('and the button starts it', !!(await sounding(page)), JSON.stringify(await snd(page)));
+    }),
     leaving(async (page, S, live) => {
       await sleep(3000); S.hung = false;
       await live('a relay hanging as you leave: the sound starts once it answers');

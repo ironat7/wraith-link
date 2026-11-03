@@ -1079,6 +1079,8 @@ const P = {
     vC.muted = Sound.muted;
     this.show('cdn');
     UI.spin(vC.paused || vC.readyState < 3);
+    // the stream (re)started while the app was in the background, and there's no relay to come back and bring the sound
+    if (document.hidden && Pages.shown && (this.subOnly || this.pref === 'cdn')) BG.start();
     this.play(vC);
   },
 
@@ -1366,16 +1368,21 @@ const BG = {
       if (!this.held) UI.spin(true);
     }
     else if (P.feed === 'vod' && at) vC.currentTime = at;
+    else if (P.feed === 'cdn' && vC.error) { $('msgbox').hidden = true; P.playCdn({ reload: true }); }   // it had no copy to show when the stream restarted while away
     else if (P.feed === 'cdn') P.cdnSeek();
     if (!this.held) { P.play(P.active()); if (!Sound.muted) UI.unmute(false); }
     UI.playIcon();
   },
 };
-aBG.addEventListener('error', () => { if (BG.on && BG.srcs) BG.next(); });
-// Anything else pausing it is iOS giving the sound to another app (YouTube, a call). iOS plays it again once that app
-// stops, unless it's paused again now, and a play from here would take the sound back off that app.
+// The CDN has no copy for a stream's first seconds: with no other source to try, it asks again until it's stopped.
+aBG.addEventListener('error', () => {
+  if (!BG.on || !BG.srcs || BG.next()) return;
+  setTimeout(() => { if (BG.wanted && aBG.error) { aBG.load(); aBG.play().catch(() => {}); } }, 12e3);
+});
+// Anything else pausing it, other than its load failing, is iOS giving the sound to another app (YouTube, a call). iOS
+// plays it again once that app stops, unless it's paused again now, and a play from here would take the sound back off that app.
 aBG.addEventListener('pause', () => {
-  if (!BG.on || !BG.wanted || aBG.ended) return;
+  if (!BG.on || !BG.wanted || aBG.ended || aBG.error) return;
   Away.add('iOS paused the sound');
   BG.wanted = false;
   aBG.pause();
@@ -1444,7 +1451,7 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
           if (BG.hls === h && Number.isFinite(p) && p > aBG.currentTime + 3) aBG.currentTime = p;
         });
         BG.load(h);
-      }
+      } else if (aBG.error) aBG.load();
       aBG.play().catch(() => {});
     } else if (P.active()?.paused) togglePlay();
   });
