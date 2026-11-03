@@ -478,6 +478,9 @@ const day = iso => new Date(iso).toLocaleDateString(undefined, { month: 'short',
 const ago = iso => { const s = (Date.now() - Date.parse(iso)) / 1000; return s < 3600 ? `${Math.max(1, Math.floor(s / 60))}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : s < 604800 ? `${Math.floor(s / 86400)}d ago` : day(iso); };
 const when = iso => { const d = new Date(iso); return d.toLocaleString(undefined, d - Date.now() < 6048e5 ? { weekday: 'short', hour: 'numeric', minute: '2-digit' } : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
 const emoteUrl = id => `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`;
+// Never offered in the picker or completion, going by name: Twitch's Pride sets and the gay, trans and gachi ones on
+// 7TV, BTTV and FFZ. "gay" goes by case to spare KasugaYeah. They still show in chat when someone posts one.
+const unwanted = name => /[gG](ay|AY)/.test(name) || /pride|gachi|billy|femboy|queer|lesbian|lgbt|bisexual|nonbinary|trans(?!form|it|lat|port|fer|act|cend|par|mit|cri)|twitchunity|virtualhug|blacklivesmatter/i.test(name);
 const norm = s => String(s || '').trim().toLowerCase().replace(/^(https?:\/\/)?((www|m)\.)?twitch\.tv\//, '').replace(/[/?#].*$/, '').replace(/^@/, '');
 const validLogin = s => /^[a-z0-9_]{2,25}$/.test(s);
 const cdnPath = url => (url || '').match(/^(https:\/\/[^/]+\/[^/]+)\/storyboards\//)?.[1] || null;
@@ -1467,6 +1470,7 @@ const Chat = {
   emotes: new Map(), global: null, badges: new Map(), gbadges: null, zero: new Set(),
   chanEmotes: [], globalEmotes: [],     // the same emotes as lists, for the picker
   seen: new Set(), rx: 0, behind: false,  // ids already handled; when the socket last said anything; a gap to fill in
+  said: [], sampled: false, sampleT: 0,   // who said what lately, for which emotes people use; the long look back
   room: {}, names: new Map(),             // chat modes; who has been talking, for @ completion
   newest: 0,                              // the time of the latest line drawn
 
@@ -1476,6 +1480,7 @@ const Chat = {
     this.note('Connecting to chat…').classList.add('wait');
     this.connect();
     this.history(60);
+    this.sampleT = setTimeout(() => this.sample(), 4e3);
     this.timer = setInterval(() => this.flush(), 120);
     this.pinger = setInterval(() => this.ping(), 25e3);
     this.loadGlobal();
@@ -1563,8 +1568,15 @@ const Chat = {
     return true;
   },
 
+  heard(m) {
+    if (!m.text) return;
+    this.said.push([m.tags['user-id'] || m.prefix, m.text]);
+    if (this.said.length > 3000) this.said.splice(0, 1000);
+  },
+
   add(m) {
     if (!this.fresh(m)) return;
+    this.heard(m);
     // what you send shows at once, rather than waiting with everyone else's for the picture
     if (m.cmd === 'PRIVMSG' && Me.acct && m.tags['user-id'] === Me.acct.id) { this.queue.unshift({ ts: 0, m }); Talk.ircWait?.({ ok: true }); }
     else this.queue.push({ ts: +m.tags['tmi-sent-ts'] || Date.now(), m });
@@ -1572,21 +1584,56 @@ const Chat = {
 
   // A reader gets nothing from Twitch about what was said before it joined. recent-messages.robotty.de
   // keeps the last stretch of most channels, which fills chat on opening and the gap after a reconnect.
+  async recent(login, limit) {
+    const r = await fetch(`https://recent-messages.robotty.de/api/v2/recent-messages/${login}?limit=${limit}&hide_moderation_messages=true`);
+    return ((await r.json()).messages || []).map(parseIrc).filter(m => m.cmd === 'PRIVMSG' || m.cmd === 'USERNOTICE');
+  },
   async history(limit) {
     const login = this.login;
     try {
-      const r = await fetch(`https://recent-messages.robotty.de/api/v2/recent-messages/${login}?limit=${limit}&hide_moderation_messages=true`);
-      const lines = (await r.json()).messages || [];
+      const lines = await this.recent(login, limit);
       if (login !== this.login) return;
       const old = [];
-      for (const raw of lines) {
-        const m = parseIrc(raw);
-        if ((m.cmd !== 'PRIVMSG' && m.cmd !== 'USERNOTICE') || !this.fresh(m)) continue;
+      for (const m of lines) {
+        if (!this.fresh(m)) continue;
+        this.heard(m);
         m.old = true;
         old.push({ ts: +m.tags['tmi-sent-ts'] || 0, m });
       }
       this.queue = [...old, ...this.queue].sort((a, b) => a.ts - b.ts);
+      Picker.refresh();
     } catch {}
+  },
+
+  // As far back as recent-messages goes, only to see which emotes people use, and only with something to send them from.
+  // A few seconds in, to stay out of the picture's way. None of it gets drawn, so none of it counts as seen.
+  async sample() {
+    if (this.sampled || !Me.acct || !this.login) return;
+    this.sampled = true;
+    const login = this.login;
+    try {
+      const lines = await this.recent(login, 800);
+      if (login !== this.login) return;
+      for (const m of lines) if (!this.seen.has(m.tags.id) && !Me.blocks.has(m.tags['user-id'])) this.heard(m);
+      Picker.refresh();
+    } catch {}
+  },
+
+  // The emotes people here use that you could send too, most people first. It goes by the words said rather than Twitch's
+  // tags, which leave out 7TV and the like. An emote that's also a plain word (bye, thing) only counts as a message of its own.
+  popular() {
+    const mine = new Map(Me.emotes.map(e => [e.name, e.url])), count = new Map();
+    for (const [who, text] of this.said) {
+      const words = new Set(text.replace(/\x01(ACTION )?/g, '').trim().split(/\s+/));
+      for (const w of words) {
+        const url = this.emotes.get(w) || mine.get(w);
+        if (!url || unwanted(w) || (words.size > 1 && /^[a-z]+$/.test(w))) continue;
+        let c = count.get(w);
+        if (!c) count.set(w, c = { name: w, url, people: new Set(), uses: 0 });
+        c.people.add(who); c.uses++;
+      }
+    }
+    return [...count.values()].sort((a, b) => b.people.size - a.people.size || b.uses - a.uses).filter((c, i) => c.people.size > 1 || i < 16).slice(0, 32);
   },
 
   // Out of sight (app in the background, side chat hidden, Videos tab) nothing is drawn: lines
@@ -1752,6 +1799,7 @@ const Chat = {
     for (const e of stv?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
     this.gbadges = new Map((badges?.badges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
     for (const [k, v] of this.global) if (!this.emotes.has(k)) this.emotes.set(k, v);
+    Picker.refresh();
   },
 
   async channel(uid) {
@@ -1768,13 +1816,14 @@ const Chat = {
     for (const e of stv?.emote_set?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
     this.emotes = new Map([...(this.global || []), ...list.map(e => [e.name, e.url])]); this.chanEmotes = list;
     this.badges = new Map((badges?.user?.broadcastBadges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
+    Picker.refresh();
   },
 
   close() {
-    clearInterval(this.timer); clearInterval(this.pinger);
+    clearInterval(this.timer); clearInterval(this.pinger); clearTimeout(this.sampleT);
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
     this.login = null; this.uid = null; this.queue = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
-    this.seen = new Set(); this.names = new Map();
+    this.seen = new Set(); this.names = new Map(); this.said = []; this.sampled = false;
     this.badges = new Map(); this.emotes = new Map(this.global || []);
     Picker.show(false);
     Talk.show();
@@ -1844,7 +1893,7 @@ const Me = {
   acct: store.get('me', null),         // { token, refresh, exp, id, login, name, pic }
   follows: store.get('follows', null), // your follow list from Twitch, newest first
   blocks: new Set(store.get('blocks', [])),
-  emotes: store.get('myEmotes', []),   // [{ name, url, owner }]
+  emotes: store.get('myEmotes', []),   // [{ name, url, owner, by, sub }]
   mentions: null,                      // matches your name in chat
   at: {}, notes: {},                   // when each list was last fetched; why one last failed, for the account sheet
 
@@ -1996,17 +2045,26 @@ const Me = {
   },
   async loadEmotes() {
     this.at.emotes = Date.now();
-    const me = this.acct?.id;
+    const me = this.acct?.id, out = new Map();
+    const add = (name, id, owner, sub) => { if (/^\w+$/.test(name)) out.set(name, { name, url: emoteUrl(id), owner: owner?.login || '', by: owner?.displayName || owner?.login || '', sub }); };
     try {
-      const sets = (await this.gql({ query: 'query { currentUser { emoteSets { owner { login } emotes { id token } } } }' }))?.data?.currentUser?.emoteSets;
-      if (!sets) throw new Error('no emote sets');
-      if (this.acct?.id !== me) return;
-      const out = new Map();
-      for (const s of sets) for (const e of s.emotes || []) if (/^\w+$/.test(e.token)) out.set(e.token, { name: e.token, url: emoteUrl(e.id), owner: s.owner?.login || '' });
-      this.emotes = [...out.values()];
-      this.notes.emotes = null;
-      store.set('myEmotes', this.emotes);
-    } catch (e) { this.notes.emotes = e.message; }
+      const sets = (await this.gql({ query: 'query { currentUser { emoteSets { owner { login displayName } emotes { id token type } } } }' }))?.data?.currentUser?.emoteSets;
+      if (!sets?.length) throw new Error('no emote sets');
+      for (const s of sets) for (const e of s.emotes || []) add(e.token, e.id, s.owner, e.type === 'SUBSCRIPTIONS');
+    } catch (e) {
+      try {
+        const list = await this.helixAll(`/chat/emotes/user?user_id=${me}`, x => x);
+        const ids = [...new Set(list.map(x => x.owner_id).filter(x => /^[1-9]\d*$/.test(x)))].slice(0, 100);
+        const who = ids.length ? await gql('query($ids: [ID!]) { users(ids: $ids) { id login displayName } }', { ids }).catch(() => null) : null;
+        const owners = new Map((who?.users || []).filter(Boolean).map(u => [u.id, u]));
+        for (const x of list) add(x.name, x.id, owners.get(x.owner_id), x.emote_type === 'subscriptions');
+      } catch (e2) { this.notes.emotes = `${e.message}; ${e2.message}`; return; }
+    }
+    if (this.acct?.id !== me) return;
+    this.emotes = [...out.values()];
+    this.notes.emotes = null;
+    store.set('myEmotes', this.emotes);
+    Picker.refresh();
   },
 
   following(login) { return (this.follows || FOLLOWS).includes(login); },
@@ -2150,7 +2208,7 @@ const Talk = {
     if (!m) return;
     const low = m[2].toLowerCase(), hits = [];
     if (m[1]) { for (const [l, n] of [...Chat.names].reverse()) if (l.startsWith(low)) hits.push({ word: atName(l, n) }); }
-    else for (const e of [...Chat.chanEmotes, ...Me.emotes, ...Chat.globalEmotes]) if (e.name.toLowerCase().startsWith(low)) hits.push({ word: e.name, url: e.url });
+    else for (const e of [...Chat.popular(), ...Me.emotes.filter(e => e.sub), ...Chat.chanEmotes, ...Me.emotes, ...Chat.globalEmotes]) if (e.name.toLowerCase().startsWith(low) && !unwanted(e.name) && !hits.some(h => h.word === e.name)) hits.push({ word: e.name, url: e.url });
     for (const x of hits.slice(0, 16)) {
       const b = el('button'); b.type = 'button'; b.dataset.w = x.word;
       if (x.url) { const i = pic(x.url, 'em'); i.alt = ''; b.append(i); }
@@ -2254,18 +2312,24 @@ const Picker = {
     this.on = on;
     $('ep').hidden = !on;
     $('bEmote').classList.toggle('on', on);
-    if (on) { Talk.tx.blur(); $('epq').value = ''; this.draw(); }
+    if (on) { Talk.tx.blur(); $('epq').value = ''; Chat.sample(); this.draw(); }
+  },
+  refresh() {   // something it draws from has arrived while it's open
+    if (!this.on) return;
+    const box = $('epl'), top = box.scrollTop;
+    this.draw();
+    box.scrollTop = top;
   },
   draw() {
-    const box = $('epl'), term = $('epq').value.trim().toLowerCase(), used = new Set();
+    const box = $('epl'), term = $('epq').value.trim().toLowerCase(), shown = new Set();
     box.textContent = '';
     const section = (title, list) => {
-      const items = list.filter(e => !used.has(e.name) && (!term || e.name.toLowerCase().includes(term)));
+      const items = list.filter(e => !shown.has(e.name) && !unwanted(e.name) && (!term || e.name.toLowerCase().includes(term)));
       if (!items.length) return;
       box.append(el('h4', null, title));
       const g = el('div', 'epg');
       for (const e of items.slice(0, 400)) {
-        used.add(e.name);
+        shown.add(e.name);
         const b = el('button'), i = pic(e.url);
         b.type = 'button'; b.dataset.w = e.name; b.title = e.name;
         i.alt = e.name; i.loading = 'lazy';
@@ -2273,11 +2337,15 @@ const Picker = {
       }
       box.append(g);
     };
-    const name = P.user?.displayName || 'This channel', mine = [...Me.emotes].sort((a, b) => (b.owner === Chat.login) - (a.owner === Chat.login));
-    section(name, Chat.chanEmotes);
-    section('Your Twitch emotes', mine);
-    section('Global', Chat.globalEmotes);
-    if (!box.children.length) box.append(el('p', 'note', 'No emotes match.'));
+    // What people here use, short enough that your subs show under it, then yours from this channel and your other subs.
+    // Only a search goes further.
+    const here = Me.emotes.filter(e => e.owner === Chat.login), subs = new Map();
+    for (const e of Me.emotes) if (e.sub && e.owner !== Chat.login) subs.set(e.by, [...(subs.get(e.by) || []), e]);
+    section('Used in this chat', Chat.popular());
+    section(P.user?.displayName || 'This channel', term ? [...here, ...Chat.chanEmotes] : here);
+    for (const by of [...subs.keys()].sort((a, b) => a.localeCompare(b))) section(by || 'Your subs', subs.get(by));
+    if (term) { section('Your other emotes', Me.emotes); section('Global', Chat.globalEmotes); }
+    if (!box.children.length) box.append(el('p', 'note', term ? 'No emotes match.' : 'Nobody here has used an emote lately. Search finds the rest.'));
   },
 };
 $('bEmote').onclick = () => Picker.show(!Picker.on);
@@ -2732,7 +2800,7 @@ const Sheet = {
   accountItems(body, full) {
     const me = Me.acct;
     if (!me) return this.group(body, 'Account', [{ label: 'Sign in with Twitch', desc: 'Send chat, your real follow list, hide chatters you’ve blocked.', pick: () => SignIn.start() }]);
-    const facts = [`${(Me.follows || FOLLOWS).length} follows`, `${Me.blocks.size} blocked`, `${Me.emotes.length} emotes`].join(' · ');
+    const facts = [`${(Me.follows || FOLLOWS).length} follows`, `${Me.blocks.size} blocked`, `${Me.emotes.filter(e => e.sub).length} sub emotes`].join(' · ');
     this.group(body, 'Account', [{ label: `Sign out ${me.name || me.login}`, desc: facts, pick: () => Me.signOut() }]);
     const trouble = Object.entries(Me.notes).filter(([, v]) => v);
     if (trouble.length) { const s = el('div', 'stats'); for (const [k, v] of trouble) s.append(el('div', null, `${k}: ${v}`)); body.append(s); }
@@ -3082,7 +3150,7 @@ Me.save(Me.acct);
 Me.check();
 Me.sync();
 setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Talk, Me, Replay, Browse, Search, SignIn, Clips, UI, Card };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Talk, Me, Replay, Browse, Search, SignIn, Clips, UI, Card, Picker };   // for poking at playback from devtools
 route(false);
 })();
 </script>

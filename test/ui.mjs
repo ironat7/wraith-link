@@ -170,7 +170,7 @@ if (which === 'all' || which === 'signin') {
     if (b.operationName === 'ChannelFollows') return json({ data: { user: { follows: { edges: follows.map(l => ({ cursor: 'c', node: { login: l, displayName: l } })), pageInfo: { hasNextPage: false } } } } });
     if (/currentUser \{ login/.test(b.query || '')) return json({ data: { currentUser: { login: 'ironat___', displayName: 'Ironat___', profileImageURL: 'https://static-cdn.jtvnw.net/user-default-pictures-uv/294c98b5-e34d-42cd-a8f0-140b72fba9b0-profile_image-70x70.png' } } });
     if (/blockedUsers/.test(b.query || '')) return json({ data: { currentUser: { blockedUsers: [{ id: '999' }] } } });
-    if (/emoteSets/.test(b.query || '')) return json({ data: { currentUser: { emoteSets: [{ owner: { login: 'powdur' }, emotes: [{ id: '25', token: 'Kappa' }, { id: '1', token: ':)' }] }] } } });
+    if (/emoteSets/.test(b.query || '')) return json({ data: { currentUser: { emoteSets: [{ owner: { login: 'powdur' }, emotes: [{ id: '25', token: 'Kappa', type: 'SUBSCRIPTIONS' }, { id: '1', token: ':)', type: 'SMILIES' }] }] } } });
     if (/followUser/.test(b.query || '')) return json({ data: { followUser: { follow: { user: { id: '1' } }, error: null } } });
     if (/unfollowUser/.test(b.query || '')) return json({ data: { unfollowUser: { follow: { user: { id: '1' } } } } });
     if (/blockUser/.test(b.query || '')) return json({ data: { blockUser: { targetUser: { login: 'x' } } } });

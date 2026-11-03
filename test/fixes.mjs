@@ -1,4 +1,4 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard
+// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections: pause cover misc browse chat replay irc account keyboard emotes
 // Checks for the bugs an independent code review found on 2026-11-02, on real streams with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { chromium } from 'playwright-core';
@@ -507,6 +507,142 @@ if (want('keyboard')) {
   ok('typing a message closes the picker', await page.evaluate(() => document.getElementById('ep').hidden));
   await page.evaluate(() => document.getElementById('sayTx').blur()); await kb(false); await sleep(300);
   ok('the keyboard going down restores the page', await page.evaluate(() => !document.getElementById('watch').classList.contains('kb') && document.getElementById('watch').style.height === ''));
+  await done();
+}
+
+if (want('emotes')) {
+  // The picker: your subs and what people here use, never the pride and gay ones, with the chat they're judged on staged.
+  const { page, done } = await open({ w: 390, h: 844, init: me => localStorage.setItem('wraith.me', JSON.stringify(me)), initArg: ME });
+  const json = (route, o, status = 200) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
+  const set = (owner, type, ...tokens) => ({ owner, emotes: tokens.map(token => ({ id: '25', token, type })) });
+  const XQC = { login: 'xqc', displayName: 'xQc' }, MIM = { login: 'meltymim', displayName: 'meltymim' }, HERE = { login: A, displayName: A };
+  const SETS = [
+    set(XQC, 'SUBSCRIPTIONS', 'xqcL', 'xqcOmega'), set(XQC, 'FOLLOWER', 'xqcLL'), set(MIM, 'SUBSCRIPTIONS', 'mimyaCheer'), set(MIM, 'FOLLOWER', 'mimyaHi'),
+    set(HERE, 'SUBSCRIPTIONS', 'aaSub'), set(HERE, 'FOLLOWER', 'aaFollow'),
+    set(null, 'GLOBALS', 'LUL', 'Kappa', 'GayPride', 'KappaPride', 'TransgenderPride', 'BlackLivesMatter', 'TwitchUnity', 'VirtualHug'), set(null, 'SMILIES', ':)'),
+    set({ login: 'streamwithpride', displayName: 'streamwithpride' }, 'MEGA_COMMERCE', 'PrideLion'), set(null, 'MEGA_COMMERCE', 'PrideTrans'), set(null, 'PRIME', 'PokPikachu'), set(null, 'TURBO', 'KappaHD'),
+  ];
+  let sets = { data: { currentUser: { emoteSets: SETS } } }, history = { hold: 0, lines: { 60: [], 800: [] } }, asked = [], helix = [];
+  await page.route('https://id.twitch.tv/oauth2/**', route => json(route, { login: 'ironat___', user_id: '212375133', client_id: 'x' }));
+  await page.route('https://gql.twitch.tv/gql', route => {
+    const q = route.request();
+    if (q.method() !== 'POST') return route.fallback();
+    const b = JSON.parse(q.postData());
+    if (/users\(ids/.test(b.query || '')) return json(route, { data: { users: [{ id: '71092938', login: 'xqc', displayName: 'xQc' }] } });
+    if (!(q.headers().authorization || '').startsWith('OAuth')) return route.fallback();
+    if (/emoteSets/.test(b.query || '')) return json(route, sets);
+    return json(route, { data: {} });
+  });
+  await page.route('https://api.twitch.tv/helix/**', route => route.request().url().includes('/chat/emotes/user') ? json(route, { data: helix, pagination: {} }) : json(route, { data: [], pagination: {} }));
+  const seven = (...names) => ({ emotes: names.map(name => ({ name, data: { host: { url: '//cdn.7tv.app/emote/01F6MZGCNG000255K4X1K0NEBV' } } })) });
+  await page.route('https://7tv.io/v3/users/twitch/*', route => json(route, { emote_set: seven('KEKW', 'Sadge', 'Gayge', 'gaysex', 'peepoTrans', 'transplinK', 'KasugaYeah', 'bye', 'thing', 'neverUsed', 'oldFavorite', 'Transformer') }));
+  await page.route('https://7tv.io/v3/emote-sets/global', route => json(route, seven('gachiBASS', 'billyReady', 'RainbowPls', 'GlobalThing')));
+  await page.route(/api\.(frankerfacez\.com|betterttv\.net)/, route => route.fulfill({ status: 404, headers: { 'access-control-allow-origin': '*' }, body: '' }));
+  await page.route('https://recent-messages.robotty.de/**', async route => {
+    const n = new URL(route.request().url()).searchParams.get('limit');
+    asked.push(n);
+    if (history.hold && n !== '800') await sleep(history.hold);
+    await json(route, { messages: history.lines[n] || [] });
+  });
+  const line = (who, text, id = Math.random().toString(36).slice(2)) => `@id=${id};user-id=${who};tmi-sent-ts=${Date.now()};display-name=u${who} :u${who}!u${who}@u${who}.tmi.twitch.tv PRIVMSG #${A} :${text}`;
+  const say = lines => page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); }, lines);
+  const crowd = (people, text) => Array.from({ length: people }, (_, i) => line(100 + i, text));
+  const sections = () => page.evaluate(() => { const out = {}; for (const h of document.querySelectorAll('#epl h4')) out[h.textContent] = [...h.nextElementSibling.querySelectorAll('button')].map(b => b.dataset.w); return out; });
+  const offered = async () => Object.values(await sections()).flat();
+  const emotesOpen = async () => { if (await page.$eval('#ep', x => x.hidden)) await page.click('#bEmote'); await sleep(150); };
+  const close = () => page.evaluate(() => wraith.Picker.show(false));
+  const search = async s => { await page.fill('#epq', s); await sleep(100); };
+  const complete = async s => { await page.fill('#sayTx', ''); await page.type('#sayTx', s); await sleep(100); const w = await page.$$eval('#ac button', b => b.map(x => x.dataset.w)); await page.fill('#sayTx', ''); return w; };
+
+  await page.goto(base + `?c=${A}`);
+  await page.waitForFunction(() => wraith.Me.emotes.some(e => e.sub) && wraith.Chat.chanEmotes.length && wraith.Chat.global?.size, null, { timeout: 15000 }).catch(() => {});
+  await emotesOpen();
+  let s = await sections();
+  ok('with no chat yet it’s your emotes from here, then your other subs', JSON.stringify(Object.keys(s)) === JSON.stringify([await page.evaluate(() => wraith.P.user?.displayName), 'meltymim', 'xQc']), JSON.stringify(s));
+  ok('a follower emote only where it works', Object.values(s)[0].includes('aaFollow') && !s.xQc.includes('xqcLL') && !s.meltymim.includes('mimyaHi'), JSON.stringify(s));
+  ok('nothing else you own is offered', (await offered()).sort().join() === 'aaFollow,aaSub,mimyaCheer,xqcL,xqcOmega', (await offered()).join());
+  await close();
+
+  await say([
+    ...crowd(4, 'KEKW so funny'), ...crowd(3, 'LUL'), ...crowd(2, 'Sadge'), ...crowd(2, 'xqcL'), ...crowd(3, 'aaFollow'),
+    ...crowd(6, 'GayPride'), ...crowd(5, 'Gayge lol'), ...crowd(5, 'gachiBASS'), ...crowd(4, 'KappaPride'), ...crowd(3, 'PrideLion'), ...crowd(3, 'gaysex'), ...crowd(3, 'BlackLivesMatter'), ...crowd(3, 'VirtualHug'), ...crowd(3, 'TwitchUnity'), ...crowd(3, 'billyReady'), ...crowd(3, 'transplinK'), ...crowd(3, 'peepoTrans'),
+    ...crowd(3, 'someSubEmoteYouDontHave'),
+    ...crowd(4, 'the thing is it went fine'), ...crowd(2, 'bye'), line(100, '\x01ACTION Sadge\x01'),
+    ...Array.from({ length: 12 }, () => line(150, 'GlobalThing')),
+    line(151, 'KasugaYeah'), line(152, 'KasugaYeah'), ...crowd(2, 'Transformer'), ...crowd(2, 'RainbowPls'),
+  ]);
+  await emotesOpen();
+  s = await sections();
+  const used = s['Used in this chat'] || [], here = s[await page.evaluate(() => wraith.P.user?.displayName)] || [], all = await offered();
+  ok('what people use is in and comes first, most people first', Object.keys(s)[0] === 'Used in this chat' && used[0] === 'KEKW' && used[1] === 'LUL' && used.includes('Sadge') && used.includes('bye'), used.join());
+  ok('your sub emote people use here moves up', used.includes('xqcL') && !s.xQc.includes('xqcL') && s.xQc.includes('xqcOmega'), JSON.stringify(s));
+  ok('from this channel too, with the rest of them under it', used.includes('aaFollow') && here.join() === 'aaSub', here.join());
+  ok('Pride and gay emotes are gone, however much they’re used', !all.some(n => n !== 'KasugaYeah' && /pride|gay|gachi|billy|trans(?!former)|blacklives|unity|virtualhug/i.test(n)) && all.includes('KasugaYeah'), all.join());
+  ok('names that only look like it stay', all.includes('Transformer') && all.includes('RainbowPls'), all.join());
+  ok('someone else’s sub emote isn’t offered', !all.includes('someSubEmoteYouDontHave'));
+  ok('a word that happens to be an emote doesn’t count in a sentence', !all.includes('thing'), all.join());
+  ok('one person spamming isn’t many people', used.indexOf('GlobalThing') > used.indexOf('Sadge'), used.join());
+  ok('emotes nobody used stay out', !all.includes('neverUsed') && !all.includes('Kappa') && !all.includes('PokPikachu') && !all.includes('KappaHD'), all.join());
+  await page.screenshot({ path: 'fixes-picker.png' });
+
+  // a search reaches anything you could send, and still not those
+  await search('kappa');
+  ok('search finds what isn’t shown', (await offered()).sort().join() === 'Kappa,KappaHD', (await offered()).join());
+  await search('never');
+  ok('this channel’s emotes too', (await offered()).join() === 'neverUsed', (await offered()).join());
+  await search('pride');
+  ok('searching for them finds nothing', (await offered()).length === 0 && (await page.$eval('#epl', x => x.textContent)).includes('No emotes match'), (await offered()).join());
+  await search('gay');
+  ok('nor the gay ones', (await offered()).join() === 'KasugaYeah', (await offered()).join());
+  await search('');
+  await page.click('#epl .epg button'); await sleep(100);
+  ok('picking one still fills the box', /^\w+ $/.test(await page.$eval('#sayTx', x => x.value)), await page.$eval('#sayTx', x => x.value));
+  await page.fill('#sayTx', ''); await close();
+
+  // completion
+  ok('completing leaves them out', (await complete('Kap')).join() === 'Kappa,KappaHD', (await complete('Kap')).join());
+  ok('completing “gay” offers nothing', (await complete('gay')).length === 0, (await complete('gay')).join());
+  ok('what people use comes first', (await complete('xq'))[0] === 'xqcL' && (await complete('Sa'))[0] === 'Sadge', (await complete('xq')).join());
+  ok('and each only once', new Set(await complete('KE')).size === (await complete('KE')).length, (await complete('KE')).join());
+
+  // chat itself is left alone
+  await page.waitForFunction(() => [...document.querySelectorAll('#chat .em')].some(i => i.alt === 'GayPride'), null, { timeout: 8000 }).catch(() => {});
+  ok('chat still draws what people post', await page.evaluate(() => [...document.querySelectorAll('#chat .em')].some(i => i.alt === 'Gayge')));
+
+  // the long look back only counts: 800 lines, none drawn, and it can't get in the way of the history that is
+  const old = (who, text) => line(who, text, `old${who}${text.replace(/ /g, '')}`);
+  history = { hold: 1200, lines: { 60: [old(1, 'first line drawn')], 800: [old(1, 'first line drawn'), ...Array.from({ length: 5 }, (_, i) => old(200 + i, 'oldFavorite')), old(300, 'an old line nobody should see')] } };
+  asked = [];
+  await page.evaluate(b => wraith.P.open(b), B);
+  await sleep(300);
+  await page.waitForFunction(() => wraith.Chat.chanEmotes.length, null, { timeout: 8000 }).catch(() => {});
+  await emotesOpen();
+  ok('the picker asks at once', asked.includes('800'), asked.join());
+  ok('another channel starts from nothing', !((await sections())['Used in this chat'] || []).includes('KEKW'), JSON.stringify(await sections()));
+  await page.waitForSelector('#epl button[data-w="oldFavorite"]', { timeout: 5000 }).catch(() => {});
+  s = await sections();
+  ok('what it finds comes in while the picker’s open', (s['Used in this chat'] || []).includes('oldFavorite'), JSON.stringify(s));
+  await close();
+  await page.waitForFunction(() => [...document.querySelectorAll('#chat .m')].some(m => m.textContent.includes('first line drawn')), null, { timeout: 5000 }).catch(() => {});
+  const chat = await page.$eval('#chat', x => x.textContent);
+  ok('the look back isn’t drawn, and the slower first history still is', chat.includes('first line drawn') && !chat.includes('an old line nobody should see'), chat.slice(0, 200));
+  await emotesOpen(); await close(); await sleep(4500);
+  ok('it’s asked for once a channel', asked.filter(x => x === '800').length === 1 && asked.length === 2, asked.join());
+
+  // nor the lines a reconnect fills in, though the look back has already been past them
+  history.lines[300] = [old(300, 'an old line nobody should see')];
+  await page.evaluate(() => wraith.Chat.history(300));
+  await page.waitForFunction(() => [...document.querySelectorAll('#chat .m')].some(m => m.textContent.includes('an old line')), null, { timeout: 4000 }).catch(() => {});
+  ok('a reconnect still fills in what the look back saw', (await page.$eval('#chat', x => x.textContent)).includes('an old line nobody should see'));
+
+  // Twitch's GQL turning away the emote list: the API has it too
+  await page.evaluate(() => { wraith.Me.emotes = []; });
+  sets = { errors: [{ message: 'service error' }] };
+  helix = [{ id: '25', name: 'xqcL', emote_type: 'subscriptions', owner_id: '71092938' }, { id: '25', name: 'xqcLL', emote_type: 'follower', owner_id: '71092938' }, { id: '25', name: 'LUL', emote_type: 'globals', owner_id: '0' }];
+  await page.evaluate(() => wraith.Me.loadEmotes());
+  const via = await page.evaluate(() => wraith.Me.emotes);
+  ok('the API stands in for GQL', via.find(e => e.name === 'xqcL')?.sub === true && via.find(e => e.name === 'xqcL')?.by === 'xQc' && via.find(e => e.name === 'LUL')?.sub === false && via.find(e => e.name === 'xqcLL')?.owner === 'xqc', JSON.stringify(via));
+  await page.evaluate(() => wraith.UI.owner?.());
   await done();
 }
 
