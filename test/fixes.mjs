@@ -1038,7 +1038,75 @@ if (want('relay')) {
     'stopped from the buttons': page => cc(page, 'pause'),
     'another app having taken the sound': page => page.evaluate(() => document.getElementById('aBG').pause()),
   };
+  // A stream the CDN has no copy of yet, in view: it's asked again before anything says there's none.
+  const refused = async (how, run) => {
+    const S = { up: false, asks: [] };
+    const { page, done } = await stage(never, { ...how, copy: u => { if (u.includes('chunked')) S.asks.push(Date.now()); return S.up; } });
+    await page.waitForFunction(() => wraith.P.active()?.error, null, { timeout: 15000 }).catch(never);
+    await run(page, S);
+    await done();
+  };
+  const asked = async (S, n) => { for (let i = 0; i < 400 && S.asks.length < n; i++) await sleep(100); };
+  const told = page => page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 40000 }).catch(never);
+  const feeds = [
+    [{ sub: true }, 'a sub-only stream', 'The CDN feed isn’t availableThis channel’s stream isn’t being recorded, so there is no ad-free copy to play.'],
+    [{ pick: true }, 'a stream you picked the CDN for', 'The CDN feed isn’t availableTry the low-latency feed instead.Try again'],
+  ];
   await Promise.all([
+    ...feeds.flatMap(([how, name, words]) => [
+      refused(how, async (page, S) => {
+        await sleep(3000);
+        const s = await st(page);
+        ok(`${name} the CDN has no copy of yet, in view: it waits, with the spinner up`, !s.msg && s.spin, JSON.stringify(s));
+        await asked(S, 2); S.up = true;
+        await page.waitForFunction(() => { const v = wraith.P.active(); return !v.paused && v.readyState >= 3; }, null, { timeout: 20000 }).catch(never);
+        const t = await snd(page);
+        ok('and plays on the third ask, with nothing saying it isn’t available', S.asks.length === 3 && S.asks[1] - S.asks[0] > 11e3 && !t.vPaused && !t.msg, `${S.asks.map(a => a - S.asks[0])} ${JSON.stringify(t)}`);
+      }),
+      refused(how, async (page, S) => {
+        await told(page);
+        const ms = Date.now() - S.asks[0], { msg } = await snd(page), n = S.asks.length;
+        ok(`${name} that really isn’t recorded: its message in about 30 s, word for word`, ms > 20e3 && ms < 30e3 && msg === words, `${ms} ms, ${n} asks: ${msg}`);
+        await sleep(13000);
+        ok('and it stops asking', n === 3 && S.asks.length === n, `${S.asks.length} asks`);
+      }),
+    ]),
+    refused({ sub: true }, async (page, S) => {
+      await vis(page, true); await sleep(14000);
+      const s = await snd(page);
+      ok('leaving during the wait: the sound does the asking, not the picture', s.on && S.asks.length === 1, `${S.asks.length} asks ${JSON.stringify(s)}`);
+      S.up = true;
+      ok('and the sound starts once there’s a copy', !!(await sounding(page)), JSON.stringify(await snd(page)));
+      await backPlays(page, 'and coming back plays, with nothing saying it isn’t available');
+    }),
+    refused({ sub: true }, async (page, S) => {
+      await sleep(4000); await vis(page, true); S.up = true;
+      ok('leaving well into the wait: the sound still comes', !!(await sounding(page)), JSON.stringify(await snd(page)));
+    }),
+    refused({ sub: true }, async (page, S) => {
+      await vis(page, true); await sleep(1000);
+      const t = Date.now();
+      await vis(page, false); await sleep(3000);
+      const quiet = !(await snd(page)).msg;
+      await told(page);
+      const ms = Date.now() - t;
+      ok('coming back with still no copy: it asks, then the message in under 30 s', quiet && ms < 30e3 && S.asks.length > 1, `${ms} ms, ${S.asks.length} asks`);
+    }),
+    refused({ pick: true }, async (page, S) => {
+      await sleep(5000);
+      await page.evaluate(() => wraith.P.open('staged'));
+      await asked(S, 2); await sleep(10000);
+      ok('a new start during the wait: the old wait doesn’t ask as well', S.asks.length === 2, `${S.asks.map(a => a - S.asks[0])}`);
+      await told(page);
+      const ms = Date.now() - S.asks[1];
+      ok('and it gets a full wait of its own', ms > 20e3 && ms < 30e3, `${ms} ms`);
+    }),
+    refused({ pick: true }, async (page, S) => {
+      await page.evaluate(() => wraith.P.setPref('live'));
+      await sleep(13000);
+      const s = await st(page);
+      ok('switching to low latency during the wait: it stays there, and nothing asks for the copy', s.feed === 'live' && !s.msg && S.asks.length === 1, `${S.asks.length} asks ${JSON.stringify(s)}`);
+    }),
     ...[[{ sub: true }, 'a sub-only stream restarting while you’re away: the sound comes back'], [{ pick: true }, 'a stream you picked the CDN for: the same']].map(([how, name]) => restarting(how, async (page, S, restart) => {
       await restart();
       ok(name, !!(await sounding(page)), JSON.stringify(await snd(page)));

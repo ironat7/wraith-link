@@ -811,7 +811,7 @@ const P = {
   cap: 0, capWait: 180e3, lastStall: 0,   // renditions below the pick that buffering has forced, for this stream only
   groups: [], base: null, start: 0, subOnly: false,
   ad: false, adEnd: 0, cover: false, skipped: 0,
-  rate: 'normal', stalls: [], retries: 0, fixes: 0, vod: null, timer: 0,
+  rate: 'normal', stalls: [], retries: 0, fixes: 0, asks: 0, vod: null, timer: 0,
   liveT: TARGET.live, calm: 0,       // current live target, and since when playback has been smooth
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
@@ -1276,7 +1276,7 @@ const P = {
     this.vodAudio?.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
     vC.controls = false; vL.pause(); vL.removeAttribute('src'); vL.load();
     Object.assign(this, { login: null, user: null, feed: null, groups: [], base: null, subOnly: false, ad: false, adEnd: 0,
-      cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, vod: null, tokenP: null, seekPending: false,
+      cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, asks: 0, vod: null, tokenP: null, seekPending: false,
       liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null, quietUntil: 0, errs: {},
       cap: 0, capWait: 180e3, lastStall: 0, pos: -1, moved: 0, gone: 0, dodging: false });
     this.dodged = new Set();
@@ -1374,10 +1374,12 @@ const BG = {
     UI.playIcon();
   },
 };
-// The CDN has no copy for a stream's first seconds: with no other source to try, it asks again until it's stopped.
+// The CDN has no copy for a stream's first seconds, so a refusal is asked again a little later. Anything loaded since clears the error, and the wait with it.
+const askAgain = (m, ask) => { clearTimeout(m.again); m.again = setTimeout(() => { if (m.error) ask(); }, 12e3); };
+// With no other source to try, the sound asks until it's stopped.
 aBG.addEventListener('error', () => {
   if (!BG.on || !BG.srcs || BG.next()) return;
-  setTimeout(() => { if (BG.wanted && aBG.error) { aBG.load(); aBG.play().catch(() => {}); } }, 12e3);
+  askAgain(aBG, () => { if (BG.wanted) { aBG.load(); aBG.play().catch(() => {}); } });
 });
 // Anything else pausing it, other than its load failing, is iOS giving the sound to another app (YouTube, a call). iOS
 // plays it again once that app stops, unless it's paused again now, and a play from here would take the sound back off that app.
@@ -1533,6 +1535,8 @@ vC.addEventListener('error', () => {
     return cdnLive ? UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.') : UI.needsSafari(`https://www.twitch.tv/videos/${P.vod.id}`, true);
   }
   if (P.cover) { P.cover = false; P.stopCdn(); P.show('live'); UI.spin(false); UI.banner(); return; }
+  // Twice, so about 25 s, before saying there's no copy. While away the sound does the asking, and coming back loads the picture again.
+  if (P.feed === 'cdn' && !BG.on && P.asks++ < 2) return askAgain(vC, () => { if (!BG.on) P.playCdn({ reload: true }); });
   if (P.feed === 'cdn') UI.msg(null, 'The CDN feed isn’t available', P.subOnly ? 'This channel’s stream isn’t being recorded, so there is no ad-free copy to play.' : 'Try the low-latency feed instead.', P.subOnly ? null : () => P.setPref('live'));
 });
 vC.addEventListener('timeupdate', () => {
