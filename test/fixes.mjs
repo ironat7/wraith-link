@@ -1051,6 +1051,18 @@ if (want('relay')) {
       ok('a hang once the sound is going: it carries on after', s.on && s.wanted && await page.evaluate(t => document.getElementById('aBG').currentTime > t + 2, at), JSON.stringify(s));
       await done();
     })(),
+    (async () => {
+      const S = { hung: false };
+      const { page, done } = await stage(route => S.hung ? null : answer(route));
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      S.hung = true;
+      await page.evaluate(() => { wraith.P.user.stream.id = 'older'; wraith.P.refresh(); });
+      await toCdn(page, Date.now());
+      S.hung = false;
+      ok('a stream restarting during a long hang: the sound comes back with the relay', !!(await sounding(page)), JSON.stringify(await snd(page)));
+      await done();
+    })(),
     cutShort(false, s => !s.paused && s.spin, 'a start cut short by leaving goes again on coming back'),
     cutShort(true, s => s.paused && !s.spin, 'and stays paused, with no spinner, if you stopped the sound'),
     (async () => {

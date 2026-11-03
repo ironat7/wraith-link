@@ -1004,7 +1004,8 @@ const P = {
     UI.needsSafari(why);
   },
 
-  // On the CDN feed only because low latency failed: look every few minutes for the relay to come back.
+  // On the CDN feed only because low latency failed: look every few minutes for the relay to come back, and every few
+  // seconds while away, where the sound is waiting on it.
   retryLive() {
     const gen = this.gen;
     setTimeout(async () => {
@@ -1016,7 +1017,7 @@ const P = {
       if (!master?.includes('#EXT-X-STREAM-INF')) return this.retryLive();
       this.retries = 0; this.tokenP = Promise.resolve(tok);
       this.playLive();
-    }, 180e3);
+    }, document.hidden ? 15e3 : 180e3);
   },
 
   onAd(on, end) {
