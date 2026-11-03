@@ -414,18 +414,22 @@ if (want('irc')) {
 
 if (want('account')) {
   const { page, done } = await open({ init: me => localStorage.setItem('wraith.me', JSON.stringify(me)), initArg: ME });
-  const id = { token: 'ok', wait: 0, validate: 'ok' };
+  const id = { validate: 'ok', wait: 0, left: 0, renewals: 0, revoked: 0 };
   await page.route('https://id.twitch.tv/oauth2/**', async route => {
     const u = route.request().url(), json = (status, o) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
-    if (u.endsWith('/validate')) return id.validate === 'ok' ? json(200, { login: 'ironat___', user_id: '212375133', client_id: 'x' }) : route.abort();
-    if (u.endsWith('/revoke')) return json(200, {});
-    if (id.wait) await sleep(id.wait);
-    return id.token === 'ok' ? json(200, { access_token: 'TOK2', refresh_token: 'REF2', expires_in: 14000 }) : json(400, { status: 400, message: 'Invalid refresh token' });
+    if (u.endsWith('/validate')) {
+      if (id.wait) await sleep(id.wait);
+      return id.validate === 'ok' ? json(200, { login: 'ironat___', user_id: '212375133', client_id: 'x', scopes: [], expires_in: id.left }) : id.validate === 401 ? json(401, { status: 401, message: 'invalid access token' }) : route.abort();
+    }
+    if (u.endsWith('/revoke')) { id.revoked++; return json(200, {}); }
+    id.renewals++;
+    return json(400, { status: 400, message: 'missing client secret' });   // what Twitch really says for this client, whatever the token
   });
-  let follows = { wait: 0 }, blocks = { gql: [{ id: '999' }], helix: 200 };
+  let follows = { wait: 0 }, blocks = { gql: [{ id: '999' }], helix: 200 }, gqlStatus = 200;
   await page.route('https://gql.twitch.tv/gql', async route => {
     const q = route.request();
     if (!(q.headers().authorization || '').startsWith('OAuth')) return route.fallback();
+    if (gqlStatus !== 200) return route.fulfill({ status: gqlStatus, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ error: 'Unauthorized', status: gqlStatus, message: 'The "Authorization" token is invalid.' }) });
     const b = JSON.parse(q.postData()), json = o => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(o) });
     if (b.operationName === 'ChannelFollows') { if (follows.wait) await sleep(follows.wait); return json({ data: { user: { follows: { edges: [{ cursor: 'c', node: { login: A } }], pageInfo: { hasNextPage: false } } } } }); }
     if (/currentUser \{ login/.test(b.query || '')) return json({ data: { currentUser: { login: 'ironat___', displayName: 'Ironat___', profileImageURL: '' } } });
@@ -441,29 +445,72 @@ if (want('account')) {
   await page.goto(base); await sleep(1500);
   const acct = () => page.evaluate(() => wraith.Me.acct), stored = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.me') || 'null'));
 
-  // the refresh token is spent the moment Twitch answers
-  id.validate = 'down';
-  await page.evaluate(() => wraith.Me.renewNow());
-  ok('a renewal is kept even if nothing else works right after', (await acct()).token === 'TOK2' && (await stored()).refresh === 'REF2', JSON.stringify(await stored()));
+  // A token from Twitch's TV client can't be renewed, so losing a good one means a trip back to Twitch.
+  const signedIn = async () => { const a = await acct(); return !!a?.token && (await stored())?.token === a.token; };
+  const sheet = async () => { await page.evaluate(() => document.getElementById('scrim').click()); await page.click('#acct'); await sleep(150); return page.$eval('#sheetBody', x => x.textContent); };
+  const pickOpt = t => page.evaluate(t => [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.startsWith(t)).click(), t);
+  gqlStatus = 401;
+  await page.evaluate(() => wraith.Me.loadProfile()); await sleep(300);
+  gqlStatus = 200;
+  ok('a 401 from the API doesn’t sign you out when Twitch says the token is fine', await signedIn(), JSON.stringify(await stored()));
+  id.validate = 401;
+  await page.evaluate(() => wraith.Me.check());
+  ok('nor does Twitch saying no once, which can be a hiccup', await signedIn());
+  await page.evaluate(() => Promise.all([wraith.Me.check(), wraith.Me.check()]));
+  ok('asking again straight away doesn’t make it twice', await signedIn());
+  ok('the sheet notes that it happened', (await sheet()).includes('refused it'));
   id.validate = 'ok';
-  ok('the rest of the account stays', (await acct()).login === 'ironat___' && (await acct()).id === ME.id);
+  await page.evaluate(() => wraith.Me.check());
+  ok('a yes clears the doubt', await signedIn() && await page.evaluate(() => wraith.Me.doubt === 0));
+  id.validate = 'down';
+  await page.evaluate(() => wraith.Me.check());
+  ok('no network changes nothing', await signedIn());
 
-  // another tab got there first
-  id.token = 'bad';
-  await page.evaluate(() => { localStorage.setItem('wraith.me', JSON.stringify({ ...wraith.Me.acct, token: 'TOK3', refresh: 'OTHER' })); return wraith.Me.renewNow(); });
-  ok('a tab that lost the race takes the winner’s token', (await acct())?.token === 'TOK3');
-  await page.evaluate(() => wraith.Me.renewNow());
-  ok('a refresh token really gone signs you out', !(await acct()));
+  // another page signed in meanwhile
+  id.validate = 401;
+  await page.evaluate(() => { localStorage.setItem('wraith.me', JSON.stringify({ ...wraith.Me.acct, token: 'TOK3' })); return wraith.Me.check(); });
+  ok('a page holding an old token takes the newer one', (await acct())?.token === 'TOK3' && (await stored())?.token === 'TOK3');
+
+  // the token really is dead
+  await page.evaluate(() => { wraith.Me.follows = ['forsen', 'kaise']; wraith.Me.blocks = new Set(['9']); });
+  await page.evaluate(() => wraith.Me.check());
+  ok('the first no still changes nothing', await signedIn());
+  const gone = await page.waitForFunction(() => !wraith.Me.acct, null, { timeout: 66000 }).then(() => true, () => false);
+  ok('Twitch saying no again a minute later ends it', gone && !(await stored()));
+  ok('and it says so', (await page.$eval('#gtoast', x => x.textContent)).includes('Twitch ended your sign-in'), await page.$eval('#gtoast', x => x.textContent));
+  ok('your lists stay', await page.evaluate(() => wraith.Me.follows.join() === 'forsen,kaise' && wraith.Me.blocks.has('9')));
+  const ended = await sheet();
+  ok('the account sheet says what ended it', ended.includes('Sign in with Twitch') && ended.includes('Twitch stopped accepting it'), ended);
+  ok('nothing ever tried to renew', id.renewals === 0, `${id.renewals} tries`);
+
+  // how long Twitch gives a sign-in
+  id.validate = 'ok'; id.left = 4 * 3600;
+  await page.evaluate(() => wraith.Me.accept({ access_token: 'TOK4' }));
+  const life = await sheet();
+  ok('a sign-in says when it started and what Twitch gives it', life.includes('Signed in') && life.includes('another 4.0 hours') && !life.includes('ended'), life);
+  id.left = 0;
+  await page.evaluate(() => wraith.Me.check());
+  ok('or that Twitch gives it no end date', (await sheet()).includes('no end date'));
+
+  // signing out
+  await pickOpt('Sign out'); await sleep(150);
+  ok('signing out asks first', await signedIn() && (await page.$eval('#sheetBody', x => x.textContent)).includes('Stay signed in') && id.revoked === 0);
+  await pickOpt('Stay signed in'); await sleep(150);
+  ok('staying keeps it', await signedIn() && await page.$eval('#sheet', x => x.hidden));
+  await sheet(); await pickOpt('Sign out'); await sleep(150); await pickOpt('Sign out'); await sleep(300);
+  ok('signing out takes the token and the lists with it', !(await acct()) && !(await stored()) && id.revoked === 1 && await page.evaluate(() => wraith.Me.follows === null && wraith.Me.blocks.size === 0));
+  ok('and the sheet says it was you', (await sheet()).includes('you signed out'));
+  await page.evaluate(() => document.getElementById('scrim').click());
 
   // signing out while something is under way
   await page.evaluate(me => wraith.Me.save(me), ME);
-  id.token = 'ok'; id.wait = 800;
-  await page.evaluate(async () => { const p = wraith.Me.renewNow(); wraith.Me.signOut(); await p; });
-  ok('a renewal finishing after sign-out doesn’t sign you back in', !(await acct()) && !(await stored()));
-  id.wait = 0;
+  id.validate = 401; id.wait = 800;
+  await page.evaluate(async () => { const p = wraith.Me.check(); wraith.Me.signOut(); await p; });
+  ok('a check finishing after sign-out changes nothing', !(await acct()) && !(await stored()));
+  id.validate = 'ok'; id.wait = 0;
   await page.evaluate(me => wraith.Me.save(me), ME);
   follows.wait = 800;
-  await page.evaluate(async () => { const p = wraith.Me.loadFollows(); wraith.Me.out(); await p; });
+  await page.evaluate(async () => { const p = wraith.Me.loadFollows(); wraith.Me.signOut(); await p; });
   ok('a list finishing after sign-out isn’t kept', await page.evaluate(() => wraith.Me.follows === null && JSON.parse(localStorage.getItem('wraith.follows')) === null));
   follows.wait = 0;
 

@@ -2003,88 +2003,90 @@ const Replay = {
 // this device or any other), and the page gets a token. It needs no registered app and no trip away from
 // the page, which matters in the Home Screen app, whose storage Safari doesn't share. Playback and
 // reading chat stay anonymous; the account is for what only it can see or do. The token only goes to Twitch.
+// Twitch won't renew that client's tokens without a secret only its own apps hold ("missing client secret"), so
+// the token is all there is and losing a good one means a trip back to Twitch. Only Twitch saying no about the
+// token itself, twice, ends a sign-in.
 const SCOPES = 'channel_read chat:read chat:edit user_read user_follows_edit user_blocks_read user_blocks_edit user:write:chat user:read:follows user:read:blocked_users user:manage:blocked_users user:read:emotes';
 const Me = {
-  acct: store.get('me', null),         // { token, refresh, exp, id, login, name, pic }
+  acct: store.get('me', null),         // { token, id, login, name, pic }
   follows: store.get('follows', null), // your follow list from Twitch, newest first
   blocks: new Set(store.get('blocks', [])),
   emotes: store.get('myEmotes', []),   // [{ name, url, owner, by, sub }]
   mentions: null,                      // matches your name in chat
   at: {}, notes: {},                   // when each list was last fetched; why one last failed, for the account sheet
+  doubt: 0, checking: null,            // when Twitch first said no to this token; the check under way
 
   post(url, params) { return fetch(url, { method: 'POST', body: new URLSearchParams(params) }); },
 
-  tokens(j) { return { token: j.access_token, refresh: j.refresh_token || this.acct?.refresh || null, exp: j.expires_in ? Date.now() + j.expires_in * 1000 : 0 }; },
   async accept(j) {   // a first sign-in
     const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + j.access_token } });
     if (!r.ok) throw new Error(`Twitch answered ${r.status}`);
     const v = await r.json();
-    this.save({ ...this.tokens(j), id: v.user_id, login: v.login, name: v.login, pic: null });
+    store.set('signin', { since: Date.now(), until: this.until(v) });
+    this.save({ token: j.access_token, id: v.user_id, login: v.login, name: v.login, pic: null });
     this.at.check = Date.now();
   },
   save(a) {
+    if (a?.token !== this.acct?.token) this.doubt = 0;
     this.acct = a;
     store.set('me', a);
     this.mentions = a ? new RegExp(`(^|[^\\w])@?${a.login}($|[^\\w])`, 'i') : null;
     UI.account();
   },
 
-  // A usable token, renewed first if it's about to lapse. Renewals go one at a time: a refresh token works once.
-  async token() {
-    if (this.acct?.exp && Date.now() > this.acct.exp - 120e3) await this.renew();
-    return this.acct?.token || null;
-  },
-  renew() {
-    if (!this.renewing) this.renewing = this.renewNow().finally(() => { this.renewing = null; });
-    return this.renewing;
-  },
-  async renewNow() {
+  // For the account sheet: since when, what Twitch gives it, when it last said no, what ended it.
+  log(o) { store.set('signin', { ...store.get('signin', {}), ...o }); },
+  until(v) { return v.expires_in ? Date.now() + v.expires_in * 1000 : 0; },
+
+  check() { return this.checking ||= this.checkNow().finally(() => { this.checking = null; }); },
+  async checkNow() {   // Twitch asks apps to re-validate hourly
     const a = this.acct;
-    if (!a?.refresh) return this.out('Twitch signed you out. Sign in again.');
-    try {
-      const r = await this.post('https://id.twitch.tv/oauth2/token', { client_id: TV_CID, grant_type: 'refresh_token', refresh_token: a.refresh });
-      if (r.ok) {   // the old refresh token is spent, so the new one is kept before anything else can go wrong
-        const j = await r.json();
-        if (j.access_token && this.acct?.id === a.id) this.save({ ...this.acct, ...this.tokens(j) });
-      } else if (r.status === 400 || r.status === 401) {
-        const there = store.get('me', null);   // another tab may have got there first
-        if (there?.refresh && there.refresh !== a.refresh) this.save(there);
-        else this.out('Twitch signed you out. Sign in again.');
-      }
-    } catch {}
-  },
-  async check() {   // Twitch asks apps to re-validate hourly
-    if (!this.acct) return;
+    if (!a) return;
     this.at.check = Date.now();
-    try {
-      const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + this.acct.token } });
-      if (r.status === 401) await this.renew();
-    } catch {}
+    let r;
+    try { r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + a.token } }); } catch { return; }
+    if (this.acct?.token !== a.token) return;   // signed out, or in again, meanwhile
+    if (r.ok) {
+      this.doubt = 0;
+      const v = await r.json().catch(() => null);
+      if (v) this.log({ until: this.until(v) });
+    } else if (r.status === 401) {
+      const there = store.get('me', null);   // another page may have signed in since
+      if (there?.token && there.token !== a.token) return this.save(there);
+      this.log({ refused: Date.now() });
+      if (!this.doubt) { this.doubt = Date.now(); setTimeout(() => this.check(), 60e3); }   // once can be a hiccup at Twitch
+      else if (Date.now() - this.doubt > 50e3) this.lost();
+    }
   },
-  out(why) {
+  lost() {   // Twitch's doing. Your lists stay: nothing about them has changed, and the next sign-in refreshes them.
+    this.log({ ended: Date.now(), why: 'Twitch stopped accepting it' });
+    this.out();
+    const why = 'Twitch ended your sign-in. Sign in again to chat.';
+    if (Chat.login) Chat.note(why).classList.add('err'); else UI.toast(why);
+  },
+  out() {
     this.save(null);
-    this.follows = null; this.blocks = new Set(); this.emotes = []; this.at = {}; this.notes = {};
-    store.set('follows', null); store.set('blocks', []); store.set('myEmotes', []);
+    this.at = {}; this.notes = {};
     Talk.ircDrop(); Talk.useIrc = false;   // that socket is signed in as whoever opened it
     Talk.show();
     if (!$('home').hidden) Home.load(true);
-    if (why) { if (Chat.login) Chat.note(why).classList.add('err'); else UI.toast(why); }
   },
   signOut() {
     const token = this.acct?.token;
     if (token) this.post('https://id.twitch.tv/oauth2/revoke', { client_id: TV_CID, token }).catch(() => {});
+    this.log({ ended: Date.now(), why: 'you signed out' });
+    this.follows = null; this.blocks = new Set(); this.emotes = [];
+    store.set('follows', null); store.set('blocks', []); store.set('myEmotes', []);
     this.out();
   },
 
   async gql(body) {
-    const send = t => fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': TV_CID, Authorization: 'OAuth ' + t, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE }, body: JSON.stringify(body) });
-    let r = await send(await this.token());
-    if (r.status === 401 && this.acct?.refresh) { await this.renew(); if (this.acct) r = await send(this.acct.token); }
+    const r = await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': TV_CID, Authorization: 'OAuth ' + this.acct?.token, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE }, body: JSON.stringify(body) });
+    if (r.status === 401) { this.log({ refused: Date.now() }); this.check(); }
     return r.json();
   },
-  async helix(path, init = {}) {
-    const t = await this.token();
-    return fetch('https://api.twitch.tv/helix' + path, { ...init, headers: { 'Client-Id': TV_CID, Authorization: 'Bearer ' + t, 'Content-Type': 'application/json' } });
+  helix(path, init = {}) {
+    return fetch('https://api.twitch.tv/helix' + path, { ...init, headers: { 'Client-Id': TV_CID, Authorization: 'Bearer ' + this.acct?.token, 'Content-Type': 'application/json' } });
   },
   async helixAll(path, field) {   // every page of a list
     const out = [];
@@ -2377,7 +2379,7 @@ const Talk = {
     if (this.ircOk) return this.irc.send(line);
     this.ircQ.push(line);
     if (this.irc) return;
-    const token = await Me.token();
+    const token = Me.acct?.token;
     if (!token) return;
     const ws = this.irc = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
     ws.onopen = () => {
@@ -2872,12 +2874,28 @@ const Sheet = {
     this.stats();
   },
   accountItems(body, full) {
-    const me = Me.acct;
-    if (!me) return this.group(body, 'Account', [{ label: 'Sign in with Twitch', desc: 'Send chat, your real follow list, hide chatters you’ve blocked.', pick: () => SignIn.start() }]);
+    const me = Me.acct, s = store.get('signin', {});
+    const when = t => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const span = ms => ms > 1728e5 ? `${Math.round(ms / 864e5)} days` : `${(Math.max(ms, 0) / 36e5).toFixed(1)} hours`;
+    if (!me) {
+      this.group(body, 'Account', [{ label: 'Sign in with Twitch', desc: 'Send chat, your real follow list, hide chatters you’ve blocked.', pick: () => SignIn.start() }]);
+      if (s.ended) body.append(el('div', 'stats', `Last sign-in ended ${when(s.ended)}: ${s.why}${s.since ? `, after ${span(s.ended - s.since)}` : ''}.`));
+      return;
+    }
+    const name = me.name || me.login;
     const facts = [`${(Me.follows || FOLLOWS).length} follows`, `${Me.blocks.size} blocked`, `${Me.emotes.filter(e => e.sub).length} sub emotes`].join(' · ');
-    this.group(body, 'Account', [{ label: `Sign out ${me.name || me.login}`, desc: facts, pick: () => Me.signOut() }]);
+    this.group(body, 'Account', [{ label: `Sign out ${name}`, desc: facts, pick: () => this.show(b => this.group(b, `Sign out ${name}?`, [
+      { label: 'Sign out', pick: () => { this.close(); Me.signOut(); } },
+      { label: 'Stay signed in', pick: () => this.close() },
+    ])) }]);
+    const life = [
+      s.since && `Signed in ${when(s.since)}`,
+      s.until === 0 ? 'Twitch gives it no end date' : s.until && `Twitch gives it another ${span(s.until - Date.now())}`,
+      s.refused && `Twitch last refused it ${when(s.refused)}`,
+    ].filter(Boolean).join(' · ');
+    if (life) body.append(el('div', 'stats', life));
     const trouble = Object.entries(Me.notes).filter(([, v]) => v);
-    if (trouble.length) { const s = el('div', 'stats'); for (const [k, v] of trouble) s.append(el('div', null, `${k}: ${v}`)); body.append(s); }
+    if (trouble.length) { const t = el('div', 'stats'); for (const [k, v] of trouble) t.append(el('div', null, `${k}: ${v}`)); body.append(t); }
   },
   stats() {
     const s = $('sheetBody').querySelector('.stats:last-child');

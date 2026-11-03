@@ -255,6 +255,8 @@ if (which === 'all' || which === 'signin') {
   // sign out
   await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
   await page.evaluate(() => [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.startsWith('Sign out')).click()); await sleep(400);
+  ok('sign out asks first', await page.evaluate(() => !!wraith.Me.acct && document.getElementById('sheetBody').textContent.includes('Stay signed in')));
+  await page.evaluate(() => [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.startsWith('Sign out')).click()); await sleep(400);
   ok('sign out clears the account', await page.evaluate(() => !wraith.Me.acct && wraith.Me.blocks.size === 0 && !localStorage.getItem('wraith.me')?.includes('TOK')));
   ok('sign out revokes the token', calls.includes('revoke'));
   ok('box goes back to the sign-in button', !(await page.$eval('#signin', x => x.hidden)));
