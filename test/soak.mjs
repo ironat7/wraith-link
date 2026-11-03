@@ -1,8 +1,8 @@
 // Long run on a real stream: latency, buffer, stalls, errors, memory, chat, from the deployed site.
-import { chromium } from 'playwright-core';
 import fs from 'fs';
+import { launch } from './lib.mjs';
 const [CH = 'powdur', mins = '15', tag = CH] = process.argv.slice(2);
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', '--enable-precise-memory-info'] });
+const browser = await launch('--enable-precise-memory-info');
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
 const page = await ctx.newPage();
 const errs = []; page.on('pageerror', e => errs.push(e.message));

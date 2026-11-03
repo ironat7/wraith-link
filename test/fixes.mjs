@@ -569,7 +569,7 @@ if (want('account')) {
   // mentions
   await page.goto(base + `?c=${A}`); await sleep(2500);
   await page.evaluate(ch => { wraith.Chat.line(`@id=j1;tmi-sent-ts=${Date.now()};user-id=88;display-name=名前 :namae!namae@namae.tmi.twitch.tv PRIVMSG #${ch} :こんにちは`); wraith.Chat.line(`@id=j2;tmi-sent-ts=${Date.now()};user-id=89;display-name=PlainName :plainname!plainname@plainname.tmi.twitch.tv PRIVMSG #${ch} :hi`); }, A);
-  await sleep(500);
+  await page.waitForSelector('#chat [data-l="plainname"] .n', { timeout: 10000 });   // they wait for the picture, however far behind it is starting up
   await page.evaluate(() => { document.querySelector('#chat [data-l="namae"] .n').click(); }); await sleep(400);
   await page.evaluate(() => [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.startsWith('Mention')).click()); await sleep(200);
   ok('Mention on a non-English name uses their login', (await page.$eval('#sayTx', x => x.value)) === '@namae ', await page.$eval('#sayTx', x => x.value));
@@ -1742,7 +1742,7 @@ if (want('lists')) {
       // a window tall enough to show a whole page has nothing to scroll, so nothing else loads the next
       const rows = (n, more) => ({ streams: { edges: Array.from({ length: n }, (_, i) => ({ cursor: 'c' + i, node: { viewersCount: 1, type: 'live', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } })), pageInfo: { hasNextPage: more } } });
       let calls = 0;
-      const { page, done } = await stage(answer, { path: '', w: 1200, h: 2600, gql: b => { if (b.includes('streams(first')) { calls++; return rows(30, calls < 3); } } });
+      const { page, done } = await stage(answer, { path: '', w: 1200, h: 3400, gql: async b => { if (b.includes('streams(first')) { calls++; const more = calls < 3; await sleep(300); return rows(30, more); } } });
       await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' }); calls = 0;
       await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never); await sleep(1500);
       const n = await page.evaluate(() => document.querySelectorAll('#brList .row').length);
@@ -1752,7 +1752,7 @@ if (want('lists')) {
     (async () => {
       // the same for a page failing: no looping on a failure
       let calls = 0;
-      const { page, done } = await stage(answer, { path: '', w: 1200, h: 2600, gql: (b, route) => { if (b.includes('streams(first')) { calls++; return route.fulfill({ status: 500, headers, body: '{}' }).then(() => true); } } });
+      const { page, done } = await stage(answer, { path: '', w: 1200, h: 3400, gql: (b, route) => { if (b.includes('streams(first')) { calls++; return route.fulfill({ status: 500, headers, body: '{}' }).then(() => true); } } });
       await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' }); calls = 0;
       await sleep(2500);
       ok('and doesn’t hammer Twitch when that fails', calls <= 3, `${calls} calls`);

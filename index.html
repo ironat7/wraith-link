@@ -74,7 +74,6 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .brh { display: flex; align-items: center; gap: 8px; margin: -8px 0 16px -8px; }
 .brh .nm { font-size: 18px; font-weight: 700; }
 .lng { height: 26px; margin-top: -6px; padding: 0 10px; border-radius: 999px; background: var(--bg-2); color: var(--fg-2); font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
-.h .sp { flex: 1; }
 .cats { display: flex; gap: 10px; margin: 0 calc(-1 * max(16px, var(--sar))) 0 calc(-1 * max(16px, var(--sal))); padding: 0 max(16px, var(--sar)) 4px max(16px, var(--sal)); overflow-x: auto; scrollbar-width: none; }
 .cats::-webkit-scrollbar { display: none; }
 .cat { flex: none; width: 96px; min-width: 0; }
@@ -532,6 +531,7 @@ const unwanted = name => /[gG](ay|AY)/.test(name) || /pride|gachi|billy|femboy|q
 const norm = s => String(s || '').trim().toLowerCase().replace(/^(https?:\/\/)?((www|m)\.)?twitch\.tv\//, '').replace(/[/?#].*$/, '').replace(/^@/, '');
 const validLogin = s => /^[a-z0-9_]{2,25}$/.test(s);
 const cdnPath = url => (url || '').match(/^(https:\/\/[^/]+\/[^/]+)\/storyboards\//)?.[1] || null;
+const revoke = urls => urls?.forEach(u => { if (u?.startsWith('blob:')) URL.revokeObjectURL(u); });
 function bufAhead(v) {
   const b = v.buffered, t = v.currentTime;
   for (let i = 0; i < b.length; i++) if (b.start(i) <= t + 0.25 && b.end(i) > t) return b.end(i) - t;
@@ -539,12 +539,10 @@ function bufAhead(v) {
 }
 
 // ── Twitch ──────────────────────────────────────────
+const gqlPost = (body, client, extra) => fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': client, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE, ...extra }, body: JSON.stringify(body) });
+
 async function gql(query, variables, client = CID) {
-  const r = await fetch('https://gql.twitch.tv/gql', {
-    method: 'POST',
-    headers: { 'Client-ID': client, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE },
-    body: JSON.stringify({ query, variables }),
-  });
+  const r = await gqlPost({ query, variables }, client);
   if (!r.ok) throw new Error(`Twitch answered ${r.status}`);
   const j = await r.json();
   if (!j.data) throw new Error(j.errors?.[0]?.message || 'Twitch error');
@@ -572,9 +570,9 @@ async function getUsers(logins) {
 // The kind of player a stream is asked for as. Through the relay a "site" session gets no preroll as long as the
 // request carries a device ID (gql always sends one); the others are for when an ad turns up anyway (see P.dodge).
 const PLAYER_TYPES = ['site', 'popout', 'embed', 'frontpage'];
+const TOKEN_QUERY = 'query($l: String!, $t: String!) { streamPlaybackAccessToken(channelName: $l, params: { platform: "web", playerBackend: "mediaplayer", playerType: $t }) { value signature authorization { isForbidden forbiddenReasonCode } } }';
 async function getToken(login, type = P.playerType) {
-  const d = await gql(`query($l: String!, $t: String!) { streamPlaybackAccessToken(channelName: $l, params: { platform: "web", playerBackend: "mediaplayer", playerType: $t }) { value signature authorization { isForbidden forbiddenReasonCode } } }`, { l: login, t: type });
-  return d.streamPlaybackAccessToken;
+  return (await gql(TOKEN_QUERY, { l: login, t: type })).streamPlaybackAccessToken;
 }
 
 function usherUrl(login, tok) {
@@ -816,25 +814,35 @@ function unlock() {
 
 if (!store.get('qualityReset', false)) { store.set('quality', 'source'); store.set('qualityReset', true); }   // old builds saved their own step-downs as your pick
 
-const P = {
-  gen: 0, login: null, user: null, hls: null, tokenP: null, liveRun: 0,
-  playerType: PLAYER_TYPES.includes(store.get('playerType', '')) ? store.get('playerType', '') : PLAYER_TYPES[0],
-  dodged: new Set(), dodging: false,  // kinds of session already tried on this ad break
+// All there is to know about what's open, as it stands with nothing open. Closing puts it all back.
+const nothingOpen = () => ({
+  login: null, user: null, vod: null,
   feed: null,                        // what's on screen: 'live' | 'cdn' | 'vod'
-  pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
-  q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
-  cap: 0, capWait: 180e3, lastStall: 0,   // renditions below the pick that buffering has forced, for this stream only
-  groups: [], base: null, start: 0, subOnly: false,
-  ad: false, adEnd: 0, cover: false, skipped: 0,
-  rate: 'normal', stalls: [], retries: 0, fixes: 0, asks: 0, vod: null, timer: 0,
-  liveT: TARGET.live, calm: 0,       // current live target, and since when playback has been smooth
+  tokenP: null, audioUrl: null,      // the token the first start uses; this session's audio_only playlist
+  groups: [], subOnly: false,        // the renditions hls.js found; whether only the CDN can play this
+  base: null, start: 0, seekPending: false,   // the copy on the CDN, when the stream began, whether the copy's yet to be seeked into
+  rend: null, asks: 0, cdnPlayed: null,       // the name the copy turned out to be under, how often it's been asked for again, the address of one that has played
+  vodSrcs: null, vodAudio: null,     // addresses for a video and its sound, best first
+  ad: false, adEnd: 0, cover: false, // an ad break, when it ends, and whether the CDN feed is covering it
+  dodged: new Set(), dodging: false, // kinds of session already tried on this ad break
+  cap: 0, capWait: 180e3, lastStall: 0, stalls: [],   // renditions below the pick that buffering has forced, for this stream only
+  rate: 'normal', liveT: TARGET.live, calm: Date.now(),   // speed; current live target, and since when playback has been smooth
+  retries: 0, fixes: 0, began: 0,    // restarts and media recoveries in a row with nothing to show; when the live player last started
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
-  began: 0,                          // when the live player last started
-  pausedAt: 0,                       // when the picture last paused
+  userPaused: false, pausedAt: 0,    // a pause you chose; when the picture last paused
   errs: {},                          // player errors this stream, for the stats panel
+});
 
-  open(login, gesture, cached) {
+const P = {
+  ...nothingOpen(),
+  gen: 0, hls: null, liveRun: 0, timer: 0,
+  playerType: PLAYER_TYPES.includes(store.get('playerType', '')) ? store.get('playerType', '') : PLAYER_TYPES[0],
+  pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
+  q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
+  skipped: 0,                        // ad breaks since the app started, for the stats panel
+
+  async open(login, gesture, cached) {
     this.close();
     const gen = ++this.gen;
     this.login = login;
@@ -842,8 +850,8 @@ const P = {
     UI.watch(login, cached);
     Chat.open(login);
     this.tokenP = getToken(login).catch(e => e);
-    const fresh = cached && Date.now() - cached.at < 60e3;
-    (fresh ? Promise.resolve([cached]) : getUsers([login])).then(async ([u]) => {
+    try {
+      const u = cached && Date.now() - cached.at < 60e3 ? cached : (await getUsers([login]))[0];
       if (gen !== this.gen) return;
       if (!u) return UI.msg(null, `No channel called “${login}”`, 'Check the spelling and try again.');
       this.user = u;
@@ -852,9 +860,11 @@ const P = {
       this.start = Date.parse(u.stream.createdAt) / 1000;
       this.base = await cdnBase(u);
       if (gen !== this.gen) return;
-      this.pref === 'cdn' && cdnLive ? this.playCdn() : this.playLive();
+      if (this.pref === 'cdn' && cdnLive) this.playCdn(); else this.playLive();
       this.timer = setInterval(() => this.refresh(), 60e3);
-    }).catch(e => { if (gen === this.gen) UI.msg(null, 'Couldn’t reach Twitch', e.message, () => this.open(login)); });
+    } catch (e) {
+      if (gen === this.gen) UI.msg(null, 'Couldn’t reach Twitch', e.message, () => this.open(login));
+    }
   },
 
   async openVod(id, gesture) {
@@ -881,10 +891,10 @@ const P = {
       if (!nativeHls) { Tabs.show('vods'); return UI.needsSafari(`https://www.twitch.tv/videos/${v.id}`, true); }
       Replay.open(v.id);
       const srcs = await vodSources(base);
-      if (gen !== this.gen) { srcs.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u)); return; }
+      if (gen !== this.gen) return revoke(srcs);
       this.feed = 'vod'; this.vodSrcs = srcs;
       if (ios) vodSources(base, ['audio_only']).then(a => {   // ready for when the app goes to the background
-        if (gen === this.gen) this.vodAudio = a; else a.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
+        if (gen === this.gen) this.vodAudio = a; else revoke(a);
       });
       stage.classList.add('vod'); $('watch').classList.add('vodw');
       vC.controls = true;
@@ -902,7 +912,7 @@ const P = {
     this.destroyHls();
     const gen = this.gen, run = this.liveRun, stale = () => gen !== this.gen || run !== this.liveRun;   // a newer start takes over
     this.stopCdn();
-    this.cover = this.ad = false; this.adEnd = 0; UI.banner();   // the new session's ads, if any, are its own
+    this.noAd();   // the new session's ads, if any, are its own
     $('msgbox').hidden = true;
     this.feed = 'live'; UI.feed(); UI.spin(true);
     this.moved = this.began = Date.now();
@@ -987,7 +997,7 @@ const P = {
   setPref(f) {
     this.pref = f; store.set('feed', f);
     if (!this.user?.stream || this.feed === 'vod') return;
-    if (f === 'cdn' && (this.feed === 'live' || this.cover)) { this.destroyHls(); this.cover = this.ad = false; this.adEnd = 0; UI.banner(); this.playCdn(); }
+    if (f === 'cdn' && (this.feed === 'live' || this.cover)) { this.destroyHls(); this.noAd(); this.playCdn(); }
     else if (f === 'live' && this.feed === 'cdn' && !this.subOnly) this.playLive();
   },
 
@@ -1021,7 +1031,7 @@ const P = {
   // Live isn't possible (sub-only, relay down, old browser): the CDN feed still is.
   fallback(why) {
     this.destroyHls();
-    this.cover = this.ad = false; this.adEnd = 0; UI.banner();
+    this.noAd();
     if (cdnLive && this.base) {
       UI.toast(`${why} · playing from the CDN`);
       if (!this.subOnly && this.pref === 'live') this.retryLive();
@@ -1045,6 +1055,8 @@ const P = {
       this.playLive();
     }, document.hidden ? 15e3 : 180e3);
   },
+
+  noAd() { this.cover = this.ad = false; this.adEnd = 0; UI.banner(); },
 
   onAd(on, end) {
     if (on) {
@@ -1086,10 +1098,8 @@ const P = {
         if (gen !== this.gen || !this.ad || BG.on) return;
         if (!text?.includes('#EXTINF') || /stitched-ad|X-TV-TWITCH-AD|,Amazon/.test(text)) continue;
         if (kind !== 'account') { this.playerType = kind; store.set('playerType', kind); }
-        this.ad = false; this.adEnd = 0; this.dodged.clear();
-        this.destroyHls();
+        this.dodged.clear();
         this.tokenP = Promise.resolve(tok);
-        UI.banner();
         return this.playLive();
       }
       cover();
@@ -1145,7 +1155,7 @@ const P = {
   nextVodSource() {
     const u = this.vodSrcs?.shift();
     if (!u) return false;
-    if (vC.dataset.url?.startsWith('blob:')) URL.revokeObjectURL(vC.dataset.url);
+    revoke([vC.dataset.url]);
     vC.dataset.url = u; vC.src = u;
     this.play(vC);
     return true;
@@ -1153,8 +1163,7 @@ const P = {
 
   stopCdn() {
     if (!vC.dataset.url) return;
-    if (vC.dataset.url.startsWith('blob:')) URL.revokeObjectURL(vC.dataset.url);
-    this.vodSrcs?.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
+    revoke([vC.dataset.url]); revoke(this.vodSrcs);
     this.vodSrcs = null;
     vC.pause(); vC.removeAttribute('src'); delete vC.dataset.url; vC.load();
   },
@@ -1310,7 +1319,12 @@ const P = {
     try {
       const [u] = await getUsers([this.login]);
       if (gen !== this.gen || !u) return;
-      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) { const paused = this.userPaused || (document.hidden && !(BG.on && BG.wanted)); this.open(this.login); this.userPaused = paused; return; }
+      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) {   // a new stream: pick it up, as paused or not as this one was
+        const paused = this.userPaused || (document.hidden && !(BG.on && BG.wanted));
+        this.open(this.login);
+        this.userPaused = paused;
+        return;
+      }
       // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
       if (!u.stream && this.user?.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
       this.gone = 0;
@@ -1338,7 +1352,7 @@ const P = {
   ended(u) {
     BG.stop(true);
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
-    this.feed = null; this.cover = this.ad = false; this.adEnd = 0; UI.banner();
+    this.feed = null; this.noAd();
     this.user = u; UI.info(u);
     UI.offline(u, true);
     Awake.sync();
@@ -1355,13 +1369,9 @@ const P = {
     clearInterval(this.timer);
     BG.stop(true);
     this.destroyHls(); this.stopCdn(); clearTimeout(vC.again);
-    this.vodAudio?.forEach(u => u.startsWith('blob:') && URL.revokeObjectURL(u));
+    revoke(this.vodAudio);
     vC.controls = false; vL.pause(); vL.removeAttribute('src'); vL.load();
-    Object.assign(this, { login: null, user: null, feed: null, groups: [], base: null, subOnly: false, ad: false, adEnd: 0,
-      cover: false, rate: 'normal', stalls: [], retries: 0, fixes: 0, asks: 0, rend: null, cdnPlayed: null, vod: null, tokenP: null, seekPending: false,
-      liveT: TARGET.live, calm: Date.now(), userPaused: false, audioUrl: null, vodAudio: null, quietUntil: 0, errs: {},
-      cap: 0, capWait: 180e3, lastStall: 0, pos: -1, moved: 0, gone: 0, dodging: false });
-    this.dodged = new Set();
+    Object.assign(this, nothingOpen());
     primed = null; shownSegs.clear();
     stage.classList.remove('vod'); $('watch').classList.remove('vodw');
     Replay.close();
@@ -1657,6 +1667,7 @@ setInterval(() => {
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
+const getJson = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
 const COLORS = ['#FF4D4D', '#5B8CFF', '#3DDC97', '#FF8A3D', '#B3E35A', '#FF6B3D', '#3FBF7F', '#E8B23A', '#E07B39', '#5FB8BF', '#3DA0FF', '#FF7EB6', '#A877FF', '#3DFFA0', '#FFB13D'];
 function nameColor(hex, name) {
   if (!/^#[0-9a-f]{6}$/i.test(hex || '')) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; hex = COLORS[h % COLORS.length]; }
@@ -2005,19 +2016,28 @@ const Chat = {
     return d;
   },
 
+  // Each service's emotes, from its own answer's shape, as { name, url }.
+  ffzEmotes: sets => sets.flatMap(s => s?.emoticons || []).map(e => ({ name: e.name, url: e.urls?.['2'] || e.urls?.['1'] })),
+  bttvEmotes: list => list.map(e => ({ name: e.code, url: `https://cdn.betterttv.net/emote/${e.id}/2x` })),
+  stvEmotes(list) {
+    return list.map(e => {
+      if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name);
+      return { name: e.name, url: e.data?.host?.url && `https:${e.data.host.url}/2x.webp` };
+    });
+  },
+  badgeMap: list => new Map((list || []).map(b => [`${b.setID}/${b.version}`, b.imageURL])),
+
   async loadGlobal() {
     if (this.global) return;
     this.global = new Map();
-    const add = (name, url) => { if (name && url) { this.global.set(name, url); this.globalEmotes.push({ name, url }); } };
-    const j = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
     const [ffz, bttv, stv, badges] = await Promise.all([
-      j('https://api.frankerfacez.com/v1/set/global'), j('https://api.betterttv.net/3/cached/emotes/global'), j('https://7tv.io/v3/emote-sets/global'),
+      getJson('https://api.frankerfacez.com/v1/set/global'), getJson('https://api.betterttv.net/3/cached/emotes/global'), getJson('https://7tv.io/v3/emote-sets/global'),
       gql('query { badges { setID version imageURL(size: DOUBLE) } }').catch(() => null),
     ]);
-    for (const id of ffz?.default_sets || []) for (const e of ffz.sets?.[id]?.emoticons || []) add(e.name, e.urls?.['2'] || e.urls?.['1']);
-    for (const e of bttv || []) add(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
-    for (const e of stv?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
-    this.gbadges = new Map((badges?.badges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
+    const list = [...this.ffzEmotes((ffz?.default_sets || []).map(id => ffz.sets?.[id])), ...this.bttvEmotes(bttv || []), ...this.stvEmotes(stv?.emotes || [])].filter(e => e.name && e.url);
+    for (const e of list) this.global.set(e.name, e.url);
+    this.globalEmotes = list;
+    this.gbadges = this.badgeMap(badges?.badges);
     for (const [k, v] of this.global) if (!this.emotes.has(k)) this.emotes.set(k, v);
     if (!this.global.size) this.global = null;   // none of them answered: the next channel opened asks again
     Picker.refresh();
@@ -2025,18 +2045,14 @@ const Chat = {
 
   async channel(uid) {
     this.uid = uid;
-    const list = [], add = (name, url) => { if (name && url) list.push({ name, url }); };
-    const j = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
     const [ffz, bttv, stv, badges] = await Promise.all([
-      j(`https://api.frankerfacez.com/v1/room/id/${uid}`), j(`https://api.betterttv.net/3/cached/users/twitch/${uid}`), j(`https://7tv.io/v3/users/twitch/${uid}`),
+      getJson(`https://api.frankerfacez.com/v1/room/id/${uid}`), getJson(`https://api.betterttv.net/3/cached/users/twitch/${uid}`), getJson(`https://7tv.io/v3/users/twitch/${uid}`),
       gql('query($id: ID!) { user(id: $id) { broadcastBadges { setID version imageURL(size: DOUBLE) } } }', { id: uid }).catch(() => null),
     ]);
     if (this.uid !== uid) return;
-    for (const s of Object.values(ffz?.sets || {})) for (const e of s.emoticons || []) add(e.name, e.urls?.['2'] || e.urls?.['1']);
-    for (const e of [...(bttv?.channelEmotes || []), ...(bttv?.sharedEmotes || [])]) add(e.code, `https://cdn.betterttv.net/emote/${e.id}/2x`);
-    for (const e of stv?.emote_set?.emotes || []) { add(e.name, e.data?.host?.url && `https:${e.data.host.url}/2x.webp`); if (e.flags & 1 || e.data?.flags & 256) this.zero.add(e.name); }
+    const list = [...this.ffzEmotes(Object.values(ffz?.sets || {})), ...this.bttvEmotes([...(bttv?.channelEmotes || []), ...(bttv?.sharedEmotes || [])]), ...this.stvEmotes(stv?.emote_set?.emotes || [])].filter(e => e.name && e.url);
     this.emotes = new Map([...(this.global || []), ...list.map(e => [e.name, e.url])]); this.chanEmotes = list;
-    this.badges = new Map((badges?.user?.broadcastBadges || []).map(b => [`${b.setID}/${b.version}`, b.imageURL]));
+    this.badges = this.badgeMap(badges?.user?.broadcastBadges);
     Picker.refresh();
   },
 
@@ -2126,8 +2142,10 @@ const Me = {
 
   post(url, params) { return fetch(url, { method: 'POST', body: new URLSearchParams(params) }); },
 
+  validate(token) { return fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + token } }); },
+
   async accept(j) {   // a first sign-in
-    const r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + j.access_token } });
+    const r = await this.validate(j.access_token);
     if (!r.ok) throw new Error(`Twitch answered ${r.status}`);
     const v = await r.json();
     store.set('signin', { since: Date.now(), until: this.until(v) });
@@ -2152,7 +2170,7 @@ const Me = {
     if (!a) return;
     this.at.check = Date.now();
     let r;
-    try { r = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + a.token } }); } catch { return; }
+    try { r = await this.validate(a.token); } catch { return; }
     if (this.acct?.token !== a.token) return;   // signed out, or in again, meanwhile
     if (r.ok) {
       this.doubt = 0;
@@ -2189,7 +2207,7 @@ const Me = {
   },
 
   async gql(body) {
-    const r = await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': TV_CID, Authorization: 'OAuth ' + this.acct?.token, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE }, body: JSON.stringify(body) });
+    const r = await gqlPost(body, TV_CID, { Authorization: 'OAuth ' + this.acct?.token });
     if (r.status === 401) { this.log({ refused: Date.now() }); this.check(); }
     return r.json();
   },
@@ -2326,7 +2344,7 @@ const Me = {
   async streamToken(login) {
     if (!this.acct) return null;
     try {
-      const j = await this.gql({ query: 'query($l: String!) { streamPlaybackAccessToken(channelName: $l, params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) { value signature authorization { isForbidden forbiddenReasonCode } } }', variables: { l: login } });
+      const j = await this.gql({ query: TOKEN_QUERY, variables: { l: login, t: 'site' } });
       return j?.data?.streamPlaybackAccessToken || null;
     } catch { return null; }
   },
@@ -2743,37 +2761,41 @@ const UI = {
   watch(login, u) {
     Pages.tell('play');
     $('home').hidden = true; $('watch').hidden = false;
-    document.title = (u?.displayName || login || 'Video') + ' · Wraith';
     if (u) this.info(u);
-    else { $('iName').textContent = login || ''; $('iTitle').textContent = ''; $('iSub').textContent = ''; $('iAv').removeAttribute('src'); $('hudName').textContent = login || ''; $('hudSub').textContent = ''; this.owner(null); }
+    else { this.row({ name: login || '', page: login || 'Video' }); this.owner(null); }
     Tabs.show('chat');
     this.spin(true);
     hud(true);
   },
+  // The channel row, the names in the controls and on the tab.
+  row({ avatar, name, title = '', sub = '', hudSub = '', page }) {
+    if (avatar) $('iAv').src = avatar; else $('iAv').removeAttribute('src');
+    $('iName').textContent = name;
+    $('iTitle').textContent = title;
+    $('iSub').textContent = sub;
+    $('hudName').textContent = name;
+    $('hudSub').textContent = hudSub;
+    document.title = page + ' · Wraith';
+  },
+  // What Control Center and the lock screen show.
+  nowPlaying(title, artist, avatar) {
+    if (!('mediaSession' in navigator)) return;
+    try { navigator.mediaSession.metadata = new MediaMetadata({ title, artist, artwork: avatar ? [{ src: avatar, sizes: '150x150' }] : [] }); } catch {}
+  },
   info(u) {
-    $('iAv').src = u.profileImageURL || '';
-    $('iName').textContent = u.displayName || u.login;
-    $('iTitle').textContent = u.broadcastSettings?.title || '';
-    const s = u.stream;
-    $('iSub').textContent = s ? [s.game?.displayName, count(s.viewersCount), uptime(s.createdAt)].filter(Boolean).join(' · ') : 'Offline';
-    $('hudName').textContent = u.displayName || u.login;
-    $('hudSub').textContent = s ? `· ${count(s.viewersCount)}` : '';
-    document.title = (u.displayName || u.login) + ' · Wraith';
+    const s = u.stream, name = u.displayName || u.login, title = u.broadcastSettings?.title || '';
+    this.row({ avatar: u.profileImageURL, name, title, page: name,
+      sub: s ? [s.game?.displayName, count(s.viewersCount), uptime(s.createdAt)].filter(Boolean).join(' · ') : 'Offline',
+      hudSub: s ? `· ${count(s.viewersCount)}` : '' });
     this.owner(u);
-    if ('mediaSession' in navigator && u.stream) {
-      try { navigator.mediaSession.metadata = new MediaMetadata({ title: u.broadcastSettings?.title || 'Live', artist: u.displayName, artwork: u.profileImageURL ? [{ src: u.profileImageURL, sizes: '150x150' }] : [] }); } catch {}
-    }
+    if (s) this.nowPlaying(title || 'Live', name, u.profileImageURL);
   },
   vodInfo(v) {
-    $('iAv').src = v.owner?.profileImageURL || '';
-    $('iName').textContent = v.owner?.displayName || '';
-    $('iTitle').textContent = v.title || '';
-    $('iSub').textContent = [day(v.createdAt), dur(v.lengthSeconds), v.game?.displayName].filter(Boolean).join(' · ');
-    document.title = (v.title || 'Video') + ' · Wraith';
-    this.owner(v.owner);
-    if ('mediaSession' in navigator) {
-      try { navigator.mediaSession.metadata = new MediaMetadata({ title: v.title || 'Past broadcast', artist: v.owner?.displayName || '', artwork: v.owner?.profileImageURL ? [{ src: v.owner.profileImageURL, sizes: '150x150' }] : [] }); } catch {}
-    }
+    const o = v.owner;
+    this.row({ avatar: o?.profileImageURL, name: o?.displayName || '', title: v.title || '', page: v.title || 'Video',
+      sub: [day(v.createdAt), dur(v.lengthSeconds), v.game?.displayName].filter(Boolean).join(' · ') });
+    this.owner(o);
+    this.nowPlaying(v.title || 'Past broadcast', o?.displayName || '', o?.profileImageURL);
   },
   // Who the follow button is about, if you're signed in to use it.
   owner(u) {
@@ -2955,7 +2977,7 @@ const Sheet = {
     this.timer = setInterval(() => this.stats(), 1000);
   },
   open() { this.show(body => this.playback(body)); },
-  account() { this.show(body => this.accountItems(body, true)); },
+  account() { this.show(body => this.accountItems(body)); },
   close() { $('sheet').hidden = true; clearInterval(this.timer); SignIn.cancel(); if (!$('watch').hidden) hud(true); },
   render() {
     const body = $('sheetBody');
@@ -2993,7 +3015,7 @@ const Sheet = {
     body.append(el('div', 'stats'));
     this.stats();
   },
-  accountItems(body, full) {
+  accountItems(body) {
     const me = Me.acct, s = store.get('signin', {});
     const when = t => new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
     const span = ms => ms > 1728e5 ? `${Math.round(ms / 864e5)} days` : `${(Math.max(ms, 0) / 36e5).toFixed(1)} hours`;
@@ -3212,7 +3234,7 @@ const Browse = {
       if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
     } finally { if (run === this.run) this.busy = false; }
     // A window tall enough to show the whole page has nothing to scroll, so the observer below won't be calling again.
-    if (loaded && run === this.run && !$('vBrowse').hidden && $('brEnd').getBoundingClientRect().top < innerHeight + 600) this.page();
+    if (loaded && run === this.run && !$('vBrowse').hidden && $('brEnd').getBoundingClientRect().top + scrollY < innerHeight + 600) this.page();
   },
 };
 new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' }).observe($('brEnd'));
@@ -3223,12 +3245,12 @@ const Search = {
   n: 0, timer: 0, at: -1,
   ITEM: 'login displayName profileImageURL(width: 50) stream { viewersCount game { displayName } }',
   hide() { this.n++; clearTimeout(this.timer); $('sgl').hidden = true; $('sgl').textContent = ''; this.at = -1; },
+  mine(low) { return Home.users.filter(u => u.login.includes(low) || u.displayName?.toLowerCase().includes(low)); },
   input() {
     const term = $('q').value.trim();
     clearTimeout(this.timer);
     if (term.length < 2 || /[/.]/.test(term)) return this.hide();
-    const low = term.toLowerCase();
-    this.draw(term, Home.users.filter(u => u.login.includes(low) || u.displayName?.toLowerCase().includes(low)).slice(0, 6), []);
+    this.draw(this.mine(term.toLowerCase()).slice(0, 6), []);
     this.timer = setTimeout(() => this.run(term), 150);
   },
   async run(term) {
@@ -3236,14 +3258,14 @@ const Search = {
     try {
       const d = await gql(`query($q: String!) { searchFor(userQuery: $q, platform: "web") { users { edges { item { ... on User { ${this.ITEM} } } } } channels { edges { item { ... on User { ${this.ITEM} } } } } games { edges { item { ... on Game { name displayName viewersCount boxArtURL(width: 54, height: 72) } } } } } }`, { q: term });
       if (n !== this.n) return;
-      const low = term.toLowerCase(), r = d.searchFor, mine = Home.users.filter(u => u.login.includes(low) || u.displayName?.toLowerCase().includes(low));
+      const low = term.toLowerCase(), r = d.searchFor, mine = this.mine(low);
       const found = new Map();
       for (const u of [...mine, ...(r?.users?.edges || []).map(e => e.item), ...(r?.channels?.edges || []).map(e => e.item)]) if (u?.login && !found.has(u.login)) found.set(u.login, u);
       const rank = u => (u.login === low ? 3e9 : 0) + (mine.includes(u) ? 2e9 : 0) + (u.stream ? 1e9 + u.stream.viewersCount : 0);
-      this.draw(term, [...found.values()].sort((a, b) => rank(b) - rank(a)).slice(0, 8), (r?.games?.edges || []).map(e => e.item).filter(Boolean).slice(0, 3));
+      this.draw([...found.values()].sort((a, b) => rank(b) - rank(a)).slice(0, 8), (r?.games?.edges || []).map(e => e.item).filter(Boolean).slice(0, 3));
     } catch {}
   },
-  draw(term, users, games) {
+  draw(users, games) {
     const box = $('sgl');
     box.textContent = '';
     this.at = -1;
@@ -3335,7 +3357,7 @@ history.scrollRestoration = 'manual';
 function route(gesture) {
   const q = new URLSearchParams(location.search);
   const c = norm(q.get('c') || q.get('channel') || ''), v = q.get('v'), g = q.get('g');
-  if (Sheet && !$('sheet').hidden) Sheet.close();
+  if (!$('sheet').hidden) Sheet.close();
   if (validLogin(c)) P.open(c, gesture, Home.find(c));
   else if (/^\d+$/.test(v || '')) P.openVod(v, gesture);
   else {
