@@ -1002,6 +1002,19 @@ if (want('relay')) {
     await run(page, S, live, silent);
     await done();
   };
+  const cutShort = async (stop, want, name) => {
+    const S = { hung: false };
+    const { page, done } = await stage(route => S.hung ? null : answer(route));
+    await levels(page, 15000);
+    S.hung = true; await page.evaluate(() => wraith.P.playLive());
+    await vis(page, true); await sleep(1000);
+    if (stop) await cc(page, 'pause');
+    S.hung = false; await vis(page, false);
+    await levels(page, 15000); await sleep(500);
+    const s = await st(page);
+    ok(name, await page.evaluate(() => wraith.P.hls?.levels.length === 1) && want(s), JSON.stringify(s));
+    await done();
+  };
   await Promise.all([
     leaving(async (page, S, live) => {
       await sleep(3000); S.hung = false;
@@ -1038,6 +1051,8 @@ if (want('relay')) {
       ok('a hang once the sound is going: it carries on after', s.on && s.wanted && await page.evaluate(t => document.getElementById('aBG').currentTime > t + 2, at), JSON.stringify(s));
       await done();
     })(),
+    cutShort(false, s => !s.paused && s.spin, 'a start cut short by leaving goes again on coming back'),
+    cutShort(true, s => s.paused && !s.spin, 'and stays paused, with no spinner, if you stopped the sound'),
     (async () => {
       const { page, done, t } = await stage(never), ms = await toCdn(page, t);
       ok('a relay that never answers: on the CDN in about the time a dead one takes', ms < 30e3, `${ms} ms`);

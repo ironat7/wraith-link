@@ -1354,7 +1354,9 @@ const BG = {
     vL.muted = vC.muted = Sound.muted;
     if (silent) return;
     P.moved = Date.now();
-    if (P.feed === 'live' && P.hls) {
+    if (this.held) P.userPaused = true;
+    if (P.feed === 'live' && !P.hls?.levels.length) P.playLive();   // leaving cut its start short, or that start failed while away
+    else if (P.feed === 'live') {
       P.quietUntil = Date.now() + 6000;   // the restart's own buffering isn't a bad connection
       if (!P.hls.media) P.hls.attachMedia(vL);
       P.hls.once(window.Hls.Events.LEVEL_UPDATED, () => P.toLiveEdge());   // to the edge once the playlist is fresh
@@ -1363,8 +1365,7 @@ const BG = {
     }
     else if (P.feed === 'vod' && at) vC.currentTime = at;
     else if (P.feed === 'cdn') P.cdnSeek();
-    if (this.held) P.userPaused = true;
-    else { P.play(P.active()); if (!Sound.muted) UI.unmute(false); }
+    if (!this.held) { P.play(P.active()); if (!Sound.muted) UI.unmute(false); }
     UI.playIcon();
   },
 };
