@@ -995,8 +995,7 @@ const nothingOpen = () => ({
   retries: 0, fixes: 0, began: 0,    // restarts and media recoveries in a row with nothing to show; when the live player last started
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
-  userPaused: false, pausedAt: 0,    // a pause you chose; when the picture last paused
-  frames: { n: 0, pos: -1, at: 0, still: 0, tries: 0 },   // the player's count of frames, and where that's got to
+  userPaused: false, pausedAt: 0, resumedAt: 0,   // a pause you chose; when the picture last paused; when its loading last started up again
   errs: {},                          // player errors this stream, for the stats panel
 });
 
@@ -1008,7 +1007,6 @@ const P = {
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
   skipped: 0,                        // ad breaks since the app started, for the stats panel
   labelled: 0, restAfter: 5000,      // when the latency label was last written; how long a pause before loading stops
-  counts: store.get('framesCount', false),   // this phone's player has been seen counting frames
 
   async open(login, gesture, cached) {
     this.close();
@@ -1409,7 +1407,11 @@ const P = {
   active() { return this.feed === 'live' ? vL : this.feed ? vC : null; },
 
   latency() {
-    if (this.feed === 'live') { const d = this.hls?.playingDate; return d ? (Date.now() - d.getTime()) / 1000 : null; }
+    if (this.feed === 'live') {
+      if (vL.readyState < 3 && Date.now() < this.quietUntil) return null;   // on its way to the live edge, with the last figure out of date
+      const d = this.hls?.playingDate;
+      return d ? (Date.now() - d.getTime()) / 1000 : null;
+    }
     if (this.feed === 'cdn' && vC.readyState > 0 && Number.isFinite(this.start)) return Date.now() / 1000 - this.start - vC.currentTime;
     return null;
   },
@@ -1457,12 +1459,31 @@ const P = {
     if (v.playbackRate !== r) v.playbackRate = r;
   },
 
-  // Left alone, a paused live stream goes on loading as fast as a playing one: hls.js has the picture jump ahead each time it falls too
-  // far behind, and fetches what's there. So after a few seconds it stops, and the next play starts it up at the live edge.
+  // What the picture's player loads follows the picture. Left alone, a paused live stream goes on loading as fast as a playing one: hls.js
+  // has the picture jump ahead each time it falls too far behind, and fetches what's there. So loading stops after a few seconds paused,
+  // or at once with the app away and the sound on its own player, so the relay isn't polled twice. The player itself stays as it is: taking
+  // it apart on the way out reloads the video, which cancels what iOS's fullscreen player is waiting to hear (see checkFull), and a new
+  // MediaSource on the way back looks to bring a reset from hls.js (two returns on the sheet, two mediaSourceRequiresReset, 2026-11-04).
   rest() {
     const h = this.hls;
-    if (this.feed === 'live' && h?.loadingEnabled && h.levels.length && !this.ad && !BG.on && performance.now() - this.pausedAt > this.restAfter) h.stopLoad();
+    if (this.feed !== 'live' || !h?.loadingEnabled || !h.levels.length) return;
+    if (BG.on) { h.stopLoad(); this.dropBuffer(); }   // nobody's looking, and iOS may as well have the memory
+    else if (!this.ad && performance.now() - Math.max(this.pausedAt, this.resumedAt) > this.restAfter) h.stopLoad();
   },
+  // Playing or coming back, it starts up again at the live edge, with nothing old to play first. A fresh playlist takes the relay most of a
+  // second, and till then hls.js would fetch and play what's old: so on from where it was, by however long that's been.
+  resume() {
+    const h = this.hls;
+    if (this.feed !== 'live' || !h?.levels.length || h.loadingEnabled || BG.on) return;
+    this.resumedAt = performance.now();
+    this.quietUntil = Date.now() + 6000;   // its own buffering isn't a bad connection
+    this.dropBuffer();
+    const at = vL.currentTime > 0 ? vL.currentTime + (this.resumedAt - this.pausedAt) / 1000 : -1;
+    if (at > 0) vL.currentTime = at;
+    h.once(window.Hls.Events.LEVEL_UPDATED, () => this.toLiveEdge());
+    h.startLoad(at);
+  },
+  dropBuffer() { this.hls.trigger(window.Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: Infinity, type: null }); },
 
   // Slows down when the buffer runs thin, or when it starts closer than the target (no cushion).
   liveRate(lat, T, ahead) {
@@ -1512,7 +1533,6 @@ const P = {
     const moving = v.currentTime !== this.pos, live = this.feed === 'live';
     this.pos = v.currentTime;
     if (moving && live && now - this.began > 8e3) this.retries = this.fixes = 0;   // it really is playing: the last restart worked
-    if (live) this.checkFrames(v, now);
     if (!(live ? this.hls?.levels.length : !v.error) || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
     if (now - this.moved < (live ? 10e3 : 40e3)) return;
     this.moved = now;
@@ -1520,32 +1540,17 @@ const P = {
     if (live) this.restart(); else this.playCdn({ reload: true });
   },
 
-  // iOS can stop showing the picture with the sound and the clock carrying on, and raises nothing (2026-11-03, on the Duo). Frames no
-  // longer being decoded are the one way that shows from here. A seek has it start over from the last keyframe; failing that, a new
-  // player. Only on a phone whose count has been seen moving, and only once each until frames come back: a count that can't be trusted
-  // costs a hiccup or two at most.
-  checkFrames(v, now) {
-    const f = this.frames;
-    if (now - f.at < 900) return;
-    f.at = now;
-    const n = v.getVideoPlaybackQuality?.()?.totalVideoFrames ?? 0, last = f.n, moved = v.currentTime !== f.pos;
-    f.n = n; f.pos = v.currentTime;
-    if (n > last) {
-      if (!this.counts) { this.counts = true; store.set('framesCount', true); }
-      if (f.tries) { f.tries = 0; Away.add('picture back'); }
+  // iOS's fullscreen player hears it's to close only from the video's own end-of-fullscreen event, and reloading the video before that's
+  // gone out cancels it. The player then hides itself with the picture's layer still in it, leaving the video black with its sound,
+  // frames and clock all going, and nothing else that can bring it back (2026-11-04, on the Duo, leaving the app from fullscreen). Little
+  // reloads it now, hls.js resetting itself mostly, but sending the event by hand sends what it would have. Only on a second look, as a
+  // usual close has the event on its way for a moment.
+  checkFull() {
+    for (const v of [vL, vC]) {
+      const lost = v.inFull && !v.webkitDisplayingFullscreen;
+      if (lost && v.fullLost) { Away.add('fullscreen left open: closing it'); v.dispatchEvent(new Event('webkitendfullscreen')); }
+      v.fullLost = lost;
     }
-    if (n !== last || !moved || !this.hls?.media || BG.on || document.hidden || v.paused || v.readyState < 3 || this.ad) { f.still = 0; return; }
-    if (++f.still < 4 || !this.counts) return;
-    f.still = 0;
-    if (++f.tries === 1) {
-      Away.add('no new frames: seeking'); this.noteErr({ details: 'no new frames' });
-      this.quietUntil = Date.now() + 6000;   // its own buffering isn't a bad connection
-      v.currentTime += 0.05;
-    } else if (f.tries === 2) {
-      Away.add('no new frames: new player');
-      this.began = Date.now(); recoverHls(this.hls, vL);
-      this.play(vL);
-    } else if (f.tries === 3) Away.add('no new frames: left as it is');
   },
 
   // By hand, for a picture that's gone with the sound still going, which nothing here can always see.
@@ -1592,10 +1597,10 @@ const P = {
   },
 
   ended(u) {
-    const v = this.active();   // iOS's own fullscreen player would sit on the last frame
-    if (v?.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}
+    const v = this.active();
     BG.stop(true);
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
+    if (v?.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}   // iOS's own fullscreen player would sit on the last frame. After the reloads: see checkFull
     this.feed = null; this.noAd();
     this.user = u; UI.info(u);
     Vods.channel(u.login); About.channel(u.login);   // what they just streamed is a past broadcast now
@@ -1652,10 +1657,6 @@ const BG = {
     if (v.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}
     aBG.muted = false;
     if (P.feed === 'live') {
-      // the picture's player lets go of its stream while away: the relay isn't polled twice, iOS gets
-      // the memory back, and on return it starts clean at the live edge
-      P.hls.stopLoad();
-      P.hls.detachMedia();
       // it takes ~2.5 s to start, so it starts ~2.5 s further back: the sound resumes where the
       // picture stopped, with more cushion for the slower timers of a backgrounded page
       const h = this.hls = new window.Hls({ ...LOADING, pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
@@ -1690,6 +1691,7 @@ const BG = {
     const p = aBG.play(); if (p) p.catch(() => {});
     v.pause();
     vL.muted = vC.muted = true;
+    P.rest();
   },
   load(h) { if (h.levels.length) h.startLoad(-1); else h.loadSource(h.url); },   // with no playlist yet, startLoad does nothing
   // Twitch has ended this session, after hours away perhaps, and asking for it again won't change that: it takes a new one.
@@ -1733,12 +1735,9 @@ const BG = {
     P.moved = Date.now();
     if (this.held) P.userPaused = true;
     if (P.cover && !P.hls?.loadingEnabled) P.playLive();   // the player under the cover died while away, and only it could say the break was over
-    else if (P.feed === 'live' && !P.hls?.levels.length) P.playLive();   // leaving cut its start short, or that start failed while away
+    else if (P.feed === 'live' && !P.hls?.levels.length) P.playLive();   // its start failed while away
     else if (P.feed === 'live') {
-      P.quietUntil = Date.now() + 6000;   // the restart's own buffering isn't a bad connection
-      if (!P.hls.media) P.hls.attachMedia(vL);
-      P.hls.once(window.Hls.Events.LEVEL_UPDATED, () => P.toLiveEdge());   // to the edge once the playlist is fresh
-      P.hls.startLoad(-1);
+      P.resume();
       if (P.ad) P.dodge();   // leaving stopped the search for a clean session, and the break is still on
       else if (!this.held) UI.spin(true);
     }
@@ -1890,7 +1889,6 @@ const Awake = {
 document.addEventListener('visibilitychange', () => Awake.sync());
 // touchend too: iOS sends no click for a tap on something that doesn't take one, like chat
 for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
-  if (document.hidden && !Pages.tapped) { Pages.tapped = true; Away.add('tapped while called hidden'); }
   Pages.see();
   if (Awake.granted) Awake.sync(); else Awake.ask();
 }, { capture: true, passive: true });
@@ -1914,8 +1912,8 @@ new IntersectionObserver(es => {
 }, { scrollMargin: '100%' }).observe(vL);
 
 for (const v of [vL, vC]) {
-  v.addEventListener('webkitbeginfullscreen', () => Away.add('fullscreen'));
-  v.addEventListener('webkitendfullscreen', () => Away.add('fullscreen closed'));
+  v.addEventListener('webkitbeginfullscreen', () => { v.inFull = true; Away.add('fullscreen'); });
+  v.addEventListener('webkitendfullscreen', () => { v.inFull = false; Away.add('fullscreen closed'); });
   v.addEventListener('timeupdate', () => P.tick());
   v.addEventListener('playing', () => {
     if (P.active() === v) {
@@ -1924,8 +1922,6 @@ for (const v of [vL, vC]) {
       UI.spin(false); UI.big(false);
     }
     UI.playIcon(); Awake.sync();
-    // On a page called hidden iOS lets go of the video's layer, leaving the sound. Reading a frame has it count the player as needed.
-    if (document.hidden && v === vL) { Away.add('playing while called hidden'); createImageBitmap(v, { resizeWidth: 1, resizeHeight: 1 }).then(b => b.close(), () => {}); }
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
   v.addEventListener('pause', () => { P.pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
@@ -1945,13 +1941,7 @@ for (const v of [vL, vC]) {
     if (v === vL && v.currentTime > 3) P.noteStall();
   });
 }
-vL.addEventListener('play', () => {   // after a pause long enough for loading to stop
-  const h = P.hls;
-  if (P.feed !== 'live' || !h || h.loadingEnabled || BG.on) return;
-  P.quietUntil = Date.now() + 6000;
-  h.once(window.Hls.Events.LEVEL_UPDATED, () => P.toLiveEdge());
-  h.startLoad(-1);
-});
+vL.addEventListener('play', () => P.resume());
 vC.addEventListener('loadedmetadata', () => {
   P.played = vC.dataset.url;
   if (P.feed === 'cdn' && P.seekPending) P.cdnSeek();
@@ -1976,6 +1966,7 @@ setInterval(() => {
   }
   if (P.feed) { P.tick(); UI.banner(); }
   if (P.feed && Awake.granted) Awake.sync();
+  P.checkFull();
 }, 1000);
 
 // ── chat ────────────────────────────────────────────

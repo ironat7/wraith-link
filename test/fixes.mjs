@@ -64,6 +64,19 @@ const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 
 // the CDN's copy of a stream, as a finished playlist: Chrome's native HLS stalls on a growing one, and a seek can break it
 const DVR = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:VOD\n' + Array.from({ length: 300 }, (_, i) => `#EXTINF:2.000,\n${i}.aac\n`).join('') + '#EXT-X-ENDLIST\n';
 const headers = { 'access-control-allow-origin': '*' }, never = () => {};
+// iOS's fullscreen player as WebKit has it: asking to leave only queues the end-of-fullscreen event, reloading the video cancels what's
+// queued, and the player's told to close when that event goes out, by whoever sends it, with the video no longer in fullscreen.
+const iosFullscreen = () => {
+  delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen;
+  window.__told = 0;
+  Object.defineProperty(HTMLVideoElement.prototype, 'webkitDisplayingFullscreen', { configurable: true, get() { return window.__fs === this; } });
+  HTMLVideoElement.prototype.webkitEnterFullscreen = function () { window.__fs = this; setTimeout(() => this.dispatchEvent(new Event('webkitbeginfullscreen'))); };
+  HTMLVideoElement.prototype.webkitExitFullscreen = function () { window.__fs = null; this.__end = setTimeout(() => this.dispatchEvent(new Event('webkitendfullscreen'))); };
+  const load = HTMLMediaElement.prototype.load;
+  HTMLMediaElement.prototype.load = function () { clearTimeout(this.__end); return load.call(this); };
+  const send = EventTarget.prototype.dispatchEvent;
+  HTMLVideoElement.prototype.dispatchEvent = function (e) { const r = send.call(this, e); if (e.type === 'webkitendfullscreen' && window.__fs !== this) window.__told++; return r; };
+};
 const answer = route => { const u = route.request().url(); return route.fulfill({ status: 200, headers, body: u.includes('usher') ? MASTER : u.includes('audio') ? AUDIO() : MEDIA }).catch(never); };
 const ago = s => new Date(Date.now() - s * 1000).toISOString();
 const ME = { token: 'TOK', id: '212375133', login: 'ironat___', name: 'Ironat___' };
@@ -919,18 +932,15 @@ if (want('sound')) {
 
 if (want('sound')) {
   // Leaving from iOS's fullscreen player: it comes out of it, or Control Center stays with the paused picture.
-  const { page, done } = await open({ iphone: true, w: 951, h: 669, init: () => {
-    delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen;
-    Object.defineProperty(HTMLVideoElement.prototype, 'webkitDisplayingFullscreen', { configurable: true, get() { return window.__fs === this; } });
-    HTMLVideoElement.prototype.webkitEnterFullscreen = function () { window.__fs = this; };
-    HTMLVideoElement.prototype.webkitExitFullscreen = function () { window.__fs = null; window.__exits = (window.__exits || 0) + 1; this.dispatchEvent(new Event('webkitendfullscreen')); };
-  } });
+  const { page, done } = await open({ iphone: true, w: 951, h: 669, init: iosFullscreen });
   await page.goto(base + `?c=${A}`); await playing(page);
   await page.evaluate(() => document.getElementById('bFull').click());
   ok('fullscreen hands the video to iOS’s player', await page.evaluate(() => window.__fs === wraith.P.active()));
   await vis(page, true); await sounding(page);
   let s = await snd(page);
-  ok('leaving brings it out of that player', await page.evaluate(() => window.__fs === null && window.__exits === 1) && s.on && !s.paused && s.vPaused, JSON.stringify(s));
+  await page.waitForFunction(() => window.__told > 0, null, { timeout: 2000 }).catch(never);
+  ok('leaving brings it out of that player, and iOS hears of it', await page.evaluate(() => window.__fs === null && window.__told === 1) && s.on && !s.paused && s.vPaused, JSON.stringify(s));
+  ok('with the picture’s player paused, not taken apart', await page.evaluate(() => wraith.P.hls.media === document.getElementById('vLL') && !wraith.P.hls.loadingEnabled && !document.getElementById('vLL').buffered.length || !document.getElementById('vLL').buffered.end(0)));
   await vis(page, false); await playing(page);
   s = await snd(page);
   ok('and coming back plays', !s.on && !s.vPaused && !s.vMuted, JSON.stringify(s));
@@ -1145,6 +1155,21 @@ if (want('recover')) {
       await sleep(5000);
       const s = await after(page);
       ok('hls.js resetting the player by itself doesn’t leave it paused', s.same && !s.paused && s.moved > 1, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // a pause long enough for loading to stop: playing goes straight past what it missed, with nothing old to play first
+      const { page, done } = await stream();
+      await page.evaluate(() => { wraith.P.restAfter = 500; document.getElementById('bPlay').click(); });
+      await page.waitForFunction(() => !wraith.P.hls.loadingEnabled, null, { timeout: 5000 }).catch(never);
+      await sleep(2000);
+      const was = await page.evaluate(() => { const v = wraith.P.active(), at = v.currentTime; document.getElementById('bPlay').click(); return at; });
+      await page.waitForFunction(() => wraith.P.hls.loadingEnabled, null, { timeout: 3000 }).catch(never);
+      const now = await page.evaluate(() => wraith.P.active().currentTime);
+      ok('played again after loading stopped, it goes past what it missed', now >= was + 2, `${was} then ${now}`);
+      await sleep(3000);
+      const s = await page.evaluate(() => { const v = wraith.P.active(); return { paused: v.paused, ready: v.readyState, lat: wraith.P.latency() }; });
+      ok('and it’s moving at the live edge', !s.paused && s.ready >= 3 && s.lat < 6, JSON.stringify(s));
       await done();
     })(),
     (async () => {
@@ -1952,18 +1977,12 @@ if (want('screen')) {
       await done();
     })(),
     (async () => {
-      // or iOS never calling it visible at all: a tap says it's on screen, and the picture gets read so iOS keeps its layer
-      const { page, done } = await stage(answer, { init: () => {
-        window.__reads = 0; const real = window.createImageBitmap;
-        window.createImageBitmap = (...a) => { window.__reads++; return real.apply(window, a); };
-        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
-      } });
+      // or iOS never calling it visible at all: a tap says it's on screen
+      const { page, done } = await stage(answer, { init: () => Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }) });
       await sleep(800);
       await page.mouse.click(5, 600);
       await levels(page, 5000);
-      ok('on a page always called hidden, a tap starts it', await page.evaluate(() => !!wraith.P.hls && JSON.parse(localStorage.getItem('wraith.away')).some(x => x.endsWith('tapped while called hidden'))));
-      await page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing')));
-      ok('and the picture’s read so iOS keeps showing it', await page.evaluate(() => window.__reads === 1), String(await page.evaluate(() => window.__reads)));
+      ok('on a page always called hidden, a tap starts it', await page.evaluate(() => !!wraith.P.hls));
       await done();
     })(),
     (async () => {
@@ -1973,7 +1992,7 @@ if (want('screen')) {
       const on = () => page.evaluate(() => wraith.P.hls.loadingEnabled);
       await page.evaluate(() => { const v = wraith.P.active(); v.pause(); wraith.P.pausedAt = performance.now(); wraith.P.tick(); });
       ok('just paused, it’s still loading', await on());
-      await page.evaluate(() => { wraith.P.pausedAt -= 6000; wraith.P.tick(); });
+      await page.evaluate(() => { wraith.P.restAfter = -1; wraith.P.tick(); });
       ok('after a few seconds paused it isn’t', !(await on()));
       await page.evaluate(() => { document.getElementById('bPlay').click(); });
       await page.waitForFunction(() => wraith.P.hls.loadingEnabled, null, { timeout: 4000 }).catch(never);
@@ -1988,7 +2007,7 @@ if (want('screen')) {
       } });
       await levels(page, 15000);
       await page.waitForFunction(() => !document.getElementById('bigPlay').hidden, null, { timeout: 4000 }).catch(never);
-      await page.evaluate(() => { wraith.P.pausedAt = -1e5; wraith.P.tick(); });
+      await page.evaluate(() => { wraith.P.restAfter = -1; wraith.P.tick(); });
       ok('autoplay refused: the big play button’s up and it isn’t loading', await page.evaluate(() => !document.getElementById('bigPlay').hidden && !wraith.P.hls.loadingEnabled));
       await page.evaluate(() => { window.__allow = true; document.getElementById('bigPlay').click(); });
       await page.waitForFunction(() => wraith.P.hls.loadingEnabled, null, { timeout: 4000 }).catch(never);
@@ -2040,57 +2059,51 @@ if (want('screen')) {
       ok('and chat’s drawn again with them', await page.evaluate(() => window.__draws > 0));
       await done();
     })(),
-    // the picture gone with the sound and the clock going, which iOS can do with no word: frames that stop get a seek, then a new player, then no more
-    ...[true, false].map(counted => (async () => {
-      const { page, done } = await stage(answer, counted ? { init: () => localStorage.setItem('wraith.framesCount', 'true') } : {});
+    (async () => {
+      // a stream ending in iOS's fullscreen player: it closes, with iOS told
+      const { page, done } = await stage(answer, { init: iosFullscreen });
       await levels(page, 15000);
-      await page.evaluate(c => {
-        const v = wraith.P.active();
-        let t = 0, now = Date.now() + 1e6;
-        window.__frames = c ? 100 : 0; window.__seeks = window.__players = 0;
-        v.getVideoPlaybackQuality = () => ({ totalVideoFrames: window.__frames, droppedVideoFrames: 0 });
-        Object.defineProperty(v, 'currentTime', { configurable: true, get: () => t, set() { window.__seeks++; } });
-        Object.defineProperty(v, 'readyState', { configurable: true, get: () => 4 });
-        Object.defineProperty(v, 'paused', { configurable: true, get: () => window.__paused === true });
-        wraith.P.hls.recoverMediaError = () => { window.__players++; };
-        window.__go = (seconds, frames) => { for (let i = 0; i < seconds; i++) { t++; now += 1000; window.__frames += frames; wraith.P.checkFrames(v, now); } };   // seconds going by, with no wait for them
-      }, counted);
-      const go = (seconds, frames = 0) => page.evaluate(([a, b]) => window.__go(a, b), [seconds, frames]);
-      const n = () => page.evaluate(() => `${window.__seeks},${window.__players}`);
-      const log = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]').join(' | '));
-      if (!counted) {
-        await go(8);
-        ok('on a phone whose count has never moved, a count standing still means nothing', await n() === '0,0', await n());
-        await go(2, 30);
-        ok('and it’s noted once it does move', await page.evaluate(() => localStorage.getItem('wraith.framesCount') === 'true'));
-        return done();
-      }
-      await go(8, 30);
-      ok('frames going by: the picture’s left alone', await n() === '0,0', await n());
-      await page.evaluate(() => { window.__paused = true; }); await go(8);
-      ok('a picture that’s paused isn’t missing any', await n() === '0,0', await n());
-      await page.evaluate(() => { window.__paused = false; }); await go(3);
-      ok('3 s with no new frames is nothing yet', await n() === '0,0', await n());
-      await go(1);
-      ok('4 s with the clock going: a seek', await n() === '1,0', await n());
-      await go(4);
-      ok('still none: a new player', await n() === '1,1', await n());
-      await go(8);
-      ok('and it stops there', await n() === '1,1', await n());
-      ok('the settings sheet has all that', /no new frames: seeking.*no new frames: new player.*no new frames: left as it is/.test(await log()), await log());
-      await go(2, 30);
-      ok('frames back: so it says', (await log()).endsWith('picture back'), (await log()).slice(-60));
-      await go(4);
-      ok('and the next time it starts again', await n() === '2,1', await n());
-      await go(1, 30);
+      await page.evaluate(() => wraith.P.active().webkitEnterFullscreen()); await sleep(50);
+      await page.evaluate(() => wraith.P.ended(wraith.P.user));
+      await page.waitForFunction(() => window.__told > 0, null, { timeout: 2000 }).catch(never);
+      ok('a stream ending closes iOS’s fullscreen player', await page.evaluate(() => window.__fs === null && window.__told === 1));
+      await done();
+    })(),
+    (async () => {
+      // however it comes about, the video out of fullscreen with iOS's player never told: that one's holding the picture
+      const { page, done } = await stage(answer, { init: iosFullscreen });
+      await levels(page, 15000);
+      const told = () => page.evaluate(() => window.__told), look = () => page.evaluate(() => wraith.P.checkFull());
+      const away = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away')).filter(x => x.endsWith('fullscreen left open: closing it')).length);
+      await page.evaluate(() => wraith.P.active().webkitEnterFullscreen()); await sleep(50);
+      await look(); await look();
+      ok('a video in iOS’s fullscreen player is left alone', await told() === 0);
+      await page.evaluate(() => wraith.P.active().webkitExitFullscreen());
+      await page.waitForFunction(() => window.__told > 0, null, { timeout: 2000 }).catch(never);
+      await look(); await look();
+      ok('a usual close tells iOS once, by itself', await told() === 1 && await away() === 0);
+      await page.evaluate(() => wraith.P.active().webkitEnterFullscreen()); await sleep(50);
+      await page.evaluate(() => { const v = wraith.P.active(); v.webkitExitFullscreen(); v.load(); }); await sleep(50);
+      await look();
+      ok('a reload cancels that', await told() === 1);
+      await look();
+      ok('and the next look tells iOS anyway', await told() === 2 && await away() === 1);
+      await look(); await look();
+      ok('once', await told() === 2);
+      await done();
+    })(),
+    (async () => {
+      // the settings sheet says what the player says, and can start the picture over by hand
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
       await page.evaluate(() => document.getElementById('bSet').click());
       const sheet = await page.$eval('#sheetBody', x => x.textContent);
-      ok('the sheet says what the player says', /Frames: [\d,]+ decoded, 0 dropped .*Player: \d+×\d+ at /.test(sheet), sheet.slice(-300));
+      ok('the sheet says what the player says', /Frames: [\d,]+ decoded, [\d,]+ dropped .*Player: \d+×\d+ at /.test(sheet), sheet.slice(-300));
       await page.evaluate(() => { window.__old = wraith.P.hls; [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.includes('Reload the picture')).click(); });
       await page.waitForFunction(() => wraith.P.hls && wraith.P.hls !== window.__old, null, { timeout: 5000 }).catch(never);
       ok('and reloading the picture by hand makes a new player and closes it', await page.evaluate(() => wraith.P.hls !== window.__old && document.getElementById('sheet').hidden));
       await done();
-    })()),
+    })(),
     // the lock as WebKit grants it: within 5 s of a tap, or to a page it has already granted it to that way. It keeps its own clock of
     // real taps, since whatever page.evaluate runs counts as one to navigator.userActivation
     ...[true, false].map(straight => (async () => {
@@ -2342,7 +2355,7 @@ if (want('lists')) {
       await onBrowse(page);
       const list = () => page.evaluate(() => document.querySelectorAll('#brList .row').length);
       await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never);
-      await page.waitForFunction(() => { scrollTo(0, document.documentElement.scrollHeight); return document.querySelectorAll('#brList .row').length >= 60; }, null, { timeout: 15000, polling: 100 }).catch(never);
+      await page.waitForFunction(() => { scrollTo(0, document.documentElement.scrollHeight - ((window.__up = !window.__up) ? 200 : 0)); return document.querySelectorAll('#brList .row').length >= 60; }, null, { timeout: 15000, polling: 100 }).catch(never);   // up and down, as a scroll to where it already is says nothing
       const was = await list();
       await page.evaluate(() => window.dispatchEvent(new Event('online'))); await sleep(500);
       ok('the network coming back leaves a long Browse list alone', await list() >= was && was >= 60, `${was} then ${await list()}`);
