@@ -431,7 +431,7 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
 }
 /* A closed Duo upright has iOS's island, clock and Wi-Fi down the right to about 228, and nothing across the top. So chat goes beside
    them and the picture below them, and what's below that has the width to itself. A sheet stops short of them too. Only what doesn't
-   hold the video gets rearranged: changing how a playing video's parents display rebuilds its layer, and iOS can leave that black. */
+   hold the video gets rearranged: changing how a playing video's parents display makes iOS rebuild its layer. */
 @media (orientation: portrait) {
   html[data-strip] #watch:not(.full, .idle) { background: var(--bg); }
   html[data-strip] #watch:not(.full, .idle) :is(.side, #paneChat) { display: contents; }
@@ -996,6 +996,7 @@ const nothingOpen = () => ({
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
   userPaused: false, pausedAt: 0,    // a pause you chose; when the picture last paused
+  frames: { n: 0, pos: -1, at: 0, still: 0, tries: 0 },   // the player's count of frames, and where that's got to
   errs: {},                          // player errors this stream, for the stats panel
 });
 
@@ -1006,6 +1007,7 @@ const P = {
   pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
   skipped: 0,                        // ad breaks since the app started, for the stats panel
+  counts: store.get('framesCount', false),   // this phone's player has been seen counting frames
 
   async open(login, gesture, cached) {
     this.close();
@@ -1499,11 +1501,48 @@ const P = {
     const moving = v.currentTime !== this.pos, live = this.feed === 'live';
     this.pos = v.currentTime;
     if (moving && live && now - this.began > 8e3) this.retries = this.fixes = 0;   // it really is playing: the last restart worked
+    if (live) this.checkFrames(v, now);
     if (!(live ? this.hls?.levels.length : !v.error) || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
     if (now - this.moved < (live ? 10e3 : 40e3)) return;
     this.moved = now;
     this.noteErr({ details: 'stuck' });
     if (live) this.restart(); else this.playCdn({ reload: true });
+  },
+
+  // iOS can stop showing the picture with the sound and the clock carrying on, and raises nothing (2026-11-03, on the Duo). Frames no
+  // longer being decoded are the one way that shows from here. A seek has it start over from the last keyframe; failing that, a new
+  // player. Only on a phone whose count has been seen moving, and only once each until frames come back: a count that can't be trusted
+  // costs a hiccup or two at most.
+  checkFrames(v, now) {
+    const f = this.frames;
+    if (now - f.at < 900) return;
+    f.at = now;
+    const n = v.getVideoPlaybackQuality?.()?.totalVideoFrames ?? 0, last = f.n, moved = v.currentTime !== f.pos;
+    f.n = n; f.pos = v.currentTime;
+    if (n > last) {
+      if (!this.counts) { this.counts = true; store.set('framesCount', true); }
+      if (f.tries) { f.tries = 0; Away.add('picture back'); }
+    }
+    if (n !== last || !moved || !this.hls?.media || BG.on || document.hidden || v.paused || v.readyState < 3 || this.ad) { f.still = 0; return; }
+    if (++f.still < 4 || !this.counts) return;
+    f.still = 0;
+    if (++f.tries === 1) {
+      Away.add('no new frames: seeking'); this.noteErr({ details: 'no new frames' });
+      this.quietUntil = Date.now() + 6000;   // its own buffering isn't a bad connection
+      v.currentTime += 0.05;
+    } else if (f.tries === 2) {
+      Away.add('no new frames: new player');
+      this.began = Date.now(); recoverHls(this.hls, vL);
+      this.play(vL);
+    } else if (f.tries === 3) Away.add('no new frames: left as it is');
+  },
+
+  // By hand, for a picture that's gone with the sound still going, which nothing here can always see.
+  reload() {
+    Away.add('reload asked for');
+    this.retries = this.fixes = 0;
+    if (this.feed === 'live') this.playLive();
+    else if (this.feed === 'cdn') this.playCdn({ cover: this.cover, reload: true });
   },
 
   async refresh() {
@@ -1841,7 +1880,21 @@ window.addEventListener('online', () => {
   if (!document.hidden && !$('home').hidden) Home.load(true);
 });
 
+// For the record on the settings sheet: what the screen and iOS's own player did, and whether the picture counts as in view. iOS lets go
+// of a video's layer when it doesn't (WebKit 311380@main), going by an observer like this one.
+let screenAt = 0, inView = null;
+window.addEventListener('resize', () => {
+  clearTimeout(screenAt);
+  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${innerWidth}×${innerHeight}`); }, 500);
+});
+new IntersectionObserver(es => {
+  inView = es[es.length - 1].isIntersecting;
+  if (P.feed && !inView && !$('watch').hidden) Away.add('picture out of view');
+}, { scrollMargin: '100%' }).observe(vL);
+
 for (const v of [vL, vC]) {
+  v.addEventListener('webkitbeginfullscreen', () => Away.add('fullscreen'));
+  v.addEventListener('webkitendfullscreen', () => Away.add('fullscreen closed'));
   v.addEventListener('timeupdate', () => P.tick());
   v.addEventListener('playing', () => {
     if (P.active() === v) {
@@ -3277,6 +3330,7 @@ const Sheet = {
       ...qs.slice(1).map((x, i) => ({ label: x.label, on: at === i + 1, pick: () => P.setQuality(x.id) })),
       ...(P.hls ? [{ label: 'Auto', desc: 'Lets the player drop quality on a weak connection.', on: P.q === 'auto', pick: () => P.setQuality('auto') }] : []),
     ]);
+    if (live && !past) this.group(body, null, [{ label: 'Reload the picture', desc: 'If it’s gone black with the sound still going.', pick: () => { this.close(); P.reload(); } }]);
     this.accountItems(body);
     body.append(el('div', 'stats'));
     this.stats();
@@ -3313,6 +3367,7 @@ const Sheet = {
     lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : { live: 'low-latency feed', cdn: 'CDN feed', vod: 'past broadcast' }[P.feed]}`);
     if (l != null) lines.push(`Behind live: ${l.toFixed(1)} s${P.feed === 'live' ? ` (aiming for ${P.liveT} s)` : ''}`);
     if (v && v.videoHeight) lines.push(`Picture: ${v.videoWidth}×${v.videoHeight}${lvl ? ` · ${(lvl.bitrate / 1e6).toFixed(1)} Mbps · ${lvl.details?.fragments?.[0]?.initSegment ? 'fMP4' : 'TS'}` : ''}${v.playbackRate !== 1 ? ` · speed ${v.playbackRate}×` : ''}`);
+    if (v) lines.push(...this.look(v));
     if (P.cap) lines.push(`Held ${P.cap} step${P.cap > 1 ? 's' : ''} below your pick after buffering`);
     if (v) lines.push(`Buffered: ${bufAhead(v).toFixed(1)} s`);
     if (P.skipped) lines.push(`Ad breaks skipped: ${P.skipped}`);
@@ -3320,9 +3375,25 @@ const Sheet = {
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
     const away = store.get('away', []);
-    if (away.length) lines.push('Away: ' + away.slice(-6).join(' · '));
+    if (away.length) lines.push('Away: ' + away.slice(-12).join(' · '));
     s.textContent = '';
     for (const x of lines) s.append(el('div', null, x));
+  },
+  // What the player says about the picture, so a screenshot with the sound going and no picture says which part let go. Reading a frame
+  // has iOS count the player as needed while away, so that's only done with this sheet open.
+  look(v) {
+    const q = v.getVideoPlaybackQuality?.(), b = v.getBoundingClientRect(), x = b.x + b.width / 2, y = b.y + b.height / 2;
+    const stack = document.elementsFromPoint(x, y), over = stack.slice(0, stack.indexOf(v)).filter(n => !n.closest('#sheet'));
+    let lit = '?';
+    try {
+      const c = this.probe ??= Object.assign(document.createElement('canvas'), { width: 8, height: 8 }).getContext('2d', { willReadFrequently: true });
+      c.drawImage(v, 0, 0, 8, 8);
+      lit = Math.round(c.getImageData(0, 0, 8, 8).data.reduce((a, d, i) => i % 4 === 3 ? a : a + d, 0) / 192);
+    } catch {}
+    return [
+      `Frames: ${q ? `${q.totalVideoFrames.toLocaleString()} decoded, ${q.droppedVideoFrames.toLocaleString()} dropped${q.displayCompositedVideoFrames ? `, ${q.displayCompositedVideoFrames.toLocaleString()} composited` : ''}` : 'no count'} · last one ${lit === '?' ? 'unreadable' : `${lit} of 255 bright`}`,
+      `Player: ${Math.round(b.width)}×${Math.round(b.height)} at ${Math.round(b.x)},${Math.round(b.y)} · ${getComputedStyle(v).visibility} · ${v.id === 'vLL' ? (inView ? 'in view' : 'out of view') : 'CDN'} · ready ${v.readyState}${v.webkitPresentationMode && v.webkitPresentationMode !== 'inline' ? ` · ${v.webkitPresentationMode}` : ''}${over.length ? ` · under ${over.map(n => n.id || n.className || n.tagName).join(', ')}` : ''}`,
+    ];
   },
 };
 $('scrim').onclick = () => Sheet.close();

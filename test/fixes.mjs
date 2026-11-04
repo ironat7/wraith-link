@@ -1940,6 +1940,56 @@ if (want('screen')) {
       ok('a wake lock arriving after the pause lets go', await page.evaluate(() => window.__rel === 1), await page.evaluate(() => String(window.__rel)));
       await done();
     })(),
+    // the picture gone with the sound and the clock going, which iOS can do with no word: frames that stop get a seek, then a new player, then no more
+    ...[true, false].map(counted => (async () => {
+      const { page, done } = await stage(answer, counted ? { init: () => localStorage.setItem('wraith.framesCount', 'true') } : {});
+      await levels(page, 15000);
+      await page.evaluate(c => { window.__counted = c; }, counted);
+      await page.evaluate(() => {
+        const v = wraith.P.active(), t0 = performance.now();
+        window.__frames = window.__counted ? 100 : 0; window.__seeks = window.__players = 0;
+        v.getVideoPlaybackQuality = () => ({ totalVideoFrames: window.__frames, droppedVideoFrames: 0 });
+        Object.defineProperty(v, 'currentTime', { configurable: true, get: () => (performance.now() - t0) / 1000, set() { window.__seeks++; } });
+        Object.defineProperty(v, 'readyState', { configurable: true, get: () => 4 });
+        Object.defineProperty(v, 'paused', { configurable: true, get: () => window.__paused === true });
+        wraith.P.hls.recoverMediaError = () => { window.__players++; };
+      });
+      const n = () => page.evaluate(() => [window.__seeks, window.__players]);
+      const log = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]').join(' | '));
+      const going = () => page.evaluate(() => { window.__tick = setInterval(() => { window.__frames += 30; }, 300); });
+      const stopped = () => page.evaluate(() => clearInterval(window.__tick));
+      if (!counted) {
+        await sleep(6500);
+        ok('on a phone whose count has never moved, a count standing still means nothing', String(await n()) === '0,0', String(await n()));
+        await going(); await sleep(2500);
+        ok('and it’s noted once it does move', await page.evaluate(() => localStorage.getItem('wraith.framesCount') === 'true'));
+        return done();
+      }
+      await going(); await sleep(6500);
+      ok('frames going by: the picture’s left alone', String(await n()) === '0,0', String(await n()));
+      await stopped();
+      await page.evaluate(() => { window.__paused = true; }); await sleep(6500);
+      ok('a picture that’s paused isn’t missing any', String(await n()) === '0,0', String(await n()));
+      await page.evaluate(() => { window.__paused = false; }); await sleep(6000);
+      ok('no new frames for 4 s with the clock going: a seek', String(await n()) === '1,0', String(await n()));
+      await sleep(5000);
+      ok('still none: a new player', String(await n()) === '1,1', String(await n()));
+      await sleep(5500);
+      ok('and it stops there', String(await n()) === '1,1', String(await n()));
+      ok('the settings sheet has all that', /no new frames: seeking.*no new frames: new player.*no new frames: left as it is/.test(await log()), await log());
+      await going(); await sleep(2500);
+      ok('frames back: so it says', (await log()).endsWith('picture back'), (await log()).slice(-60));
+      await stopped(); await sleep(6000);
+      ok('and the next time it starts again', String(await n()) === '2,1', String(await n()));
+      await going();
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(1300);
+      const sheet = await page.$eval('#sheetBody', x => x.textContent);
+      ok('the sheet says what the player says', /Frames: [\d,]+ decoded, 0 dropped .*Player: \d+×\d+ at /.test(sheet), sheet.slice(-300));
+      await page.evaluate(() => { window.__old = wraith.P.hls; [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.includes('Reload the picture')).click(); });
+      await page.waitForFunction(() => wraith.P.hls && wraith.P.hls !== window.__old, null, { timeout: 5000 }).catch(never);
+      ok('and reloading the picture by hand makes a new player and closes it', await page.evaluate(() => wraith.P.hls !== window.__old && document.getElementById('sheet').hidden));
+      await done();
+    })()),
     // the lock as WebKit grants it: within 5 s of a tap, or to a page it has already granted it to that way. It keeps its own clock of
     // real taps, since whatever page.evaluate runs counts as one to navigator.userActivation
     ...[true, false].map(straight => (async () => {
@@ -2361,7 +2411,7 @@ if (want('duo')) {
       ok('closed, upright, the emotes open: they and the box both on screen', b['#say'].b <= 678 && b['#ep'].h >= 120, JSON.stringify(b));
       await done();
     })(),
-    // turning or folding the phone while it plays: changing how the video's parents display rebuilds its layer, and iOS can leave that black
+    // turning or folding the phone while it plays: changing how the video's parents display makes iOS rebuild its layer
     (async () => {
       const { c, page, done } = await on(OPEN);
       await levels(page, 15000);
