@@ -835,32 +835,15 @@ if (want('sound')) {
   s = await snd(page);
   ok('a media error while away: the sound carries on', s.on && s.wanted && !s.paused, JSON.stringify(s));
 
-  // Another app takes the sound, the mic say. What iOS does to the player is done to it behind the page's back. WebKit treats the page
-  // pausing it meanwhile as you having stopped it, so iOS won't hand it back (PlatformMediaSession::clientWillPausePlayback).
-  const ios = what => page.evaluate(w => { HTMLMediaElement.prototype[w].call(document.getElementById('aBG')); }, what);
-  await page.evaluate(() => { const a = document.getElementById('aBG'), real = a.pause.bind(a); window.__pauses = 0; a.pause = () => { window.__pauses++; real(); }; });
-  await ios('pause'); await sleep(300);
+  // another app takes the sound
+  await page.evaluate(() => document.getElementById('aBG').pause()); await sleep(300);
   s = await snd(page);
   ok('another app taking the sound stops it', s.on && !s.wanted && s.paused && !s.held, JSON.stringify(s));
-  ok('leaving iOS free to hand it back', await page.evaluate(() => window.__pauses === 0));
   let r0 = ads.relay; await sleep(5000);
   ok('and stops polling the relay', ads.relay - r0 <= 1, `${ads.relay - r0} calls in 5 s`);
-  await ios('play'); await sounding(page);
-  s = await snd(page);
-  ok('iOS handing it back when that app is done: it plays', s.on && s.wanted && !s.paused && !s.held && await page.evaluate(() => !wraith.BG.lent), JSON.stringify(s));
-  r0 = ads.relay; await sleep(4000);
-  ok('polling again', ads.relay - r0 >= 1, `${ads.relay - r0} calls in 4 s`);
-  const behind = await page.evaluate(() => wraith.BG.hls.liveSyncPosition - document.getElementById('aBG').currentTime);
-  ok('and at the live edge, not where it stopped', Math.abs(behind) < 6, `${behind} s behind`);
-  await ios('pause'); await sleep(300);
-  await cc(page, 'pause'); await sleep(200);
-  ok('your own stop while it’s lent out cancels that', await page.evaluate(() => window.__pauses === 1 && wraith.BG.held && !wraith.BG.lent));
-  await cc(page, 'play'); await sounding(page);
-  await ios('pause'); await sleep(300);
-  await page.evaluate(() => { wraith.BG.lent = Date.now() - 16 * 60e3; });
-  await ios('play'); await sleep(800);
-  ok('much later, it doesn’t take: you’ve moved on', (await snd(page)).paused && await page.evaluate(() => !wraith.BG.wanted));
-  await page.evaluate(() => { delete document.getElementById('aBG').pause; wraith.P.user.stream.id = 'older'; wraith.P.refresh(); });
+  await page.evaluate(() => document.getElementById('aBG').play()); await sleep(800);
+  ok('iOS starting it again when that app stops doesn’t take', (await snd(page)).paused);
+  await page.evaluate(() => { wraith.P.user.stream.id = 'older'; wraith.P.refresh(); });
   await page.waitForFunction(() => wraith.P.hls?.levels?.length, null, { timeout: 15000 }).catch(() => {}); await sleep(2500);
   s = await snd(page);
   ok('nor does the stream restarting', !s.on && s.paused, JSON.stringify(s));
@@ -1017,10 +1000,10 @@ if (want('layout')) {
     const seen = id => { const n = document.getElementById(id), b = n.getBoundingClientRect(); return !n.offsetParent || getComputedStyle(n.closest('.hud')).opacity !== '1' ? null : { x: Math.round(b.x), r: Math.round(b.right), y: Math.round(b.y), b: Math.round(b.bottom) }; };
     return { play: seen('bPlay'), mute: seen('bMute'), lat: seen('bLat'), set: seen('bSet'), full: seen('bFull'), back: seen('bBack') };
   });
-  const railIn = async (name, left, right, bottom) => {
+  const railIn = async (name, left, right, bottom, top = 186) => {
     const r = await rail(), all = [r.play, r.mute, r.lat, r.set, r.full];
     const apart = all.every((c, i) => all.every((d, j) => j <= i || !c || !d || c.r <= d.x || d.r <= c.x || c.b <= d.y || d.b <= c.y));
-    ok(name, all.every(c => c && c.x >= left && c.r <= right && c.y >= 186 && c.b <= bottom) && apart && !r.back, JSON.stringify(r));
+    ok(name, all.every(c => c && c.x >= left && c.r <= right && c.y >= top && c.b <= bottom) && apart && !r.back, JSON.stringify(r));
     const hit = await page.evaluate(() => ['bPlay', 'bMute', 'bLat', 'bSet', 'bFull'].filter(id => { const n = document.getElementById(id), b = n.getBoundingClientRect(); return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('button') !== n; }));
     ok('and each one there to tap', !hit.length, hit.join());
   };
@@ -1069,8 +1052,13 @@ if (want('layout')) {
   b = await box();
   ok('Duo closed, on its side: as wide as the strip allows, and chat has room', near(b.stage.r, 594, 1) && b.log.h >= 125 && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.log, b.say, b.info]));
   await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
-  await railIn('with the controls in the strip', 594, 678, b.stage.b);
+  await railIn('with the controls in all of the strip, the island being at its foot', 594, 678, b.stage.b, 0);
   await page.screenshot({ path: 'fixes-duo-closed.png', timeout: 8000 }).catch(() => {});
+  await shape(678, 466, { left: 84, bottom: 21 });
+  b = await box();
+  ok('turned around, the same on the left', near(b.stage.x, 84, 1) && near(b.stage.r, 678, 1) && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.say, b.info]));
+  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
+  await railIn('with the controls below the island at its top', 0, 84, b.stage.b);
   await shape(669, 951, { top: 59, bottom: 34 });
   b = await box();
   ok('Duo open, upright: picture, one thin row, chat', b.stage.w === 669 && b.info.h <= 46 && near(b.info.y, b.stage.b) && near(b.side.y, b.info.b) && !b.tabs, JSON.stringify([b.stage, b.info, b.side]));
@@ -1115,9 +1103,9 @@ if (want('layout')) {
   h = await home();
   ok('closed, on its side: two across, header on one line', h.cols === 2 && h.q.y < h.brand.b && h.acct.r <= 594 && h.wide, JSON.stringify(h));
   await page.screenshot({ path: 'fixes-duo-closed-home.png', timeout: 8000 }).catch(() => {});
-  await shape(466, 678, { top: 59, bottom: 34 });
+  await shape(466, 678, { right: 84, bottom: 55 });
   h = await home();
-  ok('closed, upright: one, with nothing cut off', h.cols === 1 && h.wide && h.acct.r <= 466 - 8, JSON.stringify(h));
+  ok('closed, upright: one, with nothing cut off, and clear of iOS’s things', h.cols === 1 && h.wide && h.acct.r <= 382, JSON.stringify(h));
   await shape(390, 844, { top: 59, bottom: 34 });
   h = await home();
   ok('a phone: the same', h.cols === 1 && h.wide && h.acct.r <= 390 - 8 && h.q.y >= h.brand.b - 8, JSON.stringify(h));
@@ -1370,14 +1358,10 @@ if (want('relay')) {
     leaving(async (page, S, live, silent) => {
       await page.evaluate(() => document.getElementById('aBG').pause()); S.hung = false;
       await silent('another app taking the sound during the hang: the same');
+      await page.evaluate(() => { document.getElementById('aBG').play().catch(() => {}); });
+      await silent('iOS starting it again when that app stops doesn’t take', 800);
       await cc(page, 'play');
       await live('and the button still starts it');
-    }),
-    leaving(async (page, S, live, silent) => {
-      await page.evaluate(() => document.getElementById('aBG').pause()); S.hung = false;
-      await silent('the same again');
-      await page.evaluate(() => { document.getElementById('aBG').play().catch(() => {}); });
-      await live('and it picks up when iOS hands it back');
     }),
     (async () => {
       const S = { hung: false };
@@ -2281,7 +2265,7 @@ if (want('lists')) {
 
 if (want('duo')) {
   // The Duo's shapes crossed with what can be on them, staged, with Apple's safe areas and touch.
-  const OPEN = [951, 669, { right: 84, bottom: 34 }], FLIP = [951, 669, { left: 84, bottom: 34 }], UP = [669, 951, { top: 59, bottom: 34 }], CLOSED = [678, 466, { right: 84, bottom: 21 }], CLOSEDUP = [466, 678, { top: 59, bottom: 34 }];
+  const OPEN = [951, 669, { right: 84, bottom: 34 }], FLIP = [951, 669, { left: 84, bottom: 34 }], UP = [669, 951, { top: 59, bottom: 34 }], CLOSED = [678, 466, { right: 84, bottom: 21 }], CLOSEDFLIP = [678, 466, { left: 84, bottom: 21 }], CLOSEDUP = [466, 678, { right: 84, bottom: 55 }];
   const VIDEOS = { user: { videos: { edges: Array.from({ length: 12 }, (_, i) => ({ node: { id: String(i), title: `video ${i}`, lengthSeconds: 100, createdAt: ago(60), status: 'RECORDED', previewThumbnailURL: null, resourceRestriction: null, game: null } })) } } };
   const withVideos = b => { if (!b.includes('users(logins') && b.includes('videos(first')) return VIDEOS; };
   const on = async ([w, h, insets], how = {}) => {
@@ -2309,6 +2293,7 @@ if (want('duo')) {
       const b = await box(page, '#say', '.log', '#stage');
       ok(`${name}, keyboard up: the box above it, with chat and the picture`, b['#say'].b <= left && b['.log'].h >= 100 && b['#stage'].h >= 90, JSON.stringify(b));
       if (shape[0] === 390) ok('and a phone’s picture stays the size it was', b['#stage'].h === 219, JSON.stringify(b['#stage']));
+      if (shape === CLOSEDUP) ok('in the same order as without it, and the picture beside iOS’s things, not under them', b['.log'].b <= b['#stage'].y + 1 && b['#stage'].b <= b['#say'].y + 1 && b['#stage'].r <= 382, JSON.stringify(b));
       await done();
     })()),
     (async () => {
@@ -2327,6 +2312,100 @@ if (want('duo')) {
       await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
       const b = await box(page, '#say', '#ep');
       ok('closed, upright, the emotes open: they and the box both on screen', b['#say'].b <= 678 && b['#ep'].h >= 120, JSON.stringify(b));
+      await done();
+    })(),
+    // closed and upright: iOS's things run down the right to 228, and the picture goes below them
+    (async () => {
+      const { page, done } = await on(CLOSEDUP);
+      await levels(page, 15000);
+      await page.evaluate(l => wraith.Chat.line(l), LINE('c1', 1)); await sleep(300);
+      let b = await box(page, '.log', '#stage', '.info', '#say', '#sayGo', '#sayTx');
+      const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingRight));
+      ok('closed, upright: chat on top', b['.log'].y === 0 && b['.log'].h >= 200 && b['.log'].b <= b['#stage'].y + 1, JSON.stringify(b));
+      ok('beside iOS’s things', pad >= 84, String(pad));
+      ok('the picture below them, the width of the screen', b['#stage'].y >= 228 && b['#stage'].w === 466, JSON.stringify(b['#stage']));
+      ok('the channel row and the box under it, clear of the home bar', b['.info'].y >= b['#stage'].b - 1 && b['#say'].y >= b['.info'].b - 1 && b['#sayTx'].b <= 678 - 55, JSON.stringify(b));
+      ok('the box with the width to itself', b['#sayGo'].r >= 466 - 12, JSON.stringify(b['#sayGo']));
+      await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(200);
+      const full = await rect(page, '#bFull');
+      ok('the picture’s controls run to its edge', full.r >= 466 - 8, JSON.stringify(full));
+      await page.evaluate(() => { document.getElementById('stage').classList.remove('ui'); document.getElementById('bChan').click(); }); await sleep(300);
+      b = await box(page, '#paneVods', '#stage', '.tabs', '#bChanX');
+      ok('the channel’s videos take chat’s place, and the picture stays below iOS’s things', b['#paneVods'].y === 0 && b['#paneVods'].w === 466 && b['#paneVods'].b <= b['#stage'].y + 1 && b['#stage'].w === 466 && b['#stage'].y >= 228, JSON.stringify(b));
+      ok('with its tabs clear of the home bar', b['.tabs'].y >= b['#stage'].b && b['#bChanX'].b <= 678 - 55, JSON.stringify(b));
+      await page.evaluate(() => document.getElementById('bChanX').click()); await sleep(200);
+      await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
+      b = await box(page, '#ep', '#stage', '#say');
+      ok('the emotes take chat’s place too', b['#ep'].x === 0 && b['#ep'].w === 466 && b['#ep'].y === 0 && b['#ep'].b <= b['#stage'].y + 1 && b['#ep'].h >= 200 && b['#stage'].w === 466 && b['#say'].b <= 678, JSON.stringify(b));
+      await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); }, Array.from({ length: 12 }, (_, i) => LINE('e' + i, i))); await sleep(200);
+      ok('on top of it', await page.evaluate(() => [[100, 30], [100, 120], [200, 200]].every(([x, y]) => document.elementFromPoint(x, y)?.closest('#ep'))));
+      await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
+      const sheet = await rect(page, '.panel');
+      ok('a sheet stops short of iOS’s things', sheet.y >= 228 && sheet.b === 678, JSON.stringify(sheet));
+      await done();
+    })(),
+    // closed on its side: the camera, and so the island, stays where it is as you turn the phone
+    (async () => {
+      const { page, done } = await on(CLOSED);
+      await levels(page, 15000);
+      let b = await box(page, '.side', '#sayGo', '.info', '#stage');
+      ok('closed, strip on the right: the strip along the bottom stops short of the island at the foot', b['.side'].r <= 594 && b['#sayGo'].r <= 594 && b['.info'].r <= 594, JSON.stringify(b));
+      await page.evaluate(() => document.getElementById('bChan').click()); await sleep(300);
+      b = await box(page, '.tabs', '#bChanX', '.info', '#bBack2');
+      ok('the channel’s tabs too', b['#bChanX'].r <= 594 && b['.info'].r <= 594, JSON.stringify(b));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await on(CLOSEDFLIP);
+      await levels(page, 15000);
+      const b = await box(page, '#sayGo', '.info', '#stage', '#bPlay', '#bFull');
+      ok('closed, strip on the left: the strip along the bottom has the width, the island being at the top', b['#sayGo'].r >= 678 - 20 && b['.info'].r === 678, JSON.stringify(b));
+      ok('and the controls below it', b['#bPlay'].y >= 186 && b['#bFull'].b <= b['#stage'].b && b['#bFull'].r <= 84, JSON.stringify(b));
+      await done();
+    })(),
+    // the channel row: its text gets the room there is, rather than being cut off under empty space
+    ...[[OPEN, 'open', 4], [FLIP, 'turned around', 4], [CLOSED, 'closed', 1], [CLOSEDFLIP, 'closed, turned around', 1]].map(([shape, name, lines]) => (async () => {
+      const { page, done } = await on(shape);
+      await levels(page, 15000);
+      await page.evaluate(() => { document.getElementById('iName').textContent = 'JellyHoshiumi'; document.getElementById('iTitle').textContent = 'A very long stream title that goes on and on '.repeat(8); document.getElementById('iSub').textContent = 'Sir, We Have an Orc Problem · 1.2K · 3h 12m'; }); await sleep(150);
+      let b = await box(page, '.info', '#stage', '#iName', '#iTitle', '#iSub', '#say');
+      ok(`${name}: the name, the title and what they’re playing, one over another`, b['#iName'].seen && b['#iTitle'].seen && b['#iSub'].seen && b['#iName'].b <= b['#iTitle'].y + 1 && b['#iTitle'].b <= b['#iSub'].y + 1, JSON.stringify(b));
+      ok(`${name}: ${lines} line${lines > 1 ? 's' : ''} of a long title`, Math.round(b['#iTitle'].h / 17) === lines, JSON.stringify(b['#iTitle']));
+      ok(`${name}: all between the picture and the box`, b['.info'].y >= b['#stage'].b && b['.info'].b <= b['#say'].y + 1, JSON.stringify(b));
+      ok(`${name}: with little left over`, b['.info'].y - b['#stage'].b <= 24, JSON.stringify(b));
+      await page.evaluate(() => wraith.Talk.setReply({ id: '1', name: 'someone' })); await sleep(150);
+      b = await box(page, '.info', '#stage', '#rpb');
+      ok(`${name}: a reply bar takes room from the title, not the picture`, b['.info'].y >= b['#stage'].b && b['.info'].b <= b['#rpb'].y + 1, JSON.stringify(b));
+      await done();
+    })()),
+    // chat goes back to following by itself
+    (async () => {
+      const { page, done } = await on(OPEN);
+      await levels(page, 15000);
+      await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); wraith.Chat.resumeAfter = 1500; }, Array.from({ length: 80 }, (_, i) => LINE('f' + i, i))); await sleep(300);
+      const st = () => page.evaluate(() => { const b = wraith.Chat.box; return { stick: wraith.Chat.stick, more: !document.getElementById('more').hidden, end: b.scrollHeight - b.scrollTop - b.clientHeight < 40 }; });
+      const up = () => page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollTop > 200 ? 100 : 0; });
+      await up(); await sleep(200);
+      let s = await st();
+      ok('scrolled up, chat stays there', !s.stick && !s.end, JSON.stringify(s));
+      await page.evaluate(l => wraith.Chat.line(l), LINE('f100', 100)); await sleep(100);
+      ok('saying there’s more', (await st()).more);
+      await sleep(600);
+      await page.evaluate(() => { wraith.Chat.box.scrollTop += 30; }); await sleep(1100);
+      ok('moving it starts the wait again', !(await st()).stick, JSON.stringify(await st()));
+      await sleep(800);
+      s = await st();
+      ok('left alone for a while, it goes back to following', s.stick && s.end && !s.more, JSON.stringify(s));
+      await page.evaluate(() => wraith.Chat.box.dispatchEvent(new Event('touchstart'))); await up(); await sleep(2000);
+      ok('not with a finger on it', !(await st()).stick);
+      await page.evaluate(() => wraith.Chat.box.dispatchEvent(new Event('touchend'))); await sleep(1800);
+      ok('and it does once the finger’s gone', (await st()).stick);
+      await up(); await sleep(100);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(2000);
+      ok('not with a sheet open', !(await st()).stick);
+      await page.evaluate(() => document.getElementById('scrim').click()); await sleep(1800);
+      ok('and it does once that’s closed', (await st()).stick);
       await done();
     })(),
     // the longer things the strip's label can say
@@ -2437,27 +2516,6 @@ if (want('duo')) {
       await keyboard(page, 300);
       await page.evaluate(() => { delete window.visualViewport.height; document.dispatchEvent(new Event('visibilitychange')); }); await sleep(150);
       ok('coming back with the keyboard gone restores the layout', await page.evaluate(() => !document.getElementById('watch').classList.contains('kb')));
-      await done();
-    })(),
-    // the pill: Now Playing, over the picture in iOS's own player, for sound that takes over from other apps
-    (async () => {
-      const { page, done } = await on(OPEN);
-      await levels(page, 15000);
-      await page.evaluate(() => { Object.defineProperty(navigator, 'audioSession', { configurable: true, value: { type: 'auto' } }); const a = document.getElementById('aBG'), real = a.play.bind(a); a.play = () => { window.__typeAtPlay = navigator.audioSession.type; return real(); }; });
-      const type = () => page.evaluate(() => navigator.audioSession.type);
-      const fire = (name, mode) => page.evaluate(([n, m]) => { const v = document.getElementById('vLL'); if (m) Object.defineProperty(v, 'webkitPresentationMode', { configurable: true, get: () => m }); v.dispatchEvent(new Event(n)); }, [name, mode]);
-      await fire('webkitbeginfullscreen');
-      ok('in iOS’s own player the sound calls itself ambient, which has no pill', await type() === 'ambient', await type());
-      await fire('webkitpresentationmodechanged', 'fullscreen');
-      ok('and goes on doing so as that player settles', await type() === 'ambient', await type());
-      await fire('webkitendfullscreen');
-      ok('out of it, it’s back to what plays through the silent switch', await type() === 'auto', await type());
-      await fire('webkitbeginfullscreen');
-      await fire('webkitpresentationmodechanged', 'picture-in-picture');
-      ok('into picture in picture too, where it has to go on with the screen locked', await type() === 'auto', await type());
-      await fire('webkitbeginfullscreen');
-      await vis(page, true); await sounding(page);
-      ok('and leaving the app from that player: the background sound starts as the kind that lasts', await page.evaluate(() => window.__typeAtPlay) === 'auto', String(await page.evaluate(() => window.__typeAtPlay)));
       await done();
     })(),
     // a stream ending under iOS's own player

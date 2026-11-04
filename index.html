@@ -340,11 +340,16 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   html[data-strip] #watch:not(.kb, .full) .toast, html[data-strip] #watch:not(.kb, .full) .unmute { bottom: 12px; }
   html[data-strip] #watch:has(#msgbox:not([hidden])) .hud { display: none; }
 }
-/* a shorter picture leaves less of the strip below iOS's things: the same controls, in pairs */
+/* The closed screen's island is around its camera, which stays where it is as you turn the phone. With the strip on the left it's at
+   the top of the strip, and a shorter picture leaves less room below it: the same controls, in pairs. With the strip on the right it's
+   at the foot, level with the strip along the bottom, which stops short of it, and the controls have the top to themselves. */
 @media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (max-height: 599px) {
-  html[data-strip] #watch:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
-  html[data-strip] #watch:not(.kb, .full) .hud .cb { width: 40px; }
-  html[data-strip] #watch:not(.kb, .full) .lat { flex-basis: 100%; justify-content: center; }
+  html[data-strip=left] #watch:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
+  html[data-strip=left] #watch:not(.kb, .full) .hud .cb { width: 40px; }
+  html[data-strip=left] #watch:not(.kb, .full) .lat { flex-basis: 100%; justify-content: center; }
+  html[data-strip=right] #watch:not(.kb, .full) .hud .bar:last-child { top: 0; width: 84px; }
+  html[data-strip=right] #watch:not(.kb, .idle) .side { margin-right: var(--sar); }
+  html[data-strip=right] #watch:not(.kb, .idle) .info, html[data-strip=right] #watch:not(.kb, .idle) .tabs { right: var(--sar); }
   .say input { padding: 0 10px; }
   .say input::placeholder { font-size: 12.5px; }
   #watch:not(.kb) .ep input { height: 30px; }
@@ -352,21 +357,32 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   #watch:not(.kb) #vods { grid-template-rows: 1fr; grid-auto-columns: 300px; }
   #watch:not(.kb) #vods .vod { grid-template-columns: 150px minmax(0, 1fr); }
 }
-/* where that strip is tall, the row has room above the box for all of it */
-@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (min-height: 600px) {
+/* the row has room above the box for its text one line over another, and for as much of the title as fits */
+@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) {
   #watch:not(.kb) .who { height: auto; }
   #watch:not(.kb) .info .av { width: 40px; height: 40px; }
   #watch:not(.kb) .info .meta { display: block; }
   #watch:not(.kb) .info .nm { max-width: none; font-size: 15px; }
-  #watch:not(.kb) .info .tt { display: -webkit-box; -webkit-line-clamp: 2; margin-top: 1px; font-size: 13px; }
+  #watch:not(.kb) .info .tt { display: -webkit-box; -webkit-line-clamp: 1; margin-top: 1px; font-size: 13px; }
   #watch:not(.kb) .info .gm { margin-top: 2px; }
+  #watch:not(.kb, .chan):has(#rpb:not([hidden])) .info .tt { display: none; }
+}
+@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (min-height: 600px) {
+  #watch:not(.kb) .info .tt { -webkit-line-clamp: 2; }
+  #watch:not(.kb, .chan):has(#rpb:not([hidden])) .info .tt { display: -webkit-box; }
+}
+@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 143/100) and (min-height: 600px) {
+  #watch:not(.kb) .info .tt { -webkit-line-clamp: 4; }
+  #watch:not(.kb, .chan):has(#rpb:not([hidden])) .info .tt { -webkit-line-clamp: 2; }
 }
 /* typing: where the screen's tall enough the box is well below iOS's things in the strip, and the picture stays out of it. So only
    what's beside the strip keeps clear of it. */
-@media (min-height: 600px) { html[data-strip=right] #watch.kb .say { padding-right: 10px; } }
-html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
-html[data-strip=left] #watch.kb .side { --sal: 0px; }
-html[data-strip] #watch.kb .stage { --sal: 0px; --sar: 0px; }
+@media (orientation: landscape) {
+  @media (min-height: 600px) { html[data-strip=right] #watch.kb .say { padding-right: 10px; } }
+  html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
+  html[data-strip=left] #watch.kb .side { --sal: 0px; }
+  html[data-strip] #watch.kb .stage { --sal: 0px; --sar: 0px; }
+}
 html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --sal: 0px; --sar: 0px; }
 @media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
 /* fullscreen with nothing to hand to iOS's player yet: the player fills the screen (see UI.fill) */
@@ -406,12 +422,34 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
 #watch.kb:has(#epq:focus) .log { display: none; }   /* finding an emote: the results get what's left above the keyboard */
 #watch.kb:has(#epq:focus) .ep { flex: 1; }
 #watch.kb .stage { max-height: 100%; }
-/* a closed Duo upright is so short above the keyboard that the picture gives way, down to a strip of it, for chat or the emotes */
+/* a screen short enough above the keyboard has the picture give way, down to a strip of it, for chat or the emotes */
 @media (orientation: portrait) {
   #watch.kb:not(.idle) .main { flex: 0 1 auto; min-height: 90px; }
   #watch.kb:not(.idle) .stage { flex: 0 1 auto; min-height: 0; }
   #watch.kb:not(.idle) .side { flex: 1 0 167px; }
   #watch.kb:not(.idle):has(#epq:focus) .side { flex-basis: 193px; }
+}
+/* A closed Duo upright has iOS's island, clock and Wi-Fi down the right to about 228, and nothing across the top. So chat goes beside
+   them and the picture below them, and what's below that has the width to itself. A sheet stops short of them too. */
+@media (orientation: portrait) {
+  html[data-strip] #watch:not(.full, .idle) { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto auto auto auto auto; background: var(--bg); }
+  html[data-strip] #watch:not(.full, .idle) :is(.main, .side, #paneChat) { display: contents; }
+  html[data-strip] #watch:not(.full, .idle) :is(.log, .ep, #paneVods, #paneAbout) { grid-area: 1 / 1; min-height: 0; }
+  html[data-strip] #watch:not(.full, .idle) .ep { z-index: 1; }
+  html[data-strip] #watch:not(.full, .idle) .stage { grid-area: 2 / 1; }
+  html[data-strip] #watch:not(.full, .idle) .info { grid-area: 3 / 1; }
+  html[data-strip] #watch:not(.full, .idle) :is(.tabs, .rpb) { grid-area: 4 / 1; }
+  html[data-strip] #watch:not(.full, .idle) .ac { grid-area: 5 / 1; }
+  html[data-strip] #watch:not(.full, .idle) .say { grid-area: 6 / 1; }
+  html[data-strip] #watch:not(.full, .idle) :is(.stage > *, .info, .tabs, .rpb, .ac, .say) { --sal: 0px; --sar: 0px; }
+  html[data-strip] #watch:not(.full, .idle) .chat { padding-bottom: 10px; }
+  html[data-strip] #watch:not(.full, .idle) .vods { padding-bottom: 8px; }
+  html[data-strip] #watch:not(.full, .idle) .tabs { padding-bottom: calc(8px + var(--sab)); border-bottom: 0; }
+  html[data-strip] #watch:not(.full, .idle, .chan):not(:has(#paneChat.talk)) .info { padding-bottom: calc(2px + var(--sab)); border-bottom: 0; }
+  html[data-strip] #watch.kb:not(.full, .idle) { grid-template-rows: minmax(110px, 1fr) minmax(0, auto) auto auto auto auto; }
+  html[data-strip] #watch.kb:not(.full, .idle):has(#epq:focus) { grid-template-rows: minmax(136px, 1fr) minmax(0, auto) auto auto auto auto; }
+  html[data-strip] #watch.kb:not(.full, .idle) .stage { width: calc(100% - var(--sal) - var(--sar)); height: 100%; min-height: 0; margin-left: var(--sal); }
+  html[data-strip] .panel { max-height: calc(100dvh - 236px); }
 }
 
 /* ── settings sheet ───────────────────────────────── */
@@ -1546,18 +1584,10 @@ const P = {
 // makes that choice as the app leaves, before the sound has started, finds no player it can use and
 // drops the page; nothing makes it look again, so Control Center stays on whatever app played last.
 // Setting the track details again once the sound is playing makes it look again.
-// In iOS's own fullscreen player the only thing over the picture is the pill, which is Now Playing: a Duo's inner screen has no other
-// island. iOS keeps Now Playing for sound that takes over from other apps, so while that player is up the sound calls itself ambient.
-// That also puts it under the silent switch, and it stops with the screen, so it's only for then.
-function soundAmbient(on) {
-  try { if (navigator.audioSession) navigator.audioSession.type = on ? 'ambient' : 'auto'; } catch {}
-}
-
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
-  wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back, or iOS handing it back
-  lent: 0,       // when iOS gave the sound to another app
+  wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back
   claim() {
     const ms = navigator.mediaSession, m = ms?.metadata;
     if (!ms) return;
@@ -1568,7 +1598,6 @@ const BG = {
     if (!this.ios || this.on || !v || Sound.muted || P.userPaused) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
     this.on = this.wanted = true; this.held = false;
-    soundAmbient(false);
     // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
     if (v.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}
     aBG.muted = false;
@@ -1625,7 +1654,7 @@ const BG = {
   },
   // Back to what's current after a stop, on the one that's playing: live once its playlist has reloaded.
   resume() {
-    this.held = false; this.wanted = true; this.lent = 0;
+    this.held = false; this.wanted = true;
     const h = this.hls;
     if (h) {
       h.once(window.Hls.Events.LEVEL_UPDATED, () => {
@@ -1645,7 +1674,7 @@ const BG = {
   },
   stop(silent) {
     if (!this.on) return;
-    this.on = this.wanted = false; this.lent = 0;
+    this.on = this.wanted = false;
     const at = aBG.currentTime;
     if (this.hls) { this.hls.destroy(); this.hls = null; }
     aBG.pause(); aBG.removeAttribute('src'); aBG.load(); this.srcs = null;
@@ -1677,24 +1706,18 @@ aBG.addEventListener('error', () => {
   if (!BG.on || !BG.srcs || BG.next()) return;
   askAgain(aBG, () => { if (BG.wanted) { aBG.load(); aBG.play().catch(() => {}); } });
 });
-// Anything else pausing it, other than its load failing, is iOS giving the sound to another app (the mic, YouTube, a call). A
-// play from here would take it back off that app. iOS plays it again if that app says it's done, like any player's, unless it's
-// paused again now, which is what WebKit takes as you having stopped it. Much later than that, you've moved on.
-const LENT_FOR = 15 * 60e3;
+// Anything else pausing it, other than its load failing, is iOS giving the sound to another app (YouTube, the mic, a call). iOS
+// plays it again once that app stops, unless it's paused again now, and a play from here would take the sound back off that app.
 aBG.addEventListener('pause', () => {
   if (!BG.on || !BG.wanted || aBG.ended || aBG.error) return;
   Away.add('iOS paused the sound');
-  BG.wanted = false; BG.lent = Date.now();
+  BG.wanted = false;
+  aBG.pause();
   BG.hls?.stopLoad();
 });
 aBG.addEventListener('play', () => {
   if (!BG.on || BG.wanted) return;
-  if (BG.lent && Date.now() - BG.lent < LENT_FOR) {
-    Away.add('iOS gave the sound back');
-    return BG.resume();
-  }
   Away.add('stopped a restart');
-  BG.lent = 0;
   aBG.pause();
 });
 aBG.addEventListener('playing', () => {
@@ -1742,7 +1765,7 @@ document.addEventListener('visibilitychange', () => {
 });
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const ms = navigator.mediaSession;
-  const hold = () => { BG.held = true; BG.wanted = false; BG.lent = 0; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
+  const hold = () => { BG.held = true; BG.wanted = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
   ms.setActionHandler('play', () => {
     Away.add('button: play');
     if (document.hidden && !BG.on) { P.userPaused = false; BG.start(); if (BG.on) return; }
@@ -1814,10 +1837,7 @@ for (const v of [vL, vC]) {
   v.addEventListener('pause', () => { P.pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
   // iOS's fullscreen player pauses the video as you close it, some time around telling the page it closed,
   // so the video is kept going for a moment after, unless it was already paused
-  v.addEventListener('webkitbeginfullscreen', () => soundAmbient(true));
-  v.addEventListener('webkitpresentationmodechanged', () => { if (v.webkitPresentationMode !== 'fullscreen') soundAmbient(false); });   // into picture in picture, say
   v.addEventListener('webkitendfullscreen', () => {
-    soundAmbient(false);
     if (v.paused && performance.now() - P.pausedAt > 1500) return;
     const until = performance.now() + 2500;
     const t = setInterval(() => {
@@ -1891,6 +1911,8 @@ const Chat = {
   room: {}, names: new Map(),             // chat modes; who has been talking, for @ completion
   newest: 0,                              // the time of the latest line drawn
   top: 0,                                 // where chat was last scrolled to, to tell you scrolling up from lines growing
+  resumeAfter: 30e3,                      // scrolled up and left there this long, it goes back to following
+  held: false,                            // a finger on it
 
   open(login) {
     this.close();
@@ -1906,7 +1928,12 @@ const Chat = {
     Talk.show();
   },
 
-  clear() { this.box.textContent = ''; this.stick = true; this.top = 0; $('more').hidden = true; },
+  clear() { this.box.textContent = ''; this.stick = true; this.top = 0; $('more').hidden = true; clearTimeout(this.idle); },
+  follow() { this.stick = true; this.box.scrollTop = this.box.scrollHeight; $('more').hidden = true; clearTimeout(this.idle); },
+  rest() {   // not with a finger on it or someone's card open
+    clearTimeout(this.idle);
+    if (!this.stick) this.idle = setTimeout(() => (this.held || !$('sheet').hidden ? this.rest() : this.follow()), this.resumeAfter);
+  },
 
   note(text) {
     const d = el('div', 'm note', text);
@@ -2281,8 +2308,10 @@ Chat.box.addEventListener('scroll', () => {
   if (performance.now() - chatResized < 250) return;
   if (b.scrollHeight - b.scrollTop - b.clientHeight < 40) { Chat.stick = true; $('more').hidden = true; }
   else if (up) Chat.stick = false;   // short of the end without moving up is only lines growing as their emotes load
+  Chat.rest();
 }, { passive: true });
-$('more').onclick = () => { Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true; };
+for (const ev of ['touchstart', 'touchend', 'touchcancel']) Chat.box.addEventListener(ev, e => { Chat.held = e.type === 'touchstart'; Chat.rest(); }, { passive: true });
+$('more').onclick = () => Chat.follow();
 
 // ── past broadcast chat ─────────────────────────────
 // Twitch hands out a video's chat from a position, then page by page, about a minute of a quiet chat at a time.
@@ -2692,7 +2721,7 @@ const Talk = {
       if (this.tx.value.trim() === text) this.tx.value = '';
       this.setReply(null);
       $('ac').hidden = true;
-      Chat.stick = true; Chat.box.scrollTop = Chat.box.scrollHeight; $('more').hidden = true;
+      Chat.follow();
     } else Chat.note('Not sent: ' + res.why).classList.add('err');
     this.show();
   },
@@ -3583,7 +3612,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !$
 const Update = {
   tag: null, at: 0, ready: false,
   async check() {
-    if (Date.now() - this.at < 18e5) return;
+    if (Date.now() - this.at < 6e4) return;
     this.at = Date.now();
     try {
       const r = await fetch(location.pathname, { method: 'HEAD', cache: 'no-cache' });
