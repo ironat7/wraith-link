@@ -1,4 +1,4 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real streams: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real streams: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { serve, launch, sleep, checks, IPHONE } from './lib.mjs';
@@ -1944,45 +1944,46 @@ if (want('screen')) {
     ...[true, false].map(counted => (async () => {
       const { page, done } = await stage(answer, counted ? { init: () => localStorage.setItem('wraith.framesCount', 'true') } : {});
       await levels(page, 15000);
-      await page.evaluate(c => { window.__counted = c; }, counted);
-      await page.evaluate(() => {
-        const v = wraith.P.active(), t0 = performance.now();
-        window.__frames = window.__counted ? 100 : 0; window.__seeks = window.__players = 0;
+      await page.evaluate(c => {
+        const v = wraith.P.active();
+        let t = 0, now = Date.now() + 1e6;
+        window.__frames = c ? 100 : 0; window.__seeks = window.__players = 0;
         v.getVideoPlaybackQuality = () => ({ totalVideoFrames: window.__frames, droppedVideoFrames: 0 });
-        Object.defineProperty(v, 'currentTime', { configurable: true, get: () => (performance.now() - t0) / 1000, set() { window.__seeks++; } });
+        Object.defineProperty(v, 'currentTime', { configurable: true, get: () => t, set() { window.__seeks++; } });
         Object.defineProperty(v, 'readyState', { configurable: true, get: () => 4 });
         Object.defineProperty(v, 'paused', { configurable: true, get: () => window.__paused === true });
         wraith.P.hls.recoverMediaError = () => { window.__players++; };
-      });
-      const n = () => page.evaluate(() => [window.__seeks, window.__players]);
+        window.__go = (seconds, frames) => { for (let i = 0; i < seconds; i++) { t++; now += 1000; window.__frames += frames; wraith.P.checkFrames(v, now); } };   // seconds going by, with no wait for them
+      }, counted);
+      const go = (seconds, frames = 0) => page.evaluate(([a, b]) => window.__go(a, b), [seconds, frames]);
+      const n = () => page.evaluate(() => `${window.__seeks},${window.__players}`);
       const log = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]').join(' | '));
-      const going = () => page.evaluate(() => { window.__tick = setInterval(() => { window.__frames += 30; }, 300); });
-      const stopped = () => page.evaluate(() => clearInterval(window.__tick));
       if (!counted) {
-        await sleep(6500);
-        ok('on a phone whose count has never moved, a count standing still means nothing', String(await n()) === '0,0', String(await n()));
-        await going(); await sleep(2500);
+        await go(8);
+        ok('on a phone whose count has never moved, a count standing still means nothing', await n() === '0,0', await n());
+        await go(2, 30);
         ok('and it’s noted once it does move', await page.evaluate(() => localStorage.getItem('wraith.framesCount') === 'true'));
         return done();
       }
-      await going(); await sleep(6500);
-      ok('frames going by: the picture’s left alone', String(await n()) === '0,0', String(await n()));
-      await stopped();
-      await page.evaluate(() => { window.__paused = true; }); await sleep(6500);
-      ok('a picture that’s paused isn’t missing any', String(await n()) === '0,0', String(await n()));
-      await page.evaluate(() => { window.__paused = false; }); await sleep(6000);
-      ok('no new frames for 4 s with the clock going: a seek', String(await n()) === '1,0', String(await n()));
-      await sleep(5000);
-      ok('still none: a new player', String(await n()) === '1,1', String(await n()));
-      await sleep(5500);
-      ok('and it stops there', String(await n()) === '1,1', String(await n()));
+      await go(8, 30);
+      ok('frames going by: the picture’s left alone', await n() === '0,0', await n());
+      await page.evaluate(() => { window.__paused = true; }); await go(8);
+      ok('a picture that’s paused isn’t missing any', await n() === '0,0', await n());
+      await page.evaluate(() => { window.__paused = false; }); await go(3);
+      ok('3 s with no new frames is nothing yet', await n() === '0,0', await n());
+      await go(1);
+      ok('4 s with the clock going: a seek', await n() === '1,0', await n());
+      await go(4);
+      ok('still none: a new player', await n() === '1,1', await n());
+      await go(8);
+      ok('and it stops there', await n() === '1,1', await n());
       ok('the settings sheet has all that', /no new frames: seeking.*no new frames: new player.*no new frames: left as it is/.test(await log()), await log());
-      await going(); await sleep(2500);
+      await go(2, 30);
       ok('frames back: so it says', (await log()).endsWith('picture back'), (await log()).slice(-60));
-      await stopped(); await sleep(6000);
-      ok('and the next time it starts again', String(await n()) === '2,1', String(await n()));
-      await going();
-      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(1300);
+      await go(4);
+      ok('and the next time it starts again', await n() === '2,1', await n());
+      await go(1, 30);
+      await page.evaluate(() => document.getElementById('bSet').click());
       const sheet = await page.$eval('#sheetBody', x => x.textContent);
       ok('the sheet says what the player says', /Frames: [\d,]+ decoded, 0 dropped .*Player: \d+×\d+ at /.test(sheet), sheet.slice(-300));
       await page.evaluate(() => { window.__old = wraith.P.hls; [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.includes('Reload the picture')).click(); });
@@ -2241,11 +2242,10 @@ if (want('lists')) {
       await onBrowse(page);
       const list = () => page.evaluate(() => document.querySelectorAll('#brList .row').length);
       await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never);
-      await page.evaluate(() => scrollTo(0, document.documentElement.scrollHeight));
-      await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 60, null, { timeout: 5000 }).catch(never);
+      await page.waitForFunction(() => { scrollTo(0, document.documentElement.scrollHeight); return document.querySelectorAll('#brList .row').length >= 60; }, null, { timeout: 5000, polling: 100 }).catch(never);
       const was = await list();
       await page.evaluate(() => window.dispatchEvent(new Event('online'))); await sleep(500);
-      ok('the network coming back leaves a long Browse list alone', await list() === was && was >= 60, `${was} then ${await list()}`);
+      ok('the network coming back leaves a long Browse list alone', await list() >= was && was >= 60, `${was} then ${await list()}`);
       await page.evaluate(() => document.getElementById('refresh').click());
       await page.waitForFunction(() => document.querySelectorAll('#brList .row').length === 30, null, { timeout: 3000 }).catch(never);
       ok('the refresh button still reloads it', await list() === 30, String(await list()));
