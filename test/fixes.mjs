@@ -1,4 +1,4 @@
-// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real streams: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists.
+// usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real streams: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { serve, launch, sleep, checks, IPHONE } from './lib.mjs';
@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo'].includes(which) && (!A || !B)) {
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login } } } } }')).streams.edges.map(e => e.node.broadcaster.login);
   A ||= top[0]; B ||= top.find(x => x !== A);
 }
@@ -69,7 +69,7 @@ const ago = s => new Date(Date.now() - s * 1000).toISOString();
 const ME = { token: 'TOK', id: '212375133', login: 'ironat___', name: 'Ironat___' };
 // `relay` answers relay calls; `gql(body, route)` can answer GQL itself by returning data, or true once it has fulfilled the route.
 const stage = async (relay, { sub = false, pick = false, copy, since = ago(3600), offline = false, me = false, gql, init, noPlayer = false, path = '?c=staged', w = 390, h = 844, touch = false } = {}) => {
-  const { page, done, ads } = await open({ iphone: true, w, h, touch, init: captureButtons });
+  const { c, page, done, ads } = await open({ iphone: true, w, h, touch, init: captureButtons });
   const user = { id: '1', login: 'staged', displayName: 'Staged', profileImageURL: null, broadcastSettings: { title: '' }, stream: offline ? null : { id: '1', createdAt: since, viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
   await page.addInitScript(([p, m]) => { window.WebSocket = class { close() {} send() {} }; if (p) localStorage.setItem('wraith.feed', '"cdn"'); if (m) localStorage.setItem('wraith.me', JSON.stringify(m)); }, [pick, me ? ME : null]);
   if (init) await page.addInitScript(init);
@@ -88,7 +88,7 @@ const stage = async (relay, { sub = false, pick = false, copy, since = ago(3600)
   });
   const t = Date.now();
   await page.goto(base + path, { waitUntil: 'domcontentloaded' });
-  return { page, done, t, user, ads };
+  return { c, page, done, t, user, ads };
 };
 const toCdn = async (page, from) => { await page.waitForFunction(() => wraith.P.feed === 'cdn', null, { timeout: 60000 }).catch(never); return Date.now() - from; };
 const levels = (page, ms) => page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: ms }).catch(never);
@@ -1370,10 +1370,14 @@ if (want('relay')) {
     leaving(async (page, S, live, silent) => {
       await page.evaluate(() => document.getElementById('aBG').pause()); S.hung = false;
       await silent('another app taking the sound during the hang: the same');
-      await page.evaluate(() => { document.getElementById('aBG').play().catch(() => {}); });
-      await silent('iOS starting it again when that app stops doesn’t take', 800);
       await cc(page, 'play');
       await live('and the button still starts it');
+    }),
+    leaving(async (page, S, live, silent) => {
+      await page.evaluate(() => document.getElementById('aBG').pause()); S.hung = false;
+      await silent('the same again');
+      await page.evaluate(() => { document.getElementById('aBG').play().catch(() => {}); });
+      await live('and it picks up when iOS hands it back');
     }),
     (async () => {
       const S = { hung: false };
@@ -2270,6 +2274,264 @@ if (want('lists')) {
       await onBrowse(page); calls = 0;
       await sleep(2500);
       ok('and doesn’t hammer Twitch when that fails', calls <= 3, `${calls} calls`);
+      await done();
+    })(),
+  ]);
+}
+
+if (want('duo')) {
+  // The Duo's shapes crossed with what can be on them, staged, with Apple's safe areas and touch.
+  const OPEN = [951, 669, { right: 84, bottom: 34 }], FLIP = [951, 669, { left: 84, bottom: 34 }], UP = [669, 951, { top: 59, bottom: 34 }], CLOSED = [678, 466, { right: 84, bottom: 21 }], CLOSEDUP = [466, 678, { top: 59, bottom: 34 }];
+  const VIDEOS = { user: { videos: { edges: Array.from({ length: 12 }, (_, i) => ({ node: { id: String(i), title: `video ${i}`, lengthSeconds: 100, createdAt: ago(60), status: 'RECORDED', previewThumbnailURL: null, resourceRestriction: null, game: null } })) } } };
+  const withVideos = b => { if (!b.includes('users(logins') && b.includes('videos(first')) return VIDEOS; };
+  const on = async ([w, h, insets], how = {}) => {
+    const o = await stage(answer, { w, h, me: true, gql: withVideos, ...how });
+    const cdp = await o.c.newCDPSession(o.page);
+    await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 0, left: 0, ...insets } });
+    return o;
+  };
+  const rect = (page, sel) => page.evaluate(q => { const n = document.querySelector(q); if (!n) return null; const b = n.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), seen: !!n.offsetParent }; }, sel);
+  const box = async (page, ...sels) => Object.fromEntries(await Promise.all(sels.map(async q => [q, await rect(page, q)])));
+  const keyboard = async (page, left, input = '#sayTx') => {
+    await page.evaluate(h => Object.defineProperty(window.visualViewport, 'height', { configurable: true, get: () => h }), left);
+    await page.focus(input);
+    await page.evaluate(() => window.visualViewport.dispatchEvent(new Event('resize')));
+    await sleep(200);
+  };
+  const hit = (page, id) => page.evaluate(i => { const n = document.getElementById(i), b = n.getBoundingClientRect(); return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('button') === n; }, id);
+  const LINE = (id, who) => `@id=${id};tmi-sent-ts=${Date.now()};user-id=${who};display-name=u${who} :u${who}!u${who}@u${who}.tmi.twitch.tv PRIVMSG #staged :hello there`;
+  await Promise.all([
+    // typing: the box and some chat stay above the keyboard, on a screen short enough that the picture has to give way
+    ...[[CLOSEDUP, 342, 'closed, upright'], [UP, 615, 'open, upright'], [[390, 844, { top: 59, bottom: 34 }], 508, 'a phone']].map(([shape, left, name]) => (async () => {
+      const { page, done } = await on(shape);
+      await levels(page, 15000);
+      await keyboard(page, left);
+      const b = await box(page, '#say', '.log', '#stage');
+      ok(`${name}, keyboard up: the box above it, with chat and the picture`, b['#say'].b <= left && b['.log'].h >= 100 && b['#stage'].h >= 90, JSON.stringify(b));
+      if (shape[0] === 390) ok('and a phone’s picture stays the size it was', b['#stage'].h === 219, JSON.stringify(b['#stage']));
+      await done();
+    })()),
+    (async () => {
+      const { page, done } = await on(CLOSEDUP);
+      await levels(page, 15000);
+      await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
+      await keyboard(page, 342, '#epq');
+      const b = await box(page, '#say', '#ep', '#stage');
+      const list = await page.evaluate(() => document.getElementById('epl').clientHeight);
+      ok('closed, upright, finding an emote: two rows of them above the keyboard, and the box', b['#say'].b <= 342 && list >= 86 && b['#stage'].h >= 90, `${list} ${JSON.stringify(b)}`);
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await on(CLOSEDUP);
+      await levels(page, 15000);
+      await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
+      const b = await box(page, '#say', '#ep');
+      ok('closed, upright, the emotes open: they and the box both on screen', b['#say'].b <= 678 && b['#ep'].h >= 120, JSON.stringify(b));
+      await done();
+    })(),
+    // the longer things the strip's label can say
+    ...[[OPEN, 867, 951, 'open'], [FLIP, 0, 84, 'turned around'], [CLOSED, 594, 678, 'closed']].map(([shape, l, r, name]) => (async () => {
+      const { page, done } = await on(shape);
+      await levels(page, 15000);
+      const label = async () => { await page.evaluate(() => wraith.UI.lat()); return rect(page, '#bLat'); };
+      await page.evaluate(() => { wraith.P.cover = true; wraith.P.latency = () => 16; });
+      let b = await label();
+      ok(`${name}, the ad-free feed’s label stays in the strip`, b.x >= l && b.r <= r, JSON.stringify(b));
+      await page.evaluate(() => { wraith.P.cover = false; wraith.P.show('cdn'); });
+      b = await label();
+      ok(`${name}, the CDN’s too`, b.x >= l && b.r <= r, JSON.stringify(b));
+      await done();
+    })()),
+    // typing with the strip on the left: it's the far side of the screen from the box
+    (async () => {
+      const { page, done } = await on(FLIP);
+      await levels(page, 15000);
+      await page.evaluate(l => wraith.Chat.line(l), LINE('a1', 1)); await sleep(300);
+      await keyboard(page, 369);
+      const b = await box(page, '#sayTx', '#bBack', '#stage', '#chat');
+      const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingLeft));
+      ok('turned around, keyboard up: the box and chat use their side', b['#sayTx'].w >= 180 && pad === 14, `${pad} ${JSON.stringify(b)}`);
+      ok('and the picture’s controls aren’t inset twice', b['#bBack'].x <= b['#stage'].x + 7, JSON.stringify(b));
+      await done();
+    })(),
+    // an offline channel's chat, which starts level with iOS's things
+    ...[[FLIP, 84, 951, 'turned around'], [OPEN, 0, 867, 'open']].map(([shape, l, r, name]) => (async () => {
+      const { page, done } = await on(shape, { offline: true });
+      await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 10000 }).catch(never);
+      await page.evaluate(() => document.getElementById('bChanX').click());
+      await page.evaluate(id => wraith.Chat.line(id), LINE('b1', 1)); await sleep(400);
+      const b = await box(page, '.log', '#say', '#chat .m');
+      ok(`${name}, an offline channel’s chat stays out of the strip, and uses the width`, b['.log'].x >= l && b['.log'].r <= r + 1 && b['.log'].w >= 800 && b['#say'].w >= 800 && b['#say'].b <= 669, JSON.stringify(b));
+      const text = await page.evaluate(() => [document.querySelector('#chat .m'), document.getElementById('msgbox')].map(n => n.getBoundingClientRect().x + parseFloat(getComputedStyle(n).paddingLeft)));
+      ok(`${name}, and its lines start under the line above them`, text[0] === text[1], String(text));
+      await done();
+    })()),
+    // with the keyboard, the picture has the height of the row that's hidden
+    ...[[OPEN, 300, 290, 'open'], [CLOSED, 216, 205, 'closed']].map(([shape, left, h, name]) => (async () => {
+      const { page, done } = await on(shape);
+      await levels(page, 15000);
+      await keyboard(page, left);
+      const b = await rect(page, '#stage'), full = await rect(page, '#bFull'), send = await rect(page, '#sayGo');
+      ok(`${name}, keyboard up: the picture gets the room above it`, b.h >= h && b.b <= left, JSON.stringify(b));
+      ok(`${name}, and its controls run to its edge`, full.r >= b.r - 7, JSON.stringify(full));
+      if (shape === CLOSED) ok('closed, the send button stays out of the strip, where iOS’s things are level with it', send.r <= 594, JSON.stringify(send));
+      await done();
+    })()),
+    // what's left up over the channel row when the keyboard goes
+    (async () => {
+      const { page, done } = await on(CLOSED);
+      await levels(page, 15000);
+      await page.evaluate(() => wraith.Chat.names.set('abcd', 'Abcd'));
+      await page.fill('#sayTx', '@ab'); await sleep(100);
+      ok('(completions up)', !(await page.$eval('#ac', n => n.hidden)));
+      await page.evaluate(() => document.getElementById('sayTx').blur()); await sleep(250);
+      ok('closed: completions go with the keyboard, leaving the way back', await page.$eval('#ac', n => n.hidden) && await hit(page, 'bBack2'));
+      await page.focus('#sayTx'); await sleep(100);
+      ok('and come back with it', !(await page.$eval('#ac', n => n.hidden)));
+      await page.evaluate(() => wraith.Talk.insert('Kappa')); await sleep(100);
+      ok('picking an emote leaves none behind', await page.$eval('#ac', n => n.hidden));
+      await page.evaluate(() => { document.getElementById('sayTx').blur(); wraith.Talk.setReply({ id: '1', name: 'someone' }); }); await sleep(200);
+      ok('a reply bar leaves it too', await hit(page, 'bBack2'));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await on(OPEN);
+      await levels(page, 15000);
+      await page.evaluate(() => wraith.Talk.setReply({ id: '1', name: 'someone' })); await sleep(200);
+      const x = await rect(page, '#rpbX');
+      ok('open, a reply bar runs the width of its column', x.r >= 951 - 12, JSON.stringify(x));
+      ok('and leaves the way back', await hit(page, 'bBack2'));
+      await done();
+    })(),
+    // filling the screen is only for a picture
+    (async () => {
+      const { page, done } = await on(OPEN, { offline: true });
+      await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 10000 }).catch(never);
+      await page.evaluate(() => { delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen; document.getElementById('bFull').click(); });
+      ok('fullscreen with no picture yet does nothing', await page.evaluate(() => !document.getElementById('watch').classList.contains('full')));
+      await page.evaluate(() => { wraith.UI.fill(true); wraith.UI.msg(null, 'No channel called “x”', 'Check the spelling.'); });
+      ok('a message takes the screen back from a filled picture', await page.evaluate(() => !document.getElementById('watch').classList.contains('full')));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await on(FLIP);
+      await levels(page, 15000);
+      await page.evaluate(() => { wraith.UI.fill(true); document.getElementById('stage').classList.add('ui'); }); await sleep(200);
+      const b = await rect(page, '#bBack');
+      ok('turned around, a filled picture’s way back is clear of the island', b.x >= 84, JSON.stringify(b));
+      await done();
+    })(),
+    // a browser that does have element fullscreen: the controls can't stay out in a strip that's gone
+    (async () => {
+      const { page, done } = await on(OPEN);
+      await levels(page, 15000);
+      await page.evaluate(() => document.getElementById('stage').requestFullscreen()).catch(never); await sleep(400);
+      const s = await page.evaluate(() => { const b = document.getElementById('bPlay').getBoundingClientRect(), f = !!document.fullscreenElement; document.exitFullscreen?.(); return { f, r: b.right, w: innerWidth, seen: getComputedStyle(document.querySelector('.hud .bar')).display !== 'none' }; });
+      ok('in element fullscreen the controls are back on the picture', !s.f || (s.r <= s.w && s.seen), JSON.stringify(s));
+      await done();
+    })(),
+    // a keyboard gone while out of sight, with no viewport event after
+    (async () => {
+      const { page, done } = await on(OPEN);
+      await levels(page, 15000);
+      await keyboard(page, 300);
+      await page.evaluate(() => { delete window.visualViewport.height; document.dispatchEvent(new Event('visibilitychange')); }); await sleep(150);
+      ok('coming back with the keyboard gone restores the layout', await page.evaluate(() => !document.getElementById('watch').classList.contains('kb')));
+      await done();
+    })(),
+    // a stream ending under iOS's own player
+    (async () => {
+      const { page, done } = await on(OPEN);
+      await levels(page, 15000);
+      const n = await page.evaluate(() => { const v = document.getElementById('vLL'); let n = 0; Object.defineProperty(v, 'webkitDisplayingFullscreen', { configurable: true, get: () => true }); v.webkitExitFullscreen = () => { n++; }; wraith.P.ended(wraith.P.user); return n; });
+      ok('a stream ending closes iOS’s fullscreen player, which would sit on its last frame', n === 1, String(n));
+      await done();
+    })(),
+    // Go in search
+    (async () => {
+      const user = (login, displayName = login) => ({ login, displayName, profileImageURL: null, stream: null });
+      const S = { users: [] };
+      const { page, done } = await on(OPEN, { path: '', gql: b => { if (b.includes('searchFor')) return { searchFor: { users: { edges: S.users.map(item => ({ item })) }, channels: { edges: [] }, games: { edges: [] } } }; } });
+      const go = async term => {
+        await page.fill('#q', term);
+        await page.waitForSelector('#sgl .sg', { state: 'attached', timeout: 2000 }).catch(never); await sleep(100);
+        await page.press('#q', 'Enter'); await sleep(200);
+        const u = await page.evaluate(() => location.search);
+        await page.goBack(); await sleep(150);
+        return u;
+      };
+      S.users = [user('asmongold', 'Asmongold')];
+      ok('Go on part of a name opens the match it’s showing', await go('asmon') === '?c=asmongold');
+      S.users = [user('somebodyelse')];
+      ok('Go on a name it found nothing like opens that name', await go('zzzqqq') === '?c=zzzqqq');
+      S.users = [user('xqc'), user('xqcow')];
+      ok('Go on a whole name opens that name', await go('xqc') === '?c=xqc');
+      await done();
+    })(),
+    // the search list with the keyboard up, and on a narrow header
+    (async () => {
+      const { page, done } = await on(CLOSED, { path: '', gql: b => { if (b.includes('searchFor')) return { searchFor: { users: { edges: Array.from({ length: 8 }, (_, i) => ({ item: { login: 'user' + i, displayName: 'User ' + i, profileImageURL: null, stream: null } })) }, channels: { edges: [] }, games: { edges: [] } } }; } });
+      await keyboard(page, 236, '#q');
+      await page.fill('#q', 'user');
+      await page.waitForSelector('#sgl .sg', { state: 'attached', timeout: 3000 }).catch(never); await sleep(150);
+      const b = await rect(page, '#sgl');
+      ok('closed, the search list ends above the keyboard', b.b <= 236, JSON.stringify(b));
+      ok('and is wide enough for the names', b.w >= 300, JSON.stringify(b));
+      ok('without running off the side', b.x >= 0 && b.r <= 678 - 84, JSON.stringify(b));
+      await done();
+    })(),
+    // tapping the Home tab you're on
+    (async () => {
+      const rows = n => ({ streams: { edges: Array.from({ length: n }, (_, i) => ({ cursor: 'c' + i, node: { viewersCount: 1, type: 'live', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } })), pageInfo: { hasNextPage: false } } });
+      const { page, done } = await on(OPEN, { path: '', gql: b => { if (b.includes('game(name')) return { game: { displayName: 'Chess', viewersCount: 5, ...rows(30) } }; if (b.includes('streams(first')) return rows(30); } });
+      await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never);
+      await page.evaluate(() => { wraith.Home.y.browse = 900; scrollTo(0, 300); document.querySelector('.seg [data-view="browse"]').click(); }); await sleep(100);
+      ok('tapping the tab you’re on goes to its top, not somewhere you once were', await page.evaluate(() => scrollY === 0), String(await page.evaluate(() => scrollY)));
+      await page.evaluate(() => { scrollTo(0, 400); const a = document.createElement('a'); a.href = '?g=Chess'; document.getElementById('home').append(a); a.click(); a.remove(); }); await sleep(300);
+      await page.evaluate(() => scrollTo(0, 250));
+      await page.evaluate(() => document.querySelector('.seg [data-view="follow"]').click()); await sleep(100);
+      await page.evaluate(() => document.querySelector('.seg [data-view="browse"]').click()); await sleep(300);
+      ok('a category’s place doesn’t become its list’s', await page.evaluate(() => scrollY === 400), String(await page.evaluate(() => scrollY)));
+      await done();
+    })(),
+    // the hint in the box
+    (async () => {
+      const { page, done } = await on(CLOSED);
+      await levels(page, 15000);
+      const s = await page.evaluate(() => {
+        wraith.Chat.room = { 'followers-only': '0', slow: '12' }; wraith.Talk.hint();
+        const n = document.getElementById('sayTx'), c = getComputedStyle(n), p = getComputedStyle(n, '::placeholder'), x = document.createElement('canvas').getContext('2d');
+        x.font = `${p.fontWeight} ${p.fontSize} ${c.fontFamily}`;
+        return { text: x.measureText(n.placeholder).width, room: n.clientWidth - parseFloat(c.paddingLeft) - parseFloat(c.paddingRight), hint: n.placeholder };
+      });
+      ok('closed, chat’s hint fits its box', s.text <= s.room, JSON.stringify(s));
+      await done();
+    })(),
+    // the home bar
+    (async () => {
+      const { page, done } = await on(OPEN, { offline: true });
+      await page.waitForSelector('#vods a.vod', { state: 'attached', timeout: 8000 }).catch(never);
+      const pad = q => page.evaluate(q => parseFloat(getComputedStyle(document.querySelector(q)).paddingBottom), q);
+      ok('an offline channel’s list ends above the home bar', await pad('#vods') >= 34, String(await pad('#vods')));
+      await page.evaluate(() => document.querySelector('.tabs [data-pane="about"]').click()); await sleep(100);
+      ok('its About too', await pad('#about') >= 34, String(await pad('#about')));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await on(CLOSED);
+      await levels(page, 15000);
+      const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById('chat')).paddingBottom));
+      ok('closed, chat’s last line clears the home bar', pad >= 14, String(pad));
+      // and the short strip, put to use
+      await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
+      const s = await page.evaluate(() => ({ list: document.getElementById('epl').clientHeight, q: document.getElementById('epq').offsetHeight }));
+      ok('closed, the emotes get two rows or more', s.list >= 88, JSON.stringify(s));
+      await page.evaluate(() => document.getElementById('bEmote').click());
+      await page.evaluate(() => document.getElementById('bChan').click());
+      await page.waitForSelector('#vods a.vod', { state: 'attached', timeout: 8000 }).catch(never); await sleep(100);
+      const t = await rect(page, '#vods .thumb');
+      ok('and a video’s picture uses the strip’s height', t.h >= 76 && t.b <= 466, JSON.stringify(t));
       await done();
     })(),
   ]);

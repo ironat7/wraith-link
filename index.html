@@ -65,7 +65,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .search input::placeholder { color: var(--fg-3); }
 .search input::-webkit-search-cancel-button { display: none; }
 .searchw { grid-area: search; position: relative; z-index: 6; min-width: 0; }
-.sgl { position: absolute; left: 0; right: 0; top: 48px; max-height: 62dvh; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 16px 44px rgba(0,0,0,.65); }
+.sgl { position: absolute; right: 0; top: 48px; width: max(100%, 300px); max-height: 62dvh; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 16px 44px rgba(0,0,0,.65); }
 .sg { display: flex; align-items: center; gap: 11px; min-height: 52px; padding: 7px 13px; }
 .sg + .sg { border-top: 1px solid var(--line); }
 .sg.on, .sg:active { background: var(--bg-3); }
@@ -154,6 +154,9 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .lat i { width: 7px; height: 7px; border-radius: 50%; background: var(--good); }
 .lat.cdn i { background: var(--warn); }
 .lat.ad i { background: var(--live); }
+#latBy { margin-left: -3px; }
+#latBy::before { content: '· '; }
+#latBy:empty { display: none; }
 .mid { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .big { width: 70px; height: 70px; border-radius: 50%; display: grid; place-items: center; background: rgba(24,24,28,.62); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); color: #fff; pointer-events: auto; }
 .big svg { width: 30px; height: 30px; margin-left: 3px; }
@@ -234,6 +237,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .say input { flex: 1; min-width: 0; height: 40px; padding: 0 15px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); outline: 0; font-size: 16px; -webkit-appearance: none; appearance: none; }
 .say input:focus { border-color: var(--line-2); }
 .say input::placeholder { color: var(--fg-3); font-size: 14.5px; }
+.say input:placeholder-shown { text-overflow: ellipsis; }
 .send { width: 40px; height: 40px; display: grid; place-items: center; flex: none; border-radius: 50%; background: var(--fg); color: #000; }
 .send svg { width: 20px; height: 20px; }
 .send:disabled { opacity: .3; cursor: default; }
@@ -241,7 +245,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .signin:active { background: var(--bg-3); }
 .emo { width: 36px; height: 40px; display: grid; place-items: center; flex: none; margin-right: -4px; color: var(--fg-2); }
 .emo.on { color: var(--fg); }
-.ep { flex: none; height: min(40dvh, 300px); display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg-1); }
+.ep { flex: 0 1 min(40dvh, 300px); min-height: 0; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--bg-1); }
 .ep input { flex: none; height: 36px; margin: 8px max(10px, var(--sar)) 4px max(10px, var(--sal)); padding: 0 13px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); outline: 0; font-size: 16px; -webkit-appearance: none; appearance: none; }
 .epl { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 max(10px, var(--sar)) 10px max(10px, var(--sal)); }
 .epl h4 { margin: 10px 2px 5px; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-3); }
@@ -292,15 +296,15 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   #watch:not(.kb) { flex-direction: column; }
   #watch:not(.kb) .main { flex: none; justify-content: flex-start; }
   #watch:not(.kb, .full) .stage { max-height: none; margin-left: var(--sal); width: min(calc(100cqw - var(--sar) - var(--sal)), calc((100cqh - 132px) * 16 / 9)); }
-  #watch:not(.kb) .bar { padding-left: 6px; padding-right: 6px; }
-  #watch:not(.kb) .unmute { right: 12px; }
+  #watch:not(.kb, .full) .stage:not(:fullscreen) .bar { padding-left: 6px; padding-right: 6px; }
+  #watch:not(.kb, .full) .unmute { right: 12px; }
   #watch:not(.kb) .side { flex: 1; width: auto; min-height: 0; border-left: 0; border-top: 1px solid var(--line); }
   #watch:not(.kb) #paneChat { display: grid; grid-template-columns: minmax(0, 1fr) var(--col); grid-template-rows: minmax(0, 1fr) auto auto auto; }
   #watch:not(.kb) .log { grid-column: 1; grid-row: 1 / -1; border-right: 1px solid var(--line); }
-  #watch:not(.kb) .chat { padding-bottom: max(10px, calc(var(--sab) - 14px)); }
+  #watch:not(.kb) .chat { padding-bottom: max(14px, calc(var(--sab) - 14px)); }
   #watch:not(.kb) .m { padding-left: 14px; padding-right: 14px; }
   #watch:not(.kb) .rpb, #watch:not(.kb) .ac, #watch:not(.kb) .say { grid-column: 2; position: relative; z-index: 1; background: var(--bg); }
-  #watch:not(.kb) .rpb { grid-row: 2; }
+  #watch:not(.kb) .rpb { grid-row: 2; padding-top: 0; }
   #watch:not(.kb) .ac { grid-row: 3; }
   #watch:not(.kb) .say { grid-row: 4; border-top: 0; padding: 8px 16px 14px 10px; }
   /* the emotes take chat's place, which leaves the picture clear */
@@ -310,6 +314,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   #watch:not(.kb) .epl h4 { margin: 6px 2px 3px; }
   #watch:not(.kb) .info { position: absolute; z-index: 1; right: 0; bottom: 8px; width: var(--col); padding: 0 12px 0 4px; border: 0; background: none; }
   #watch:not(.kb):has(#paneChat.talk) .info, #watch.chan:not(.kb) .info { bottom: 62px; }
+  #watch:not(.kb, .chan):has(#rpb:not([hidden])) .info { bottom: 90px; }
   /* the channel, in chat's place */
   #watch:not(.kb) #paneVods, #watch:not(.kb) #paneAbout { margin-right: var(--col); border-right: 1px solid var(--line); }
   #watch:not(.kb) .vods { padding: 8px 14px; }
@@ -328,7 +333,9 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   html[data-strip=right] #watch:not(.kb, .full) .hud .bar:last-child { left: 100%; }
   html[data-strip=left] #watch:not(.kb, .full) .hud .bar:last-child { right: 100%; }
   html[data-strip] #watch:not(.kb, .full) .hud .sp { display: none; }
-  html[data-strip] #watch:not(.kb, .full) .lat { margin: 0; padding: 0 4px; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html[data-strip] #watch:not(.kb, .full) .lat { display: grid; grid-template-columns: auto auto; justify-content: center; gap: 0 5px; height: auto; margin: 0; padding: 7px 4px; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html[data-strip] #watch:not(.kb, .full) #latBy { grid-column: 1 / -1; margin: 0; text-align: center; }
+  html[data-strip] #watch:not(.kb, .full) #latBy::before { content: none; }
   html[data-strip] #watch:not(.kb, .full) .banner { opacity: 1; }
   html[data-strip] #watch:not(.kb, .full) .toast, html[data-strip] #watch:not(.kb, .full) .unmute { bottom: 12px; }
   html[data-strip] #watch:has(#msgbox:not([hidden])) .hud { display: none; }
@@ -338,6 +345,12 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   html[data-strip] #watch:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
   html[data-strip] #watch:not(.kb, .full) .hud .cb { width: 40px; }
   html[data-strip] #watch:not(.kb, .full) .lat { flex-basis: 100%; justify-content: center; }
+  .say input { padding: 0 10px; }
+  .say input::placeholder { font-size: 12.5px; }
+  #watch:not(.kb) .ep input { height: 30px; }
+  #watch:not(.kb) .epl h4:first-child { display: none; }
+  #watch:not(.kb) #vods { grid-template-rows: 1fr; grid-auto-columns: 300px; }
+  #watch:not(.kb) #vods .vod { grid-template-columns: 150px minmax(0, 1fr); }
 }
 /* where that strip is tall, the row has room above the box for all of it */
 @media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (min-height: 600px) {
@@ -348,9 +361,13 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   #watch:not(.kb) .info .tt { display: -webkit-box; -webkit-line-clamp: 2; margin-top: 1px; font-size: 13px; }
   #watch:not(.kb) .info .gm { margin-top: 2px; }
 }
-/* typing: the box is well below iOS's things in the strip, and the picture stays out of it */
-html[data-strip=right] #watch.kb .say { padding-right: 10px; }
+/* typing: where the screen's tall enough the box is well below iOS's things in the strip, and the picture stays out of it. So only
+   what's beside the strip keeps clear of it. */
+@media (min-height: 600px) { html[data-strip=right] #watch.kb .say { padding-right: 10px; } }
 html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
+html[data-strip=left] #watch.kb .side { --sal: 0px; }
+html[data-strip] #watch.kb .stage { --sal: 0px; --sar: 0px; }
+html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --sal: 0px; --sar: 0px; }
 @media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
 /* fullscreen with nothing to hand to iOS's player yet: the player fills the screen (see UI.fill) */
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; max-height: none; aspect-ratio: auto; }
@@ -365,6 +382,7 @@ html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
   #watch.idle .msgbox { position: static; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: 0 8px; padding: 2px max(14px, var(--sar)) 6px max(14px, var(--sal)); text-align: left; background: none; font-size: 13.5px; }
   #watch.idle .msgbox img { display: none; }
   #watch.idle .msgbox b { font-size: 13.5px; }
+  #watch.idle .main { background: var(--bg); }
   #watch.idle .side { border-top: 1px solid var(--line); }
   #watch.idle #vods { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 14px; align-content: start; }
 }
@@ -372,7 +390,13 @@ html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
   #watch.idle:not(.kb) .info { position: static; width: auto; padding: 4px max(12px, var(--sar)) 4px max(4px, var(--sal)); background: var(--bg); }
   #watch.idle:not(.kb) .tabs { position: static; width: auto; height: auto; padding: 6px max(12px, var(--sar)) 6px max(12px, var(--sal)); border-bottom: 1px solid var(--line); }
   #watch.idle:not(.kb) #paneVods, #watch.idle:not(.kb) #paneAbout { margin-right: 0; border-right: 0; }
-  #watch.idle:not(.kb) .vods { padding-left: max(14px, var(--sal)); padding-right: max(14px, var(--sar)); }
+  #watch.idle:not(.kb) .vods { padding-left: max(14px, var(--sal)); padding-right: max(14px, var(--sar)); padding-bottom: calc(8px + var(--sab)); }
+  #watch:not(.kb) #about { padding-bottom: calc(8px + var(--sab)); }
+  #watch.idle:not(.kb) #paneChat { grid-template-columns: minmax(0, 1fr); padding: 0 var(--sar) 0 var(--sal); }
+  #watch.idle:not(.kb) .m { padding-left: calc(max(14px, var(--sal)) - var(--sal)); padding-right: calc(max(14px, var(--sar)) - var(--sar)); }
+  #watch.idle:not(.kb) .log, #watch.idle:not(.kb) .ep { grid-row: 1; border-right: 0; }
+  #watch.idle:not(.kb) .rpb, #watch.idle:not(.kb) .ac, #watch.idle:not(.kb) .say { grid-column: 1; }
+  #watch.idle:not(.kb) .say { padding: 8px 10px calc(8px + var(--sab)); border-top: 1px solid var(--line); }
   #watch.idle:not(.kb) #vods { grid-auto-flow: row; grid-auto-columns: auto; grid-template-rows: none; gap: 2px 14px; overflow: hidden auto; }
   #watch.idle:not(.kb) #vods .vod { grid-template-columns: 136px minmax(0, 1fr); gap: 12px; padding: 6px 0; }
 }
@@ -380,7 +404,15 @@ html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
 #watch.kb .info, #watch.kb .tabs { display: none; }
 #watch.kb .say { padding-bottom: 8px; }
 #watch.kb:has(#epq:focus) .log { display: none; }   /* finding an emote: the results get what's left above the keyboard */
-#watch.kb:has(#epq:focus) .ep { flex: 1; height: auto; min-height: 0; }
+#watch.kb:has(#epq:focus) .ep { flex: 1; }
+#watch.kb .stage { max-height: 100%; }
+/* a closed Duo upright is so short above the keyboard that the picture gives way, down to a strip of it, for chat or the emotes */
+@media (orientation: portrait) {
+  #watch.kb:not(.idle) .main { flex: 0 1 auto; min-height: 90px; }
+  #watch.kb:not(.idle) .stage { flex: 0 1 auto; min-height: 0; }
+  #watch.kb:not(.idle) .side { flex: 1 0 167px; }
+  #watch.kb:not(.idle):has(#epq:focus) .side { flex-basis: 193px; }
+}
 
 /* ── settings sheet ───────────────────────────────── */
 .sheet { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
@@ -468,7 +500,7 @@ html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
           <button class="cb" id="bPlay" type="button" aria-label="Play or pause" data-i="pause"></button>
           <button class="cb" id="bMute" type="button" aria-label="Mute or unmute" data-i="vol"></button>
           <input class="vol" id="vol" type="range" min="0" max="1" step="0.02" aria-label="Volume">
-          <button class="lat" id="bLat" type="button" aria-label="Playback settings"><i></i><span id="latTxt">Live</span></button>
+          <button class="lat" id="bLat" type="button" aria-label="Playback settings"><i></i><span id="latTxt">Live</span><span id="latBy"></span></button>
           <span class="sp"></span>
           <button class="cb" id="bSet" type="button" aria-label="Quality" data-i="sliders"></button>
           <button class="cb" id="bFull" type="button" aria-label="Fullscreen" data-i="full"></button>
@@ -879,10 +911,13 @@ function recoverHls(hls, media) {
 const stripSides = el('div');
 stripSides.style.cssText = 'position: fixed; visibility: hidden; pointer-events: none; width: var(--sal); height: var(--sar);';
 document.body.append(stripSides);
-new ResizeObserver(() => {
-  const l = stripSides.offsetWidth, r = stripSides.offsetHeight, side = l > 40 && !r ? 'left' : r > 40 && !l ? 'right' : null;
+function findStrip() {
+  const l = stripSides.offsetWidth, r = stripSides.offsetHeight, whole = document.fullscreenElement || document.webkitFullscreenElement;
+  const side = whole ? null : l > 40 && !r ? 'left' : r > 40 && !l ? 'right' : null;
   if (side) document.documentElement.dataset.strip = side; else delete document.documentElement.dataset.strip;
-}).observe(stripSides);
+}
+new ResizeObserver(findStrip).observe(stripSides);
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, findStrip);
 
 const stage = $('stage'), vL = $('vLL'), vC = $('vCDN');
 vL.disableRemotePlayback = true;   // iOS only hands Managed Media Source to players without AirPlay
@@ -1469,6 +1504,8 @@ const P = {
   },
 
   ended(u) {
+    const v = this.active();   // iOS's own fullscreen player would sit on the last frame
+    if (v?.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}
     BG.stop(true);
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
     this.feed = null; this.noAd();
@@ -2610,6 +2647,7 @@ const Talk = {
   insert(word) {
     const v = this.tx.value;
     this.tx.value = (v && !/\s$/.test(v) ? v + ' ' : v) + word + ' ';
+    $('ac').hidden = true;
     this.show();
   },
 
@@ -2709,6 +2747,7 @@ const Talk = {
 };
 $('say').addEventListener('submit', e => { e.preventDefault(); Talk.send(); });
 Talk.tx.addEventListener('input', () => { Talk.show(); Talk.complete(); });
+Talk.tx.addEventListener('focus', () => Talk.complete());
 for (const n of [Talk.go, $('ac'), $('bEmote'), $('rpbX')]) n.addEventListener('mousedown', e => e.preventDefault());   // tapping these leaves the keyboard up
 $('signin').onclick = () => SignIn.start();
 $('rpbX').onclick = () => Talk.setReply(null);
@@ -2811,9 +2850,11 @@ function fitKeyboard() {
   w.style.height = up ? vv.height + 'px' : '';
   w.style.transform = up && vv.offsetTop ? `translateY(${vv.offsetTop}px)` : '';
   if (up && Picker.on && at === Talk.tx) Picker.show(false);
+  if (at !== Talk.tx) $('ac').hidden = true;   // gone with the keyboard: they'd sit on the channel row, and the way back
 }
 vv?.addEventListener('resize', fitKeyboard);
 vv?.addEventListener('scroll', fitKeyboard);
+document.addEventListener('visibilitychange', fitKeyboard);   // the keyboard can go while you're away, with no word of it
 for (const n of [Talk.tx, $('epq')]) n.addEventListener('blur', () => setTimeout(fitKeyboard, 100));
 $('watch').addEventListener('click', e => { if (!e.target.closest('#say,#ac,#ep,#rpb')) { Talk.tx.blur(); $('epq').blur(); } });   // a tap elsewhere puts the keyboard away
 
@@ -2998,7 +3039,7 @@ const UI = {
     if (body) box.append(el('div', null, body));
     if (retry) { const a = el('div', 'acts'), b = el('button', 'btn pri', label); b.type = 'button'; b.onclick = retry; a.append(b); box.append(a); }
     box.hidden = false;
-    this.spin(false);
+    this.spin(false); this.fill(false);
   },
   // Only Safari can play Twitch's CDN copies inside a page (Chrome's built-in HLS can't seek a growing
   // playlist or take a corrected one). Elsewhere, twitch.tv with the Wraith extension plays them.
@@ -3013,7 +3054,7 @@ const UI = {
     if (!vod && login) { const b = el('button', 'btn', 'Try again'); b.type = 'button'; b.onclick = () => P.open(login); a.append(b); }
     box.append(a);
     box.hidden = false;
-    this.spin(false);
+    this.spin(false); this.fill(false);
   },
   clear() {
     $('msgbox').hidden = true; $('banner').hidden = true; $('toast').hidden = true; $('watch').classList.remove('idle');
@@ -3033,12 +3074,10 @@ const UI = {
     this.playIcon();
   },
   lat() {
-    const l = P.latency(), b = $('bLat');
-    b.classList.toggle('ad', P.ad);
-    $('latTxt').textContent =
-      P.cover ? `Ad-free feed${l != null ? ` · ${Math.round(l)} s` : ''}`
-      : P.feed === 'cdn' ? `CDN${l != null ? ` · ${Math.round(l)} s` : ''}`
-      : l != null ? `${l.toFixed(1)} s` : 'Live';
+    const l = P.latency(), feed = P.cover ? 'Ad-free' : P.feed === 'cdn' ? 'CDN' : null;
+    $('bLat').classList.toggle('ad', P.ad);
+    $('latTxt').textContent = feed || (l != null ? `${l.toFixed(1)} s` : 'Live');
+    $('latBy').textContent = feed && l != null ? `${Math.round(l)} s` : '';
   },
   banner() {
     const show = P.ad && P.feed !== 'vod';
@@ -3116,10 +3155,12 @@ $('bLat').onclick = $('bSet').onclick = () => Sheet.open();
 $('bFull').onclick = () => {
   if ($('watch').classList.contains('full')) return UI.fill(false);
   if (document.fullscreenElement || document.webkitFullscreenElement) return (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  const v = P.active();
+  if (!v) return;   // no picture yet
   if (stage.requestFullscreen) stage.requestFullscreen().catch(() => UI.fill(true));
   else if (stage.webkitRequestFullscreen) stage.webkitRequestFullscreen();
   else {   // an iPhone can't make part of a page fullscreen, only hand the video to iOS's own player
-    try { P.active().webkitEnterFullscreen(); } catch { UI.fill(true); }
+    try { v.webkitEnterFullscreen(); } catch { UI.fill(true); }
   }
 };
 for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => setIcon($('bFull'), document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full'));
@@ -3259,17 +3300,17 @@ function streamRow(x) {
 }
 
 const Home = {
-  users: [], live: new Set(), at: 0, busy: false, view: store.get('homeView', 'follow'), y: { follow: 0, browse: 0 },
+  users: [], live: new Set(), at: 0, busy: false, view: store.get('homeView', 'follow'), y: { follow: 0, browse: 0, game: 0 },
   before: null,   // the view a category was opened from: it's a visit, and back goes back there
   roster() { return Me.follows || FOLLOWS; },
   find(login) { return this.users.find(u => u.login === login) || null; },
   setView(view) {
-    if (view !== this.view) { this.y[this.view] = scrollY; this.view = view; }
+    if (view !== this.view) { if (this.before == null) this.y[this.view] = scrollY; this.view = view; }   // a category's place isn't its list's
     document.querySelectorAll('.seg [data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === view));
     $('vFollow').hidden = view !== 'follow';
     $('vBrowse').hidden = view !== 'browse';
     if (view === 'browse') Browse.load();
-    scrollTo(0, this.y[view]);
+    scrollTo(0, this.y[Browse.game ? 'game' : view]);
   },
   // force: your follows, now. Only asking (refresh) reloads Browse, which would lose your place in a long list.
   async load(force) {
@@ -3411,13 +3452,14 @@ $('brLang').onclick = () => { store.set('lang', Browse.lang() === 'all' ? 'Engli
 
 // Search as you type: your follows at once, everyone else as Twitch answers.
 const Search = {
-  n: 0, timer: 0, at: -1,
+  n: 0, timer: 0, at: -1, answered: null,
   ITEM: 'login displayName profileImageURL(width: 50) stream { viewersCount game { displayName } }',
-  hide() { this.n++; clearTimeout(this.timer); $('sgl').hidden = true; $('sgl').textContent = ''; this.at = -1; },
+  hide() { this.n++; clearTimeout(this.timer); $('sgl').hidden = true; $('sgl').textContent = ''; this.at = -1; this.answered = null; },
   mine(low) { return Home.users.filter(u => u.login.includes(low) || u.displayName?.toLowerCase().includes(low)); },
   input() {
     const term = $('q').value.trim();
     clearTimeout(this.timer);
+    this.answered = null;
     if (term.length < 2 || /[/.]/.test(term)) return this.hide();
     this.draw(this.mine(term.toLowerCase()).slice(0, 6), []);
     this.timer = setTimeout(() => this.run(term), 150);
@@ -3432,6 +3474,7 @@ const Search = {
       for (const u of [...mine, ...(r?.users?.edges || []).map(e => e.item), ...(r?.channels?.edges || []).map(e => e.item)]) if (u?.login && !found.has(u.login)) found.set(u.login, u);
       const rank = u => (u.login === low ? 3e9 : 0) + (mine.includes(u) ? 2e9 : 0) + (u.stream ? 1e9 + u.stream.viewersCount : 0);
       this.draw([...found.values()].sort((a, b) => rank(b) - rank(a)).slice(0, 8), (r?.games?.edges || []).map(e => e.item).filter(Boolean).slice(0, 3));
+      this.answered = term;
     } catch {}
   },
   draw(users, games) {
@@ -3455,6 +3498,17 @@ const Search = {
       box.append(a);
     }
     box.hidden = !box.children.length;
+    this.fit();
+  },
+  // iPhone's keyboard covers the page instead of shrinking it, so the list ends where the keyboard starts.
+  fit() {
+    const box = $('sgl');
+    if (vv && !box.hidden) box.style.maxHeight = `min(62dvh, ${Math.max(104, Math.round(vv.offsetTop + vv.height - box.getBoundingClientRect().top - 8))}px)`;
+  },
+  // Once Twitch has answered, Go on part of a name means the match showing for it. An exact name ranks first, so it's that.
+  best(raw) {
+    const top = $('sgl').firstElementChild, low = raw.toLowerCase(), says = n => n?.toLowerCase().includes(low);
+    return this.answered === raw && top && (says(top.getAttribute('href')) || says(top.querySelector('.nm')?.textContent)) ? top.getAttribute('href') : null;
   },
   move(by) {
     const items = $('sgl').children;
@@ -3468,6 +3522,7 @@ const Search = {
     const video = raw.match(/twitch\.tv\/(?:\w+\/)?videos?\/(\d+)/);
     let url = picked?.getAttribute('href');
     if (!url && video) url = `?v=${video[1]}`;
+    url ||= this.best(raw);
     if (!url && validLogin(norm(raw))) url = `?c=${norm(raw)}`;
     if (!url) url = $('sgl').firstElementChild?.getAttribute('href');
     if (!url) { $('q').focus(); return; }
@@ -3477,13 +3532,24 @@ const Search = {
   },
 };
 $('q').addEventListener('input', () => Search.input());
+vv?.addEventListener('resize', () => Search.fit());
+vv?.addEventListener('scroll', () => Search.fit());
 $('q').addEventListener('keydown', e => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); Search.move(e.key === 'ArrowDown' ? 1 : -1); }
   else if (e.key === 'Escape') Search.hide();
   else if (e.key === 'Enter') { e.preventDefault(); Search.submit(); }
 });
 document.addEventListener('click', e => { if (!e.target.closest('.searchw')) Search.hide(); });
-document.querySelector('.seg').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (b) { if (Browse.game) { Browse.game = null; history.replaceState(null, '', location.pathname); } Home.before = null; store.set('homeView', b.dataset.view); Home.setView(b.dataset.view); } });
+document.querySelector('.seg').addEventListener('click', e => {
+  const b = e.target.closest('[data-view]');
+  if (!b) return;
+  const view = b.dataset.view;
+  if (Browse.game) { Browse.game = null; history.replaceState(null, '', location.pathname); }
+  else if (view === Home.view) Home.y[view] = 0;   // the tab you're on: its top
+  store.set('homeView', view);
+  Home.setView(view);
+  Home.before = null;
+});
 $('brBack').onclick = () => back();
 $('acct').onclick = () => Sheet.account();
 
@@ -3542,7 +3608,7 @@ function route(gesture) {
   }
 }
 function go(url, gesture) {
-  if (!$('home').hidden) Home.y[Home.view] = scrollY;
+  if (!$('home').hidden) Home.y[Browse.game ? 'game' : Home.view] = scrollY;
   history.pushState(null, '', url); depth++; route(gesture);
   if (url.startsWith('?g=')) scrollTo(0, 0);
 }
