@@ -1026,6 +1026,7 @@ const P = {
       if (!u.stream) { UI.offline(u); return this.awaitLive(); }
       this.start = Date.parse(u.stream.createdAt) / 1000;
       this.base = await cdnBase(u);
+      await Pages.seen();
       if (gen !== this.gen) return;
       if (this.pref === 'cdn' && cdnLive) this.playCdn(); else this.playLive();
       this.timer = setInterval(() => this.refresh(), 60e3);
@@ -1069,6 +1070,8 @@ const P = {
       const pos = store.get('pos.' + v.id, 0);
       if (pos > 15 && pos < v.lengthSeconds - 30) this.vodAt = pos;
       UI.spin(true);
+      await Pages.seen();
+      if (gen !== this.gen) return revoke(this.vodSrcs);
       this.nextVodSource();
     } catch (e) {
       if (gen === this.gen) UI.msg(null, 'Couldn’t load the video', e.message, () => this.openVod(id));
@@ -1770,7 +1773,11 @@ aBG.addEventListener('playing', () => {
 // stops all the others.
 const Pages = {
   id: Math.random().toString(36).slice(2, 6),
-  shown: !document.hidden,
+  shown: !document.hidden, waiting: [],
+  // iOS reloads a page it has dropped while the app's away (four times in 23 minutes on 2026-11-04). Out of sight that page starts no
+  // player until it's looked at: it would have no sound to give, and the memory and relay calls are likely what got it dropped.
+  seen() { return this.shown ? Promise.resolve() : new Promise(go => this.waiting.push(go)); },
+  see() { this.shown = true; for (const go of this.waiting.splice(0)) go(); },
   ch: ios && window.BroadcastChannel ? new BroadcastChannel('wraith') : null,
   tell(what) { if (!document.hidden) this.ch?.postMessage(what); },
   heard(what) {
@@ -1784,6 +1791,7 @@ const Pages = {
 };
 if (Pages.ch) Pages.ch.onmessage = e => Pages.heard(e.data);
 // What each page did about leaving and coming back. The settings sheet shows it, so a screenshot says what iOS did.
+let saidHidden = document.hidden;
 const Away = {
   add(what) {
     if (ios) store.set('away', [...store.get('away', []), `${new Date().toTimeString().slice(0, 8)} ${Pages.id} ${what}`].slice(-24));
@@ -1791,7 +1799,8 @@ const Away = {
 };
 document.addEventListener('visibilitychange', () => {
   Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}` : 'back');
-  if (!document.hidden) { Pages.shown = true; Pages.tell('here'); }
+  saidHidden = document.hidden;
+  if (!document.hidden) { Pages.see(); Pages.tell('here'); }
   if ($('watch').hidden) return;
   if (!document.hidden) return BG.stop();
   // only a picture that was playing as you left has sound to carry on (iOS pauses it just before saying the app has
@@ -1872,7 +1881,11 @@ const Awake = {
 };
 document.addEventListener('visibilitychange', () => Awake.sync());
 // touchend too: iOS sends no click for a tap on something that doesn't take one, like chat
-for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => (Awake.granted ? Awake.sync() : Awake.ask()), { capture: true, passive: true });
+for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
+  if (document.hidden && !Pages.tapped) { Pages.tapped = true; Away.add('tapped while called hidden'); }
+  Pages.see();
+  if (Awake.granted) Awake.sync(); else Awake.ask();
+}, { capture: true, passive: true });
 
 // A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
 window.addEventListener('online', () => {
@@ -1903,6 +1916,8 @@ for (const v of [vL, vC]) {
       UI.spin(false); UI.big(false);
     }
     UI.playIcon(); Awake.sync();
+    // On a page called hidden iOS lets go of the video's layer, leaving the sound. Reading a frame has it count the player as needed.
+    if (document.hidden && v === vL) { Away.add('playing while called hidden'); createImageBitmap(v, { resizeWidth: 1, resizeHeight: 1 }).then(b => b.close(), () => {}); }
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
   v.addEventListener('pause', () => { P.pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
@@ -1940,8 +1955,12 @@ vC.addEventListener('timeupdate', () => {
 });
 aBG.addEventListener('timeupdate', () => { if (BG.on && P.feed === 'vod') savePlace(aBG.currentTime); });
 setInterval(() => {
-  if (BG.on && !document.hidden) BG.stop();   // iOS doesn't always say the app came back (WebKit 207256)
+  if (document.hidden !== saidHidden) {   // iOS doesn't always say the app left or came back (WebKit 207256)
+    Away.add('iOS didn’t say');
+    document.dispatchEvent(new Event('visibilitychange'));
+  }
   if (P.feed) { P.tick(); UI.banner(); }
+  if (P.feed && Awake.granted) Awake.sync();
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
@@ -3391,6 +3410,7 @@ const Sheet = {
       lit = Math.round(c.getImageData(0, 0, 8, 8).data.reduce((a, d, i) => i % 4 === 3 ? a : a + d, 0) / 192);
     } catch {}
     return [
+      `Page: ${Pages.id} · ${document.visibilityState} · ${document.hasFocus() ? 'focused' : 'not focused'}`,
       `Frames: ${q ? `${q.totalVideoFrames.toLocaleString()} decoded, ${q.droppedVideoFrames.toLocaleString()} dropped${q.displayCompositedVideoFrames ? `, ${q.displayCompositedVideoFrames.toLocaleString()} composited` : ''}` : 'no count'} · last one ${lit === '?' ? 'unreadable' : `${lit} of 255 bright`}`,
       `Player: ${Math.round(b.width)}×${Math.round(b.height)} at ${Math.round(b.x)},${Math.round(b.y)} · ${getComputedStyle(v).visibility} · ${v.id === 'vLL' ? (inView ? 'in view' : 'out of view') : 'CDN'} · ready ${v.readyState}${v.webkitPresentationMode && v.webkitPresentationMode !== 'inline' ? ` · ${v.webkitPresentationMode}` : ''}${over.length ? ` · under ${over.map(n => n.id || n.className || n.tagName).join(', ')}` : ''}`,
     ];

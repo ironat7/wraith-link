@@ -1940,6 +1940,31 @@ if (want('screen')) {
       ok('a wake lock arriving after the pause lets go', await page.evaluate(() => window.__rel === 1), await page.evaluate(() => String(window.__rel)));
       await done();
     })(),
+    (async () => {
+      // iOS reloading a page while the app's away: it starts nothing until it's looked at, however it finds out
+      const { page, done, ads } = await stage(answer, { init: () => { window.__hidden = true; Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__hidden }); } });
+      await sleep(1500);
+      ok('a page loaded out of sight starts no player', await page.evaluate(() => !wraith.P.hls && !wraith.P.feed && wraith.P.login === 'staged'));
+      await page.evaluate(() => { window.__hidden = false; });
+      await levels(page, 5000);
+      ok('and starts once it’s on screen, with iOS not saying so', await page.evaluate(() => !!wraith.P.hls && JSON.parse(localStorage.getItem('wraith.away')).some(x => x.endsWith('iOS didn’t say'))));
+      await done();
+    })(),
+    (async () => {
+      // or iOS never calling it visible at all: a tap says it's on screen, and the picture gets read so iOS keeps its layer
+      const { page, done } = await stage(answer, { init: () => {
+        window.__reads = 0; const real = window.createImageBitmap;
+        window.createImageBitmap = (...a) => { window.__reads++; return real.apply(window, a); };
+        Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      } });
+      await sleep(800);
+      await page.mouse.click(5, 600);
+      await levels(page, 5000);
+      ok('on a page always called hidden, a tap starts it', await page.evaluate(() => !!wraith.P.hls && JSON.parse(localStorage.getItem('wraith.away')).some(x => x.endsWith('tapped while called hidden'))));
+      await page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing')));
+      ok('and the picture’s read so iOS keeps showing it', await page.evaluate(() => window.__reads === 1), String(await page.evaluate(() => window.__reads)));
+      await done();
+    })(),
     // the picture gone with the sound and the clock going, which iOS can do with no word: frames that stop get a seek, then a new player, then no more
     ...[true, false].map(counted => (async () => {
       const { page, done } = await stage(answer, counted ? { init: () => localStorage.setItem('wraith.framesCount', 'true') } : {});
