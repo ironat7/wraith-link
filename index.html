@@ -1007,6 +1007,7 @@ const P = {
   pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
   skipped: 0,                        // ad breaks since the app started, for the stats panel
+  labelled: 0, restAfter: 5000,      // when the latency label was last written; how long a pause before loading stops
   counts: store.get('framesCount', false),   // this phone's player has been seen counting frames
 
   async open(login, gesture, cached) {
@@ -1425,11 +1426,11 @@ const P = {
   // Speed up a little when behind, slow down when the buffer runs thin. Discrete steps with
   // hysteresis: a continuously varying rate makes the audio pitch wander.
   tick() {
-    UI.lat();
     const v = this.active(), now = Date.now();
+    if (now - this.labelled > 900 && !document.hidden) { this.labelled = now; UI.lat(); }
     if (!v || this.feed === 'vod') return;
     this.watch(v, now);
-    if (v.paused) return;
+    if (v.paused) return this.rest();
     // a picked quality stays picked, whatever hls.js decides after an error
     if (this.feed === 'live' && this.q !== 'auto' && this.hls?.autoLevelEnabled && this.groups.length) this.hls.loadLevel = this.levelIndex();
     if (v.readyState < 3) {   // stalled: hop the hole a cut-out ad leaves if picture is buffered past it
@@ -1454,6 +1455,13 @@ const P = {
     const ahead = bufAhead(v), s = this.rate = live ? this.liveRate(lat, T, ahead) : this.cdnRate(lat, T, ahead);
     const r = s === 'fast' ? 1.1 : s === 'slow' ? 0.93 : 1;
     if (v.playbackRate !== r) v.playbackRate = r;
+  },
+
+  // Left alone, a paused live stream goes on loading as fast as a playing one: hls.js has the picture jump ahead each time it falls too
+  // far behind, and fetches what's there. So after a few seconds it stops, and the next play starts it up at the live edge.
+  rest() {
+    const h = this.hls;
+    if (this.feed === 'live' && h?.loadingEnabled && h.levels.length && !this.ad && !BG.on && performance.now() - this.pausedAt > this.restAfter) h.stopLoad();
   },
 
   // Slows down when the buffer runs thin, or when it starts closer than the target (no cushion).
@@ -1937,6 +1945,13 @@ for (const v of [vL, vC]) {
     if (v === vL && v.currentTime > 3) P.noteStall();
   });
 }
+vL.addEventListener('play', () => {   // after a pause long enough for loading to stop
+  const h = P.hls;
+  if (P.feed !== 'live' || !h || h.loadingEnabled || BG.on) return;
+  P.quietUntil = Date.now() + 6000;
+  h.once(window.Hls.Events.LEVEL_UPDATED, () => P.toLiveEdge());
+  h.startLoad(-1);
+});
 vC.addEventListener('loadedmetadata', () => {
   P.played = vC.dataset.url;
   if (P.feed === 'cdn' && P.seekPending) P.cdnSeek();
@@ -1964,7 +1979,7 @@ setInterval(() => {
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
-const getJson = u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
+const getJson = u => fetch(u, { signal: AbortSignal.timeout(15e3) }).then(r => r.ok ? r.json() : null).catch(() => null);
 const COLORS = ['#FF4D4D', '#5B8CFF', '#3DDC97', '#FF8A3D', '#B3E35A', '#FF6B3D', '#3FBF7F', '#E8B23A', '#E07B39', '#5FB8BF', '#3DA0FF', '#FF7EB6', '#A877FF', '#3DFFA0', '#FFB13D'];
 function nameColor(hex, name) {
   if (!/^#[0-9a-f]{6}$/i.test(hex || '')) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0; hex = COLORS[h % COLORS.length]; }
@@ -1994,7 +2009,7 @@ const loginOf = m => m.tags.login || m.prefix.split('!')[0];   // a subscription
 
 const Chat = {
   box: $('chat'), ws: null, login: null, uid: null, queue: [], stick: true, retry: 0, timer: 0, pinger: 0,
-  emotes: new Map(), global: new Map(), globalDone: false, badges: new Map(), gbadges: null, zero: new Set(),
+  emotes: new Map(), global: new Map(), globalParts: [[], [], []], globalDone: false, badges: new Map(), gbadges: null, zero: new Set(),
   chanEmotes: [], globalEmotes: [],     // the same emotes as lists, for the picker
   seen: new Set(), rx: 0, behind: false,  // ids already handled; when the socket last said anything; a gap to fill in
   said: [], sampled: false, sampleT: 0,   // who said what lately, for which emotes people use; the long look back
@@ -2002,6 +2017,7 @@ const Chat = {
   newest: 0,                              // the time of the latest line drawn
   top: 0,                                 // where chat was last scrolled to, to tell you scrolling up from lines growing
   resumeAfter: 30e3,                      // scrolled up and left there this long, it goes back to following
+  napAfter: 30e3,                         // out of sight this long, the socket closes
   held: false,                            // a finger on it
 
   open(login) {
@@ -2012,7 +2028,8 @@ const Chat = {
     this.connect();
     this.history(60);
     this.sampleT = setTimeout(() => this.sample(), 4e3);
-    this.timer = setInterval(() => this.flush(), 120);
+    this.timer = setInterval(() => this.flush(), 200);
+    this.nap();
     this.pinger = setInterval(() => this.ping(), 25e3);
     this.loadGlobal();
     Talk.show();
@@ -2046,7 +2063,7 @@ const Chat = {
       if (this.ws !== ws) return;
       this.ws = null; this.behind = true;
       const login = this.login;
-      setTimeout(() => { if (login && this.login === login && !this.ws) this.connect(); }, Math.min(15e3, 1000 * 2 ** this.retry++));
+      setTimeout(() => { if (login && this.login === login && !this.ws && !document.hidden) this.connect(); }, Math.min(15e3, 1000 * 2 ** this.retry++));
     };
   },
 
@@ -2058,8 +2075,18 @@ const Chat = {
     if (quiet > 70e3) this.reconnect();
     else if (quiet > 20e3) this.ws.send('PING :wraith');
   },
+  // Nobody's reading while the app's away, and a busy chat would keep the radio up and the page parsing for nothing. The socket closes,
+  // and coming back opens it and fills in what was missed.
+  nap() {
+    clearTimeout(this.napT);
+    if (document.hidden) this.napT = setTimeout(() => {
+      if (!document.hidden) return;
+      if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+      this.behind = true; this.queue = [];
+    }, this.napAfter);
+  },
   wake() {   // back from the background, or the network changed
-    if (this.login && (!this.ws || Date.now() - this.rx > 15e3)) this.reconnect();
+    if (this.login && !document.hidden && (!this.ws || Date.now() - this.rx > 15e3)) this.reconnect();
   },
   reconnect() {
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
@@ -2346,39 +2373,59 @@ const Chat = {
   },
   badgeMap: list => new Map((list || []).map(b => [`${b.setID}/${b.version}`, b.imageURL])),
 
+  // Emotes and badges come from four services, any of which can be slow or down (7TV on 2026-11-04, no answer at all). Each goes in as it
+  // answers, and what's on screen is drawn again once for all that came in together.
+  drawAgain() {
+    clearTimeout(this.againT);
+    this.againT = setTimeout(() => { this.redraw(); Picker.refresh(); }, 100);
+  },
+  mix() {
+    this.emotes = new Map([...this.global, ...this.chanEmotes.map(e => [e.name, e.url])]);   // the channel's own win
+    this.drawAgain();
+  },
+
   async loadGlobal() {
     if (this.globalDone) return;
     this.globalDone = true;
-    const [ffz, bttv, stv, badges] = await Promise.all([
-      getJson('https://api.frankerfacez.com/v1/set/global'), getJson('https://api.betterttv.net/3/cached/emotes/global'), getJson('https://7tv.io/v3/emote-sets/global'),
-      gql('query { badges { setID version imageURL(size: DOUBLE) } }').catch(() => null),
+    const parts = this.globalParts, ask = (url, at, list) => getJson(url).then(j => {
+      if (!j) return false;
+      parts[at] = list(j);
+      this.global = new Map(parts.flat().filter(e => e.name && e.url).map(e => [e.name, e.url]));
+      this.globalEmotes = [...this.global].map(([name, url]) => ({ name, url }));
+      this.mix();
+      return true;
+    }).catch(() => false);
+    const answers = await Promise.all([
+      ask('https://api.frankerfacez.com/v1/set/global', 0, j => this.ffzEmotes((j.default_sets || []).map(id => j.sets?.[id]))),
+      ask('https://api.betterttv.net/3/cached/emotes/global', 1, j => this.bttvEmotes(j)),
+      ask('https://7tv.io/v3/emote-sets/global', 2, j => this.stvEmotes(j.emotes || [])),
+      gql('query { badges { setID version imageURL(size: DOUBLE) } }').then(b => { this.gbadges = this.badgeMap(b.badges); this.drawAgain(); return true; }).catch(() => false),
     ]);
-    const list = [...this.ffzEmotes((ffz?.default_sets || []).map(id => ffz.sets?.[id])), ...this.bttvEmotes(bttv || []), ...this.stvEmotes(stv?.emotes || [])].filter(e => e.name && e.url);
-    for (const e of list) this.global.set(e.name, e.url);
-    this.globalEmotes = [...this.global].map(([name, url]) => ({ name, url }));
-    if (badges) this.gbadges = this.badgeMap(badges.badges);
-    for (const [k, v] of this.global) if (!this.emotes.has(k)) this.emotes.set(k, v);
-    this.globalDone = !!(ffz && bttv && stv && badges);   // the next channel opened asks again if one of them didn't answer
-    this.redraw();
-    Picker.refresh();
+    this.globalDone = answers.every(Boolean);   // the next channel opened asks again if one of them didn't answer
   },
 
   async channel(uid) {
     this.uid = uid;
-    const [ffz, bttv, stv, badges] = await Promise.all([
-      getJson(`https://api.frankerfacez.com/v1/room/id/${uid}`), getJson(`https://api.betterttv.net/3/cached/users/twitch/${uid}`), getJson(`https://7tv.io/v3/users/twitch/${uid}`),
-      gql('query($id: ID!) { user(id: $id) { broadcastBadges { setID version imageURL(size: DOUBLE) } } }', { id: uid }).catch(() => null),
+    const parts = [[], [], []], ask = (url, at, list) => getJson(url).then(j => {
+      if (!j || this.uid !== uid) return;
+      parts[at] = list(j);
+      this.chanEmotes = parts.flat().filter(e => e.name && e.url);
+      this.mix();
+    }).catch(() => {});
+    await Promise.all([
+      ask(`https://api.frankerfacez.com/v1/room/id/${uid}`, 0, j => this.ffzEmotes(Object.values(j.sets || {}))),
+      ask(`https://api.betterttv.net/3/cached/users/twitch/${uid}`, 1, j => this.bttvEmotes([...(j.channelEmotes || []), ...(j.sharedEmotes || [])])),
+      ask(`https://7tv.io/v3/users/twitch/${uid}`, 2, j => this.stvEmotes(j.emote_set?.emotes || [])),
+      gql('query($id: ID!) { user(id: $id) { broadcastBadges { setID version imageURL(size: DOUBLE) } } }', { id: uid }).then(d => {
+        if (this.uid !== uid) return;
+        this.badges = this.badgeMap(d.user?.broadcastBadges);
+        this.drawAgain();
+      }).catch(() => {}),
     ]);
-    if (this.uid !== uid) return;
-    const list = [...this.ffzEmotes(Object.values(ffz?.sets || {})), ...this.bttvEmotes([...(bttv?.channelEmotes || []), ...(bttv?.sharedEmotes || [])]), ...this.stvEmotes(stv?.emote_set?.emotes || [])].filter(e => e.name && e.url);
-    this.emotes = new Map([...this.global, ...list.map(e => [e.name, e.url])]); this.chanEmotes = list;
-    this.badges = this.badgeMap(badges?.user?.broadcastBadges);
-    this.redraw();
-    Picker.refresh();
   },
 
   close() {
-    clearInterval(this.timer); clearInterval(this.pinger); clearTimeout(this.sampleT);
+    clearInterval(this.timer); clearInterval(this.pinger); clearTimeout(this.sampleT); clearTimeout(this.napT); clearTimeout(this.againT);
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
     this.login = null; this.uid = null; this.queue = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
     this.seen = new Set(); this.names = new Map(); this.said = []; this.sampled = false;
@@ -2388,7 +2435,7 @@ const Chat = {
   },
 };
 Chat.box.addEventListener('click', e => { const n = e.target.closest('.n'); if (n) Card.open(n.closest('.m')); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) Chat.wake(); });
+document.addEventListener('visibilitychange', () => { Chat.nap(); if (!document.hidden) Chat.wake(); });
 window.addEventListener('online', () => Chat.wake());
 let chatResized = 0;   // turning the phone or unfolding moves the scroll position; that isn't you scrolling up
 new ResizeObserver(() => { chatResized = performance.now(); if (Chat.stick) Chat.box.scrollTop = Chat.box.scrollHeight; }).observe(Chat.box);
@@ -3206,8 +3253,9 @@ const UI = {
   lat() {
     const l = P.latency(), feed = P.cover ? 'Ad-free' : P.feed === 'cdn' ? 'CDN' : null;
     $('bLat').classList.toggle('ad', P.ad);
-    $('latTxt').textContent = feed || (l != null ? `${l.toFixed(1)} s` : 'Live');
-    $('latBy').textContent = feed && l != null ? `${Math.round(l)} s` : '';
+    const say = (n, text) => { if (n.textContent !== text) n.textContent = text; };
+    say($('latTxt'), feed || (l != null ? `${l.toFixed(1)} s` : 'Live'));
+    say($('latBy'), feed && l != null ? `${Math.round(l)} s` : '');
   },
   banner() {
     const show = P.ad && P.feed !== 'vod';
@@ -3403,15 +3451,20 @@ const Sheet = {
   look(v) {
     const q = v.getVideoPlaybackQuality?.(), b = v.getBoundingClientRect(), x = b.x + b.width / 2, y = b.y + b.height / 2;
     const stack = document.elementsFromPoint(x, y), over = stack.slice(0, stack.indexOf(v)).filter(n => !n.closest('#sheet'));
-    let lit = '?';
-    try {
-      const c = this.probe ??= Object.assign(document.createElement('canvas'), { width: 8, height: 8 }).getContext('2d', { willReadFrequently: true });
-      c.drawImage(v, 0, 0, 8, 8);
-      lit = Math.round(c.getImageData(0, 0, 8, 8).data.reduce((a, d, i) => i % 4 === 3 ? a : a + d, 0) / 192);
-    } catch {}
+    if (performance.now() - (this.litAt ?? -1e9) > 5000) {
+      this.litAt = performance.now();
+      setTimeout(() => {
+        try {
+          const c = this.probe ??= Object.assign(document.createElement('canvas'), { width: 8, height: 8 }).getContext('2d');
+          c.drawImage(v, 0, 0, 8, 8);
+          this.lit = Math.round(c.getImageData(0, 0, 8, 8).data.reduce((a, d, i) => i % 4 === 3 ? a : a + d, 0) / 192);
+        } catch { this.lit = null; }
+      }, 300);
+    }
+    const lit = this.lit;
     return [
       `Page: ${Pages.id} · ${document.visibilityState} · ${document.hasFocus() ? 'focused' : 'not focused'}`,
-      `Frames: ${q ? `${q.totalVideoFrames.toLocaleString()} decoded, ${q.droppedVideoFrames.toLocaleString()} dropped${q.displayCompositedVideoFrames ? `, ${q.displayCompositedVideoFrames.toLocaleString()} composited` : ''}` : 'no count'} · last one ${lit === '?' ? 'unreadable' : `${lit} of 255 bright`}`,
+      `Frames: ${q ? `${q.totalVideoFrames.toLocaleString()} decoded, ${q.droppedVideoFrames.toLocaleString()} dropped${q.displayCompositedVideoFrames ? `, ${q.displayCompositedVideoFrames.toLocaleString()} composited` : ''}` : 'no count'} · last one ${lit == null ? 'unread' : `${lit} of 255 bright`}`,
       `Player: ${Math.round(b.width)}×${Math.round(b.height)} at ${Math.round(b.x)},${Math.round(b.y)} · ${getComputedStyle(v).visibility} · ${v.id === 'vLL' ? (inView ? 'in view' : 'out of view') : 'CDN'} · ready ${v.readyState}${v.webkitPresentationMode && v.webkitPresentationMode !== 'inline' ? ` · ${v.webkitPresentationMode}` : ''}${over.length ? ` · under ${over.map(n => n.id || n.className || n.tagName).join(', ')}` : ''}`,
     ];
   },
@@ -3503,7 +3556,7 @@ const Home = {
     const live = this.users.filter(u => u.stream).sort((a, b) => b.stream.viewersCount - a.stream.viewersCount);
     const last = u => Date.parse(u.lastBroadcast?.startedAt || 0) || 0;
     const off = this.users.filter(u => !u.stream).sort((a, b) => last(b) - last(a));
-    const box = $('live'), bust = Math.floor(Date.now() / 60e3);
+    const box = $('live'), bust = Math.floor(Date.now() / 300e3);
     box.textContent = '';
     $('liveN').textContent = live.length || '';
     if (!live.length) box.append(el('p', 'note', 'Nobody you follow is live right now.'));

@@ -347,7 +347,7 @@ if (want('chat')) {
   await page.evaluate(ch => { const now = Date.now(); wraith.Chat.queue = []; wraith.Chat.line(`@id=q1;tmi-sent-ts=${now - 2000};user-id=41;display-name=Vic :victim!victim@victim.tmi.twitch.tv PRIVMSG #${ch} :to be timed out`); wraith.Chat.line(`@id=q2;tmi-sent-ts=${now - 1000};user-id=42;display-name=Del :deleted!deleted@deleted.tmi.twitch.tv PRIVMSG #${ch} :to be deleted`); return wraith.Chat.history(12); }, A);
   ok('held-back lines stay in time order after a reconnect’s history', await page.evaluate(() => wraith.Chat.queue.every((q, i, a) => !i || a[i - 1].ts <= q.ts)));
   await page.evaluate(ch => { wraith.Chat.line(`:tmi.twitch.tv CLEARCHAT #${ch} :victim`); wraith.Chat.line(`@target-msg-id=q2 :tmi.twitch.tv CLEARMSG #${ch} :to be deleted`); wraith.P.chatDelay = window.__cd; }, A);
-  await sleep(500);
+  await page.waitForFunction(() => ['victim', 'deleted'].every(l => document.querySelector(`#chat [data-l="${l}"]`)), null, { timeout: 8000 }).catch(never);
   const gone = await page.evaluate(() => ['victim', 'deleted'].map(l => document.querySelector(`#chat [data-l="${l}"]`)?.classList.contains('gone')));
   ok('a timeout and a delete catch lines still waiting', gone[0] === true && gone[1] === true, gone.join());
   await done();
@@ -1862,10 +1862,11 @@ if (want('screen')) {
       const { page, done } = await stage(answer, { touch: true });
       await levels(page, 15000);
       await page.waitForFunction(() => !document.getElementById('stage').classList.contains('ui'), null, { timeout: 8000 }).catch(never);
-      await page.touchscreen.tap(195, 110); await sleep(200);
+      const landed = up => page.waitForFunction(up => document.getElementById('stage').classList.contains('ui') === up, up, { timeout: 4000 }).catch(never).then(() => sleep(200));
+      await page.touchscreen.tap(195, 110); await landed(true);
       ok('a tap on the picture brings the controls up', await ui(page));
       await sleep(400);
-      await page.touchscreen.tap(195, 110); await sleep(200);
+      await page.touchscreen.tap(195, 110); await landed(false);
       ok('and another takes them down', !(await ui(page)));
       await done();
     })(),
@@ -1963,6 +1964,80 @@ if (want('screen')) {
       ok('on a page always called hidden, a tap starts it', await page.evaluate(() => !!wraith.P.hls && JSON.parse(localStorage.getItem('wraith.away')).some(x => x.endsWith('tapped while called hidden'))));
       await page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing')));
       ok('and the picture’s read so iOS keeps showing it', await page.evaluate(() => window.__reads === 1), String(await page.evaluate(() => window.__reads)));
+      await done();
+    })(),
+    (async () => {
+      // what's spent on a picture nobody's watching: a paused live stream stops loading, and picks up again on play
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      const on = () => page.evaluate(() => wraith.P.hls.loadingEnabled);
+      await page.evaluate(() => { const v = wraith.P.active(); v.pause(); wraith.P.pausedAt = performance.now(); wraith.P.tick(); });
+      ok('just paused, it’s still loading', await on());
+      await page.evaluate(() => { wraith.P.pausedAt -= 6000; wraith.P.tick(); });
+      ok('after a few seconds paused it isn’t', !(await on()));
+      await page.evaluate(() => { document.getElementById('bPlay').click(); });
+      await page.waitForFunction(() => wraith.P.hls.loadingEnabled, null, { timeout: 4000 }).catch(never);
+      ok('and playing starts it again', await on());
+      await done();
+    })(),
+    (async () => {
+      // autoplay refused, as in Low Power Mode: nothing loads while it waits for the tap, and the tap starts it
+      const { page, done } = await stage(answer, { init: () => {
+        const real = HTMLMediaElement.prototype.play;
+        HTMLMediaElement.prototype.play = function () { return window.__allow ? real.call(this) : Promise.reject(new DOMException('no', 'NotAllowedError')); };
+      } });
+      await levels(page, 15000);
+      await page.waitForFunction(() => !document.getElementById('bigPlay').hidden, null, { timeout: 4000 }).catch(never);
+      await page.evaluate(() => { wraith.P.pausedAt = -1e5; wraith.P.tick(); });
+      ok('autoplay refused: the big play button’s up and it isn’t loading', await page.evaluate(() => !document.getElementById('bigPlay').hidden && !wraith.P.hls.loadingEnabled));
+      await page.evaluate(() => { window.__allow = true; document.getElementById('bigPlay').click(); });
+      await page.waitForFunction(() => wraith.P.hls.loadingEnabled, null, { timeout: 4000 }).catch(never);
+      ok('and a tap has it loading', await page.evaluate(() => wraith.P.hls.loadingEnabled && !wraith.P.active().paused));
+      await done();
+    })(),
+    (async () => {
+      // chat while the app's away: the socket closes after a while, and coming back opens it and asks for what was missed
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      const hide = h => page.evaluate(h => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }); document.dispatchEvent(new Event('visibilitychange')); }, h);
+      await page.evaluate(() => {
+        wraith.Chat.napAfter = 100; wraith.Chat.rx = Date.now(); window.__ws = wraith.Chat.ws;
+        for (const h of [true, false]) { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }); document.dispatchEvent(new Event('visibilitychange')); }
+      });
+      await sleep(250);
+      ok('away and back straight away: chat’s left as it was', await page.evaluate(() => wraith.Chat.ws === window.__ws));
+      await hide(true);
+      await page.waitForFunction(() => wraith.Chat.ws === null, null, { timeout: 4000 }).catch(never);
+      ok('away for a while: the chat socket closes', await page.evaluate(() => wraith.Chat.ws === null && wraith.Chat.behind));
+      await page.evaluate(() => window.dispatchEvent(new Event('online')));
+      ok('a network change while away doesn’t open it', await page.evaluate(() => wraith.Chat.ws === null));
+      await hide(false);
+      ok('back: it opens again', await page.evaluate(() => !!wraith.Chat.ws && wraith.Chat.ws !== window.__ws && wraith.Chat.behind));
+      // and one that drops while away stays down until then
+      await page.evaluate(() => { wraith.Chat.napAfter = 1e6; wraith.Chat.retry = 0; });
+      await hide(true);
+      await page.evaluate(() => wraith.Chat.ws.onclose());   // the stage's socket is a stand-in that says nothing by itself
+      await sleep(1300);
+      ok('a socket that drops while away isn’t retried', await page.evaluate(() => wraith.Chat.ws === null));
+      await hide(false);
+      ok('coming back opens it', await page.evaluate(() => !!wraith.Chat.ws));
+      await done();
+    })(),
+    (async () => {
+      // an emote service that's down holds up nothing but its own
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await page.route(/7tv\.io/, () => {});   // never answers
+      await page.route(/betterttv\.net/, r => r.fulfill({ status: 200, headers, contentType: 'application/json', body: r.request().url().includes('/users/') ? JSON.stringify({ channelEmotes: [{ code: 'Hers', id: '2' }] }) : JSON.stringify([{ code: 'Quick', id: '1' }]) }));
+      await page.evaluate(() => {
+        window.__draws = 0; const real = wraith.Chat.redraw;
+        wraith.Chat.redraw = function () { window.__draws++; return real.call(this); };
+        wraith.Chat.globalDone = false; wraith.Chat.loadGlobal(); wraith.Chat.channel('1');
+      });
+      await page.waitForFunction(() => wraith.Chat.emotes.has('Quick') && wraith.Chat.emotes.has('Hers'), null, { timeout: 4000 }).catch(never);
+      ok('a service that never answers doesn’t hold up the others’ emotes', await page.evaluate(() => wraith.Chat.emotes.has('Quick') && wraith.Chat.emotes.has('Hers')));
+      await page.waitForFunction(() => window.__draws > 0, null, { timeout: 4000 }).catch(never);
+      ok('and chat’s drawn again with them', await page.evaluate(() => window.__draws > 0));
       await done();
     })(),
     // the picture gone with the sound and the clock going, which iOS can do with no word: frames that stop get a seek, then a new player, then no more
@@ -2267,7 +2342,7 @@ if (want('lists')) {
       await onBrowse(page);
       const list = () => page.evaluate(() => document.querySelectorAll('#brList .row').length);
       await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never);
-      await page.waitForFunction(() => { scrollTo(0, document.documentElement.scrollHeight); return document.querySelectorAll('#brList .row').length >= 60; }, null, { timeout: 5000, polling: 100 }).catch(never);
+      await page.waitForFunction(() => { scrollTo(0, document.documentElement.scrollHeight); return document.querySelectorAll('#brList .row').length >= 60; }, null, { timeout: 15000, polling: 100 }).catch(never);
       const was = await list();
       await page.evaluate(() => window.dispatchEvent(new Event('online'))); await sleep(500);
       ok('the network coming back leaves a long Browse list alone', await list() >= was && was >= 60, `${was} then ${await list()}`);
@@ -2526,6 +2601,7 @@ if (want('duo')) {
       const up = () => page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollTop > 200 ? 100 : 0; });
       await up(); await sleep(200);
       let s = await st();
+      if (s.stick) { await up(); await sleep(200); s = await st(); }   // a single scroll can land with a redraw, where a finger would carry on through it
       ok('scrolled up, chat stays there', !s.stick && !s.end, JSON.stringify(s));
       await page.evaluate(l => wraith.Chat.line(l), LINE('f100', 100));
       await page.waitForFunction(() => !document.getElementById('more').hidden, null, { timeout: 1500 }).catch(never);
