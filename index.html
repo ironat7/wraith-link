@@ -273,8 +273,8 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   .side { flex: none; width: clamp(300px, 32vw, 380px); border-left: 1px solid var(--line); }
 }
 @media (orientation: landscape) and (min-aspect-ratio: 8/5) { #watch.nochat:not(.chan) .side { display: none; } }
-/* short screens give the channel row's height to the picture, except on videos, where it holds the only way back */
-@media (orientation: landscape) and (max-height: 560px) and (min-aspect-ratio: 8/5) { #watch:not(.vodw, .chan) .info { display: none; } #watch:not(.vodw, .chan) .stage { max-height: 100%; } }
+/* short screens give the channel row's height to the picture, except on videos and under a message, which covers the controls: there it holds the only way back */
+@media (orientation: landscape) and (max-height: 560px) and (min-aspect-ratio: 8/5) { #watch:not(.vodw, .chan, :has(#msgbox:not([hidden]))) .info { display: none; } #watch:not(.vodw, .chan, :has(#msgbox:not([hidden]))) .stage { max-height: 100%; } }
 /* A screen too square for that, like the inner screen of an iPhone Duo (951×669, with 84 down one side for iOS's status
    pill and clock), would be a third black. So the picture fills the width beside that strip and stays there, with a strip
    along the bottom: chat or the channel on the left, the box or the channel's tabs on the right, the channel row above
@@ -574,6 +574,11 @@ const TOKEN_QUERY = 'query($l: String!, $t: String!) { streamPlaybackAccessToken
 async function getToken(login, type = P.playerType) {
   return (await gql(TOKEN_QUERY, { l: login, t: type })).streamPlaybackAccessToken;
 }
+// For picking a stream back up: your account's, if anonymous is turned away because it's sub-only.
+async function tokenFor(login) {
+  const tok = await getToken(login).catch(() => null);
+  return tok?.authorization?.isForbidden ? Me.streamToken(login) : tok;
+}
 
 function usherUrl(login, tok) {
   const q = new URLSearchParams({
@@ -790,6 +795,22 @@ const hlsReady = new Promise((res, rej) => {
   if (check() === null) { s.addEventListener('load', check); s.addEventListener('error', check); setTimeout(() => rej(new Error('player script timed out')), 15000); }
 });
 hlsReady.catch(() => {});
+// A player script that failed to load gets another go, for the next start to find.
+function hlsAgain() {
+  const s = $('hlsjs');
+  if (window.Hls || !s.dataset.err) return;
+  const n = document.createElement('script');
+  n.id = s.id; n.src = s.src; n.integrity = s.integrity; n.crossOrigin = s.crossOrigin; n.async = true;
+  n.onerror = () => { n.dataset.err = 1; };
+  s.replaceWith(n);
+}
+// By the time a fatal error reaches the page, hls.js has stopped loading, and attaching the player again only starts the
+// segments back up: told nothing else, it plays what's left of a playlist that no longer updates.
+function recoverHls(hls, media) {
+  const t = media.currentTime;
+  hls.recoverMediaError();
+  hls.startLoad(t || -1);
+}
 
 // ── player ──────────────────────────────────────────
 const stage = $('stage'), vL = $('vLL'), vC = $('vCDN');
@@ -821,8 +842,8 @@ const nothingOpen = () => ({
   tokenP: null, audioUrl: null,      // the token the first start uses; this session's audio_only playlist
   groups: [], subOnly: false,        // the renditions hls.js found; whether only the CDN can play this
   base: null, start: 0, seekPending: false,   // the copy on the CDN, when the stream began, whether the copy's yet to be seeked into
-  rend: null, asks: 0, cdnPlayed: null,       // the name the copy turned out to be under, how often it's been asked for again, the address of one that has played
-  vodSrcs: null, vodAudio: null,     // addresses for a video and its sound, best first
+  rend: null, asks: 0, played: null, // the name the copy turned out to be under; how often it's been asked for again; the address of one that has played
+  vodSrcs: null, vodAudio: null, vodAt: 0,    // addresses for a video and its sound, best first; where to put it once it has loaded
   ad: false, adEnd: 0, cover: false, // an ad break, when it ends, and whether the CDN feed is covering it
   dodged: new Set(), dodging: false, // kinds of session already tried on this ad break
   cap: 0, capWait: 180e3, lastStall: 0, stalls: [],   // renditions below the pick that buffering has forced, for this stream only
@@ -855,7 +876,7 @@ const P = {
       if (gen !== this.gen) return;
       if (!u) return UI.msg(null, `No channel called “${login}”`, 'Check the spelling and try again.');
       this.user = u;
-      UI.info(u); Recent.add(u); Chat.channel(u.id); Vods.channel(u.login); About.channel(u.login);
+      UI.info(u); Recent.add(u); Chat.channel(u.id);
       if (!u.stream) { UI.offline(u); return this.awaitLive(); }
       this.start = Date.parse(u.stream.createdAt) / 1000;
       this.base = await cdnBase(u);
@@ -900,7 +921,7 @@ const P = {
       vC.controls = true;
       vL.classList.add('off'); vC.classList.remove('off');
       const pos = store.get('pos.' + v.id, 0);
-      if (pos > 15 && pos < v.lengthSeconds - 30) vC.addEventListener('loadedmetadata', () => { if (gen === this.gen) vC.currentTime = pos; }, { once: true });
+      if (pos > 15 && pos < v.lengthSeconds - 30) this.vodAt = pos;
       UI.spin(true);
       this.nextVodSource();
     } catch (e) {
@@ -926,7 +947,7 @@ const P = {
       if (!tok || tok.authorization?.isForbidden) { this.subOnly = true; return this.fallback('Sub-only stream'); }
     }
     let Hls;
-    try { Hls = window.Hls || await hlsReady; } catch { if (!stale()) this.fallback('The player didn’t load'); return; }   // it can still arrive, for the next try
+    try { Hls = window.Hls || await hlsReady; } catch { hlsAgain(); if (!stale()) this.fallback('The player didn’t load'); return; }
     if (stale()) return;
     if (!Hls.isSupported()) return this.fallback('This browser can’t run the low-latency player');
     const hls = this.hls = new Hls({
@@ -984,7 +1005,7 @@ const P = {
     if (this.q === 'auto') { hls.currentLevel = -1; return; }
     const i = this.levelIndex();
     if (gently) hls.loadLevel = i;
-    else if (hls.currentLevel !== i) hls.currentLevel = i;
+    else if (hls.currentLevel !== i || hls.loadLevel !== i) hls.currentLevel = i;   // currentLevel is what's playing: there may be another on its way
   },
 
   setQuality(id) {
@@ -1005,9 +1026,12 @@ const P = {
     const Hls = window.Hls;
     this.noteErr(d);
     if (/too many times/i.test(String(d.response?.text || ''))) return this.fallback('The relay hit Google’s daily limit');
-    if (!d.fatal) return;
+    if (!d.fatal) {   // this one hls.js has dealt with itself, the same way as below, which leaves the video paused without a pause event
+      if (d.details === Hls.ErrorDetails.MEDIA_SOURCE_REQUIRES_RESET && this.feed === 'live') this.play(vL);
+      return;
+    }
     if (d.type === Hls.ErrorTypes.MEDIA_ERROR && this.fixes++ < 2) {   // the recovery reloads the video, which leaves it paused
-      this.began = Date.now(); this.hls.recoverMediaError();
+      this.began = Date.now(); recoverHls(this.hls, vL);
       if (this.feed === 'live') this.play(vL);
       return;
     }
@@ -1047,7 +1071,8 @@ const P = {
     setTimeout(async () => {
       if (gen !== this.gen || this.feed !== 'cdn' || this.pref !== 'live') return;
       if (BG.on) return this.retryLive();
-      const tok = await getToken(this.login).catch(() => null);
+      if (!window.Hls?.isSupported()) { hlsAgain(); return this.retryLive(); }   // nothing to go back to yet: the picture stays put
+      const tok = await tokenFor(this.login);
       const master = tok && !tok.authorization?.isForbidden ? await relayText(usherUrl(this.login, tok)) : null;
       if (gen !== this.gen || this.feed !== 'cdn') return;
       if (!master?.includes('#EXT-X-STREAM-INF')) return this.retryLive();
@@ -1065,8 +1090,10 @@ const P = {
       this.ad = true; this.skipped++;
       this.dodge();
       UI.banner();
-    } else if (this.ad) {
-      this.ad = false; this.adEnd = 0; this.dodged.clear();
+    } else {
+      this.dodged.clear();   // the next break starts its search afresh, also after one that ended with a new session arriving clean
+      if (!this.ad) return;
+      this.ad = false; this.adEnd = 0;
       if (this.cover) { this.cover = false; this.stopCdn(); this.show('live'); }
       if (BG.on) this.hls?.stopLoad();   // away, on the CDN's sound: it all comes back with the picture
       else if (this.feed === 'live') {   // to the edge now, and again once the playlist that said so is in
@@ -1142,7 +1169,7 @@ const P = {
     if (this.feed !== 'cdn' || BG.on) return;   // while away the sound does the asking, and coming back loads the picture again
     const again = () => askAgain(vC, () => { if (!BG.on) this.playCdn({ reload: true }); });
     // A copy that has played hasn't gone anywhere: a network or player hiccup, which it can wait out.
-    if (this.cdnPlayed === vC.dataset.url) {
+    if (this.played === vC.dataset.url) {
       if (this.asks++ < 10) { UI.spin(true); return again(); }
       return UI.msg(null, 'The CDN feed stopped', 'Twitch’s CDN isn’t answering.', () => { $('msgbox').hidden = true; this.asks = 0; this.playCdn({ reload: true }); });
     }
@@ -1155,10 +1182,28 @@ const P = {
   nextVodSource() {
     const u = this.vodSrcs?.shift();
     if (!u) return false;
+    if (vC.currentTime > 1) this.vodAt = vC.currentTime;   // the last one got this far
     revoke([vC.dataset.url]);
     vC.dataset.url = u; vC.src = u;
+    this.asks = 0;
     this.play(vC);
     return true;
+  },
+
+  // The video's playlist wouldn't load, or playing it stopped.
+  vodFailed() {
+    // One that has played gets a couple of chances to pick up where it was, in case that's a hiccup. It may be a
+    // file the CDN doesn't have, so not many: the next one on the list starts from there too.
+    if (this.played === vC.dataset.url && this.asks++ < 2) {
+      const url = vC.dataset.url;
+      if (vC.currentTime > 1) this.vodAt = vC.currentTime;
+      UI.spin(true);
+      return askAgain(vC, () => { vC.src = url; this.play(vC); });
+    }
+    if (this.nextVodSource()) return;
+    const id = this.vod.id;
+    if (cdnLive) UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.', () => this.openVod(id));
+    else UI.needsSafari(`https://www.twitch.tv/videos/${id}`, true);
   },
 
   stopCdn() {
@@ -1172,26 +1217,29 @@ const P = {
   // load it only ever moves on, and by enough to be worth it: a copy with gaps in it stays behind the clock for good, and
   // going back to its end every time that's noticed plays the same second over and over.
   cdnSeek() {
-    const s = vC.seekable;
-    if (!s.length) return;
-    const end = s.end(s.length - 1), want = Date.now() / 1000 - this.start - TARGET.cdn;
-    if (Number.isFinite(end)) {
-      const to = Math.max(s.start(0), Number.isFinite(want) ? Math.min(want, end - 3) : end - 3);
-      if (this.seekPending || to > vC.currentTime + 3) vC.currentTime = to;
-    }
+    if (!vC.seekable.length) return;
+    const to = this.cdnSpot(vC);
+    if (to !== null && (this.seekPending || to > vC.currentTime + 3)) vC.currentTime = to;
     this.seekPending = false;
+  },
+  cdnSpot(m) {   // for the picture's copy or the sound's, which run on the same clock
+    const s = m.seekable, end = s.length ? s.end(s.length - 1) : NaN, want = Date.now() / 1000 - this.start - TARGET.cdn;
+    return Number.isFinite(end) ? Math.max(s.start(0), Number.isFinite(want) ? Math.min(want, end - 3) : end - 3) : null;
   },
 
   toLiveEdge() {
     const p = this.hls?.liveSyncPosition;
-    if (Number.isFinite(p) && p > vL.currentTime + 1) vL.currentTime = p;
+    if (Number.isFinite(p) && p > vL.currentTime + 1) { this.quietUntil = Date.now() + 6000; vL.currentTime = p; }   // the jump's own buffering isn't a bad connection
   },
 
   show(which) {
     this.feed = which;
     vL.classList.toggle('off', which !== 'live');
     vC.classList.toggle('off', which === 'live');
-    (which === 'live' ? vC : vL).pause();
+    const out = which === 'live' ? vC : vL;
+    // iOS's own fullscreen player shows that one video, and would sit on its last frame with the sound going on behind it
+    if (out.webkitDisplayingFullscreen) try { out.webkitExitFullscreen(); } catch {}
+    out.pause();
     this.rate = 'normal';
     UI.feed();
   },
@@ -1264,7 +1312,7 @@ const P = {
     const s = this.rate;
     if ((ahead < 0.5 && lat < T + 4) || lat < T - 0.5) return 'slow';
     if (s === 'slow') return (ahead > 1.2 || lat > T + 0.8) && lat >= T - 0.1 ? 'normal' : s;
-    if (lat > T + 0.6) return 'fast';
+    if (lat > T + 0.6) return ahead > 1 ? 'fast' : 'normal';   // however far behind, speeding up needs something to speed through
     return s === 'fast' && lat < T + 0.15 ? 'normal' : s;
   },
 
@@ -1354,6 +1402,7 @@ const P = {
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
     this.feed = null; this.noAd();
     this.user = u; UI.info(u);
+    Vods.channel(u.login); About.channel(u.login);   // what they just streamed is a past broadcast now
     UI.offline(u, true);
     Awake.sync();
     this.awaitLive();
@@ -1417,9 +1466,14 @@ const BG = {
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12 });
       h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly
         P.noteErr(d, 'background ');
-        if (!d.fatal || this.hls !== h) return;
-        if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) { h.recoverMediaError(); if (this.wanted) aBG.play().catch(() => {}); }
-        else setTimeout(() => {
+        if (this.hls !== h) return;
+        if (!d.fatal) {   // as in P.onError
+          if (d.details === window.Hls.ErrorDetails.MEDIA_SOURCE_REQUIRES_RESET && this.wanted) aBG.play().catch(() => {});
+        } else if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+          if (!this.wanted) return h.recoverMediaError();   // stopped from the lock screen: it stays stopped
+          recoverHls(h, aBG);
+          aBG.play().catch(() => {});
+        } else setTimeout(() => {
           if (this.hls !== h || !this.wanted) return;
           if (d.response?.code >= 400 && d.response.code < 500) this.renew(h); else this.load(h);
         }, 2000);
@@ -1427,9 +1481,14 @@ const BG = {
       h.loadSource(P.audioUrl);
       h.attachMedia(aBG);
     } else {
-      const at = vC.currentTime;   // the audio copy runs on the same clock: pick up where the picture is
+      // the audio copy runs on the same clock: pick up where the picture is, or was about to be if it hadn't loaded yet
+      const at = vC.currentTime || P.vodAt;
       const srcs = this.srcs = P.feed === 'cdn' ? [`${P.base}/audio_only/index-dvr.m3u8`] : [...P.vodAudio];
-      aBG.addEventListener('loadedmetadata', () => { if (this.srcs === srcs) aBG.currentTime = at; }, { once: true });
+      aBG.addEventListener('loadedmetadata', () => {
+        if (this.srcs !== srcs) return;
+        const to = at || (P.feed === 'cdn' ? P.cdnSpot(aBG) : 0);
+        if (to > 0) aBG.currentTime = to;
+      }, { once: true });
       this.next();
     }
     const p = aBG.play(); if (p) p.catch(() => {});
@@ -1439,8 +1498,7 @@ const BG = {
   load(h) { if (h.levels.length) h.startLoad(-1); else h.loadSource(h.url); },   // with no playlist yet, startLoad does nothing
   // Twitch has ended this session, after hours away perhaps, and asking for it again won't change that: it takes a new one.
   async renew(h) {
-    let tok = await getToken(P.login).catch(() => null);
-    if (tok?.authorization?.isForbidden) tok = await Me.streamToken(P.login);
+    const tok = await tokenFor(P.login);
     const url = tok && audioIn(await relayText(usherUrl(P.login, tok)));
     if (this.hls !== h || !this.wanted) return;
     if (!url) return void setTimeout(() => { if (this.hls === h && this.wanted) this.renew(h); }, 5000);
@@ -1465,7 +1523,8 @@ const BG = {
     if (silent) return;
     P.moved = Date.now();
     if (this.held) P.userPaused = true;
-    if (P.feed === 'live' && !P.hls?.levels.length) P.playLive();   // leaving cut its start short, or that start failed while away
+    if (P.cover && !P.hls?.loadingEnabled) P.playLive();   // the player under the cover died while away, and only it could say the break was over
+    else if (P.feed === 'live' && !P.hls?.levels.length) P.playLive();   // leaving cut its start short, or that start failed while away
     else if (P.feed === 'live') {
       P.quietUntil = Date.now() + 6000;   // the restart's own buffering isn't a bad connection
       if (!P.hls.media) P.hls.attachMedia(vL);
@@ -1538,9 +1597,10 @@ document.addEventListener('visibilitychange', () => {
   if ($('watch').hidden) return;
   if (!document.hidden) return BG.stop();
   // only a picture that was playing as you left has sound to carry on (iOS pauses it just before saying the app has
-  // left), and one still muted because it started by itself has none
+  // left), or one held through an ad break, whose sound comes back with the stream. One still muted because it started
+  // by itself has none
   const v = P.active();
-  if (v && !v.muted && (!v.paused || performance.now() - P.pausedAt < 2000)) BG.start();
+  if (v && !v.muted && (!v.paused || performance.now() - P.pausedAt < 2000 || P.ad)) BG.start();
   if (BG.on) Away.add('sound on');
   Pages.ch?.postMessage('anyone');
 });
@@ -1617,7 +1677,7 @@ for (const v of [vL, vC]) {
   v.addEventListener('playing', () => {
     if (P.active() === v) {
       if (!v.paused) P.userPaused = false;   // only you can have started a paused picture, with iOS's own controls
-      if (v === vC) P.asks = 0;
+      if (P.feed === 'cdn') P.asks = 0;
       UI.spin(false); UI.big(false);
     }
     UI.playIcon(); Awake.sync();
@@ -1641,17 +1701,13 @@ for (const v of [vL, vC]) {
   });
 }
 vC.addEventListener('loadedmetadata', () => {
-  if (P.feed !== 'cdn') return;
-  P.cdnPlayed = vC.dataset.url;
-  if (P.seekPending) P.cdnSeek();
+  P.played = vC.dataset.url;
+  if (P.feed === 'cdn' && P.seekPending) P.cdnSeek();
+  if (P.feed === 'vod' && P.vodAt) { vC.currentTime = P.vodAt; P.vodAt = 0; }
 });
 vC.addEventListener('error', () => {
   if (!vC.dataset.url) return;
-  if (P.feed === 'vod') {
-    if (P.nextVodSource()) return;   // that copy didn't take: try the next
-    return cdnLive ? UI.msg(null, 'The video wouldn’t play', 'Twitch’s CDN refused the playlist.') : UI.needsSafari(`https://www.twitch.tv/videos/${P.vod.id}`, true);
-  }
-  P.cdnFailed();
+  if (P.feed === 'vod') P.vodFailed(); else P.cdnFailed();
 });
 // Your place in a video, from whichever player has the sound: iOS can end the page while you listen.
 function savePlace(t) { if (P.vod && t >= 1 && Math.floor(t) % 5 === 0) store.set('pos.' + P.vod.id, Math.floor(t)); }
@@ -1693,10 +1749,11 @@ function parseIrc(line) {
   [m.cmd, ...m.params] = line.split(' ');
   return m;
 }
+const loginOf = m => m.tags.login || m.prefix.split('!')[0];   // a subscription or announcement comes from tmi.twitch.tv, with who it's about in a tag
 
 const Chat = {
   box: $('chat'), ws: null, login: null, uid: null, queue: [], stick: true, retry: 0, timer: 0, pinger: 0,
-  emotes: new Map(), global: null, badges: new Map(), gbadges: null, zero: new Set(),
+  emotes: new Map(), global: new Map(), globalDone: false, badges: new Map(), gbadges: null, zero: new Set(),
   chanEmotes: [], globalEmotes: [],     // the same emotes as lists, for the picker
   seen: new Set(), rx: 0, behind: false,  // ids already handled; when the socket last said anything; a gap to fill in
   said: [], sampled: false, sampleT: 0,   // who said what lately, for which emotes people use; the long look back
@@ -1706,6 +1763,7 @@ const Chat = {
 
   open(login) {
     this.close();
+    if (login !== Talk.draftFor) { Talk.draftFor = login; Talk.tx.value = ''; }   // what you were typing was for somewhere else
     this.login = login; this.clear();
     this.note('Connecting to chat…').classList.add('wait');
     this.connect();
@@ -1776,7 +1834,7 @@ const Chat = {
       case 'PRIVMSG': case 'USERNOTICE': this.add(m); break;
       case 'CLEARCHAT':   // one person, or everyone; on screen, and among the lines still waiting for the picture
         this.box.querySelectorAll(m.text ? `[data-l="${CSS.escape(m.text)}"]` : '[data-l]').forEach(n => n.classList.add('gone'));
-        for (const q of this.queue) if (!m.text || q.m.prefix.startsWith(m.text + '!')) q.m.tags['rm-deleted'] = '1';
+        for (const q of this.queue) if (!m.text || loginOf(q.m) === m.text) q.m.tags['rm-deleted'] = '1';
         break;
       case 'CLEARMSG':
         if (m.tags['target-msg-id']) {
@@ -1875,7 +1933,6 @@ const Chat = {
     while (n < this.queue.length && this.queue[n].ts <= cut) n++;
     if (!n) return;
     const lines = this.queue.splice(0, n).slice(-220);
-    if (!this.stick && this.box.children.length > 1200) { $('more').hidden = false; return; }   // scrolled up for ages: stop growing
     // history can come back after newer lines are up, and goes in above them, where its times say
     const late = lines.filter(q => q.m.old && q.ts < this.newest), next = late.length ? lines.filter(q => !late.includes(q)) : lines;
     if (late.length) this.insert(late);
@@ -1893,6 +1950,7 @@ const Chat = {
   },
 
   append(nodes) {
+    if (!this.stick && this.box.children.length > 1200) { $('more').hidden = false; return; }   // scrolled up for ages: stop growing
     const frag = document.createDocumentFragment();
     for (const n of nodes) frag.appendChild(n);
     this.box.appendChild(frag);
@@ -1904,9 +1962,21 @@ const Chat = {
     } else $('more').hidden = false;
   },
 
+  // Lines go up as they arrive, about a second before the emotes and badges they need: once those are in, they're drawn again.
+  redraw() {
+    for (const n of [...this.box.children]) {
+      if (!n.again) continue;
+      const d = n.again();
+      if (n.classList.contains('gone')) d.classList.add('gone');
+      n.replaceWith(d);
+    }
+    if (this.stick) { this.box.scrollTop = this.box.scrollHeight; this.top = this.box.scrollTop; }
+  },
+
   render(m) {
-    const t = m.tags, login = m.prefix.split('!')[0];
+    const t = m.tags, login = loginOf(m);
     const d = el('div', 'm');
+    d.again = () => this.render(m);
     if (t.id) d.dataset.id = t.id;
     if (t['tmi-sent-ts']) d.dataset.ts = t['tmi-sent-ts'];
     if (login) d.dataset.l = login;
@@ -1923,10 +1993,10 @@ const Chat = {
     if (t['msg-id'] === 'highlighted-message') d.classList.add('hl');
     else if (Me.mentions?.test(text) && t['user-id'] !== Me.acct?.id) d.classList.add('at');
     else if (t['first-msg'] === '1') d.classList.add('first');
-    const to = t['reply-parent-user-login'];
-    if (to) {   // the text opens with @name, which the line above it already says
-      d.append(el('span', 'rp', `↳ ${t['reply-parent-display-name'] || to}: ${t['reply-parent-msg-body'] || ''}`));
-      if (text.toLowerCase().startsWith(`@${to.toLowerCase()} `)) skip = to.length + 2;
+    const to = t['reply-parent-user-login'], toName = t['reply-parent-display-name'] || to;
+    if (to) {   // the text opens with @their display name, which the line above it already says
+      d.append(el('span', 'rp', `↳ ${toName}: ${t['reply-parent-msg-body'] || ''}`));
+      if (text.toLowerCase().startsWith(`@${toName.toLowerCase()} `)) skip = Array.from(toName).length + 2;
     }
     for (const b of (t.badges || '').split(',')) {
       const src = b && (this.badges.get(b) || this.gbadges?.get(b));
@@ -1997,6 +2067,7 @@ const Chat = {
   // One line of a past broadcast's chat, in the same look as a live one.
   renderReplay(c) {
     const d = el('div', 'm'), who = c.commenter, msg = c.message || {};
+    d.again = () => this.renderReplay(c);
     if (who?.login) d.dataset.l = who.login;
     if (who?.id) d.dataset.u = who.id;
     for (const b of msg.userBadges || []) {
@@ -2028,18 +2099,19 @@ const Chat = {
   badgeMap: list => new Map((list || []).map(b => [`${b.setID}/${b.version}`, b.imageURL])),
 
   async loadGlobal() {
-    if (this.global) return;
-    this.global = new Map();
+    if (this.globalDone) return;
+    this.globalDone = true;
     const [ffz, bttv, stv, badges] = await Promise.all([
       getJson('https://api.frankerfacez.com/v1/set/global'), getJson('https://api.betterttv.net/3/cached/emotes/global'), getJson('https://7tv.io/v3/emote-sets/global'),
       gql('query { badges { setID version imageURL(size: DOUBLE) } }').catch(() => null),
     ]);
     const list = [...this.ffzEmotes((ffz?.default_sets || []).map(id => ffz.sets?.[id])), ...this.bttvEmotes(bttv || []), ...this.stvEmotes(stv?.emotes || [])].filter(e => e.name && e.url);
     for (const e of list) this.global.set(e.name, e.url);
-    this.globalEmotes = list;
-    this.gbadges = this.badgeMap(badges?.badges);
+    this.globalEmotes = [...this.global].map(([name, url]) => ({ name, url }));
+    if (badges) this.gbadges = this.badgeMap(badges.badges);
     for (const [k, v] of this.global) if (!this.emotes.has(k)) this.emotes.set(k, v);
-    if (!this.global.size) this.global = null;   // none of them answered: the next channel opened asks again
+    this.globalDone = !!(ffz && bttv && stv && badges);   // the next channel opened asks again if one of them didn't answer
+    this.redraw();
     Picker.refresh();
   },
 
@@ -2051,8 +2123,9 @@ const Chat = {
     ]);
     if (this.uid !== uid) return;
     const list = [...this.ffzEmotes(Object.values(ffz?.sets || {})), ...this.bttvEmotes([...(bttv?.channelEmotes || []), ...(bttv?.sharedEmotes || [])]), ...this.stvEmotes(stv?.emote_set?.emotes || [])].filter(e => e.name && e.url);
-    this.emotes = new Map([...(this.global || []), ...list.map(e => [e.name, e.url])]); this.chanEmotes = list;
+    this.emotes = new Map([...this.global, ...list.map(e => [e.name, e.url])]); this.chanEmotes = list;
     this.badges = this.badgeMap(badges?.user?.broadcastBadges);
+    this.redraw();
     Picker.refresh();
   },
 
@@ -2061,7 +2134,7 @@ const Chat = {
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
     this.login = null; this.uid = null; this.queue = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
     this.seen = new Set(); this.names = new Map(); this.said = []; this.sampled = false;
-    this.badges = new Map(); this.emotes = new Map(this.global || []);
+    this.badges = new Map(); this.emotes = new Map(this.global);
     Picker.show(false);
     Talk.show();
   },
@@ -2194,7 +2267,9 @@ const Me = {
     this.save(null);
     this.at = {}; this.notes = {};
     Talk.ircDrop(); Talk.useIrc = false;   // that socket is signed in as whoever opened it
+    Picker.show(false);                    // its button goes with the account
     Talk.show();
+    Home.at = 0;
     if (!$('home').hidden) Home.load(true);
   },
   signOut() {
@@ -2388,15 +2463,17 @@ const SignIn = {
     if (f?.device) this.timer = setTimeout(() => this.poll(f), f.every);
   },
   async poll(f) {
-    if (f !== this.flow || $('sheet').hidden) return;
+    if (f !== this.flow || $('sheet').hidden || f.polling) return;   // coming back from approving it asks at the same moment as the timer, and a code only works once
     if (Date.now() > f.until) return this.start();
+    clearTimeout(this.timer);
+    f.polling = true;
     let spent = false;
     try {
       const r = await Me.post('https://id.twitch.tv/oauth2/token', { client_id: TV_CID, device_code: f.device, grant_type: 'urn:ietf:params:oauth:grant-type:device_code', scopes: SCOPES });
       const j = await r.json().catch(() => ({}));
       if (f !== this.flow) return;
       if (r.ok && j.access_token) {
-        spent = true; this.flow = null;   // a code only works once, so a second look at it mustn't start this over
+        spent = true; this.flow = null;
         await Me.accept(j);
         Sheet.close();
         UI.toast(`Signed in as ${Me.acct.login}`);
@@ -2409,7 +2486,7 @@ const SignIn = {
       if (/invalid device code|expired/i.test(j.message || '')) return this.start();
     } catch (e) {
       if (spent) { this.flow = { error: e.message }; if (!$('sheet').hidden) Sheet.render(); return; }
-    }
+    } finally { f.polling = false; }
     this.wait();
   },
   cancel() { clearTimeout(this.timer); this.flow = null; },
@@ -2422,7 +2499,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && Si
 // messages you read (your own included) keep coming through the anonymous one.
 const atName = (login, name) => '@' + (/^[\x20-\x7e]+$/.test(name) ? name : login);   // Twitch only links a mention by a name in plain letters
 const Talk = {
-  busy: false, tx: $('sayTx'), go: $('sayGo'), reply: null,
+  busy: false, tx: $('sayTx'), go: $('sayGo'), reply: null, draftFor: null,
   irc: null, ircOk: false, ircRx: 0, ircQ: [], ircWait: null, useIrc: false,
 
   show() {
@@ -2477,7 +2554,9 @@ const Talk = {
     this.busy = true; this.show();
     const res = (!this.useIrc && !text.startsWith('/') && await this.viaApi(text, room, reply)) || await this.viaIrc(text, reply, login);
     this.busy = false;
-    if (res.ok) {
+    if (Chat.login !== login) {   // you've moved on since: nothing here to touch
+      if (!res.ok) UI.toast(`Not sent to ${login}: ${res.why}`);
+    } else if (res.ok) {
       if (this.tx.value.trim() === text) this.tx.value = '';
       this.setReply(null);
       $('ac').hidden = true;
@@ -2658,7 +2737,7 @@ $('watch').addEventListener('click', e => { if (!e.target.closest('#say,#ac,#ep,
 // ── videos tab ──────────────────────────────────────
 const Vods = {
   login: null, loaded: null,
-  channel(login) { this.login = login; this.loaded = null; if (!$('paneVods').hidden) this.load(); },
+  channel(login) { this.login = login; this.loaded = null; $('vods').textContent = ''; if (!$('paneVods').hidden) this.load(); },
   async load() {
     const login = this.login, box = $('vods');
     if (!login || this.loaded === login) return;
@@ -2698,12 +2777,14 @@ $('vods').addEventListener('click', e => {
   const a = e.target.closest('a.vod');
   if (!a) return;
   e.preventDefault();
-  go(a.getAttribute('href'), true);
+  const url = a.getAttribute('href');
+  if (P.feed && url === `?c=${P.login}`) return Tabs.show('chat');   // the stream that's already playing
+  go(url, true);
 });
 
 const About = {
   login: null, loaded: null,
-  channel(login) { this.login = login; this.loaded = null; if (!$('paneAbout').hidden) this.load(); },
+  channel(login) { this.login = login; this.loaded = null; $('about').textContent = ''; if (!$('paneAbout').hidden) this.load(); },
   fetch(login) {
     return gql('query($l: String!) { user(login: $l) { description createdAt followers { totalCount } roles { isPartner } lastBroadcast { startedAt title } channel { socialMedias { name title url } schedule { nextSegment { startAt title } } } } }', { l: login }).then(d => d.user);
   },
@@ -2764,6 +2845,7 @@ const UI = {
     if (u) this.info(u);
     else { this.row({ name: login || '', page: login || 'Video' }); this.owner(null); }
     Tabs.show('chat');
+    Vods.channel(login); About.channel(login);   // a video says whose it is once it's looked up
     this.spin(true);
     hud(true);
   },
@@ -2923,7 +3005,8 @@ function togglePlay() {
 }
 $('bPlay').onclick = togglePlay;
 $('bigPlay').onclick = () => { UI.big(false); unlock(); P.userPaused = false; P.play(P.active() || vL); };
-$('bMute').onclick = () => { unlock(); Sound.set(!(P.active()?.muted ?? Sound.muted)); };   // what you hear, which a browser's autoplay rules can have muted
+// what you hear, which a browser's autoplay rules can have muted. Only coming off mute starts up the other players: with sound on, iPhone lets one video play at a time
+$('bMute').onclick = () => { const m = !(P.active()?.muted ?? Sound.muted); if (!m) unlock(); Sound.set(m); };
 $('vol').addEventListener('input', e => { Sound.setLevel(+e.target.value, true); hud(true); });
 $('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); };
 $('bBack').onclick = $('bBack2').onclick = () => back();
@@ -3005,10 +3088,10 @@ const Sheet = {
       { label: 'Ad-free CDN', desc: `About ${TARGET.cdn} s behind. Never has ads and plays sub-only streams${cdnLive ? '' : ' (Safari only)'}.`,
         on: P.pref === 'cdn', disabled: !cdnLive, pick: () => P.setPref('cdn') },
     ]);
-    const qs = P.qualities();
+    const qs = P.qualities(), at = P.q === 'auto' ? -1 : Math.max(0, P.pickAt(P.ladder()));   // where your pick lands on this stream, which may not have it
     if (live && !past) this.group(body, 'Quality', [
-      { label: 'Source', desc: qs[0] ? qs[0].label.replace(' · source', '') : null, on: P.q === 'source', pick: () => P.setQuality('source') },
-      ...qs.slice(1).map(x => ({ label: x.label, on: P.q === x.id, pick: () => P.setQuality(x.id) })),
+      { label: 'Source', desc: qs[0] ? qs[0].label.replace(' · source', '') : null, on: at === 0, pick: () => P.setQuality('source') },
+      ...qs.slice(1).map((x, i) => ({ label: x.label, on: at === i + 1, pick: () => P.setQuality(x.id) })),
       ...(P.hls ? [{ label: 'Auto', desc: 'Lets the player drop quality on a weak connection.', on: P.q === 'auto', pick: () => P.setQuality('auto') }] : []),
     ]);
     this.accountItems(body);
@@ -3093,20 +3176,22 @@ function streamRow(x) {
 
 const Home = {
   users: [], live: new Set(), at: 0, busy: false, view: store.get('homeView', 'follow'), y: { follow: 0, browse: 0 },
+  before: null,   // the view a category was opened from: it's a visit, and back goes back there
   roster() { return Me.follows || FOLLOWS; },
   find(login) { return this.users.find(u => u.login === login) || null; },
   setView(view) {
-    if (view !== this.view) { this.y[this.view] = scrollY; this.view = view; store.set('homeView', view); }
+    if (view !== this.view) { this.y[this.view] = scrollY; this.view = view; }
     document.querySelectorAll('.seg [data-view]').forEach(b => b.classList.toggle('on', b.dataset.view === view));
     $('vFollow').hidden = view !== 'follow';
     $('vBrowse').hidden = view !== 'browse';
     if (view === 'browse') Browse.load();
     scrollTo(0, this.y[view]);
   },
+  // force: your follows, now. Only asking (refresh) reloads Browse, which would lose your place in a long list.
   async load(force) {
     this.renderRecent();
     if (Me.acct) Me.sync();
-    if (this.view === 'browse') Browse.load(force);
+    if (this.view === 'browse') Browse.load();
     if (this.busy || (!force && Date.now() - this.at < 45e3)) return;
     this.busy = true;
     $('refresh').classList.add('busy');
@@ -3234,7 +3319,7 @@ const Browse = {
       if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
     } finally { if (run === this.run) this.busy = false; }
     // A window tall enough to show the whole page has nothing to scroll, so the observer below won't be calling again.
-    if (loaded && run === this.run && !$('vBrowse').hidden && $('brEnd').getBoundingClientRect().top + scrollY < innerHeight + 600) this.page();
+    if (loaded && run === this.run && $('brEnd').getClientRects().length && $('brEnd').getBoundingClientRect().top + scrollY < innerHeight + 600) this.page();
   },
 };
 new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' }).observe($('brEnd'));
@@ -3314,7 +3399,7 @@ $('q').addEventListener('keydown', e => {
   else if (e.key === 'Enter') { e.preventDefault(); Search.submit(); }
 });
 document.addEventListener('click', e => { if (!e.target.closest('.searchw')) Search.hide(); });
-document.querySelector('.seg').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (b) { if (Browse.game) { Browse.game = null; history.replaceState(null, '', location.pathname); } Home.setView(b.dataset.view); } });
+document.querySelector('.seg').addEventListener('click', e => { const b = e.target.closest('[data-view]'); if (b) { if (Browse.game) { Browse.game = null; history.replaceState(null, '', location.pathname); } Home.before = null; store.set('homeView', b.dataset.view); Home.setView(b.dataset.view); } });
 $('brBack').onclick = () => back();
 $('acct').onclick = () => Sheet.account();
 
@@ -3325,8 +3410,9 @@ document.querySelector('#home').addEventListener('click', e => {
   $('q').value = ''; Search.hide();
   go(a.getAttribute('href'), true);
 });
-$('refresh').onclick = () => { if (Me.acct) Me.loadFollows(); Home.load(true); };
-$('brand').onclick = e => { e.preventDefault(); scrollTo(0, 0); Home.load(true); };
+const refreshHome = () => { if (Home.view === 'browse') Browse.load(true); Home.load(true); };
+$('refresh').onclick = () => { if (Me.acct) Me.loadFollows(); refreshHome(); };
+$('brand').onclick = e => { e.preventDefault(); scrollTo(0, 0); refreshHome(); };
 setInterval(() => { if (!document.hidden && !$('home').hidden) Home.load(); }, 60e3);
 $('search').addEventListener('submit', e => { e.preventDefault(); Search.submit(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('home').hidden) Home.load(); });
@@ -3365,7 +3451,8 @@ function route(gesture) {
     $('watch').hidden = true; $('home').hidden = false;
     document.title = 'Wraith';
     Browse.game = g || null;
-    Home.setView(g ? 'browse' : Home.view);
+    if (g) { Home.before ??= Home.view; Home.setView('browse'); }
+    else { Home.setView(Home.before ?? Home.view); Home.before = null; }
     Home.load();
     Update.apply();
   }

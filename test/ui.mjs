@@ -31,7 +31,7 @@ if (which === 'all' || which === 'home') {
   const sg = await page.$$eval('#sgl .sg .nm', x => x.map(n => n.textContent));
   ok('search suggests channels', sg.some(s => /powdur/i.test(s)), sg.slice(0, 5).join(', '));
   await page.screenshot({ path: 'ui-search.png' });
-  await page.fill('#q', 'overwat'); await sleep(900);
+  await page.fill('#q', 'overwat'); await page.waitForSelector('#sgl .sg[href^="?g="]', { state: 'attached', timeout: 6000 }).catch(() => {});
   const sg2 = await page.$$eval('#sgl .sg', x => x.map(n => n.getAttribute('href')));
   ok('search suggests categories', sg2.some(s => s.startsWith('?g=')), sg2.join(' ').slice(0, 120));
   await page.fill('#q', ''); await sleep(100);
