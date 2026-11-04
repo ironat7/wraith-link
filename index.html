@@ -46,20 +46,25 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 
 /* ── home ─────────────────────────────────────────── */
 #home { max-width: 1200px; margin: 0 auto; padding: calc(var(--sat) + 8px) max(16px, var(--sar)) calc(var(--sab) + 32px) max(16px, var(--sal)); }
-.top { display: flex; align-items: center; height: 50px; }
-.brand { display: flex; align-items: center; gap: 9px; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+/* one line where there's the width, the search under it where there isn't */
+.top { display: grid; grid-template: "brand seg refresh acct" "search search search search" / auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px 2px; margin-bottom: 22px; }
+@media (min-width: 600px) { .top { grid-template: "brand seg search refresh acct" / auto auto minmax(0, 1fr) auto auto; gap: 2px; margin-bottom: 14px; } .searchw { margin: 0 6px 0 10px; } }
+#refresh { grid-area: refresh; }
+#acct { grid-area: acct; }
+.brand { grid-area: brand; display: flex; align-items: center; gap: 9px; margin-right: 10px; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+@media (max-width: 379px) { .brand span + span { display: none; } }
 .brand svg { width: 25px; height: 25px; }
 .sp { flex: 1; }
 .ib { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: var(--fg-2); }
 .ib:active { background: var(--bg-2); }
 .ib.busy svg { animation: rot .8s linear infinite; }
-.search { display: flex; align-items: center; gap: 10px; height: 48px; margin: 6px 0 28px; padding: 0 5px 0 14px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; }
+.search { display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 5px 0 14px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; }
 .search:focus-within { border-color: var(--line-2); }
 .search svg { width: 18px; height: 18px; color: var(--fg-3); }
 .search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: 0; font-size: 16px; -webkit-appearance: none; appearance: none; }
 .search input::placeholder { color: var(--fg-3); }
 .search input::-webkit-search-cancel-button { display: none; }
-.searchw { position: relative; z-index: 6; }
+.searchw { grid-area: search; position: relative; z-index: 6; min-width: 0; }
 .sgl { position: absolute; left: 0; right: 0; top: 48px; max-height: 62dvh; overflow-y: auto; background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 16px 44px rgba(0,0,0,.65); }
 .sg { display: flex; align-items: center; gap: 11px; min-height: 52px; padding: 7px 13px; }
 .sg + .sg { border-top: 1px solid var(--line); }
@@ -68,26 +73,27 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .sg img.art { width: 27px; height: 36px; margin: 0 4.5px; border-radius: 4px; }
 .sg .gm { margin-top: 1px; }
 .dot { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--live); vertical-align: 1px; }
-.seg { display: flex; gap: 6px; margin: -16px 0 22px; }
-.seg button { height: 34px; padding: 0 15px; border-radius: 999px; color: var(--fg-2); font-size: 14px; font-weight: 600; }
+.seg { grid-area: seg; display: flex; gap: 2px; min-width: 0; }
+.seg button { height: 34px; padding: 0 13px; border-radius: 999px; color: var(--fg-2); font-size: 14px; font-weight: 600; }
 .seg button.on { background: var(--bg-2); color: var(--fg); }
 .brh { display: flex; align-items: center; gap: 8px; margin: -8px 0 16px -8px; }
 .brh .nm { font-size: 18px; font-weight: 700; }
 .lng { height: 26px; margin-top: -6px; padding: 0 10px; border-radius: 999px; background: var(--bg-2); color: var(--fg-2); font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
-.cats { display: flex; gap: 10px; margin: 0 calc(-1 * max(16px, var(--sar))) 0 calc(-1 * max(16px, var(--sal))); padding: 0 max(16px, var(--sar)) 4px max(16px, var(--sal)); overflow-x: auto; scrollbar-width: none; }
+.cats { display: flex; gap: 10px; margin: 0 -16px; padding: 0 16px 4px; overflow-x: auto; scrollbar-width: none; }
 .cats::-webkit-scrollbar { display: none; }
 .cat { flex: none; width: 96px; min-width: 0; }
 .cat:active { opacity: .7; }
 .cat img { width: 96px; height: 128px; border-radius: 8px; background: var(--bg-2); object-fit: cover; }
 .cat .nm { margin-top: 6px; font-size: 12.5px; }
 .cat .gm { margin-top: 1px; font-size: 11.5px; }
+@media (max-height: 539px) { .cat { width: 72px; } .cat img { width: 72px; height: 96px; } .cat .nm { margin-top: 4px; font-size: 11.5px; } .cat .gm { font-size: 11px; } }
 #acct.me { padding: 0; }
 #acct.me svg { display: none; }
 #acct.me img { width: 28px; height: 28px; border-radius: 50%; }
-.sec + .sec { margin-top: 32px; }
+.sec + .sec { margin-top: 28px; }
 .h { display: flex; align-items: baseline; gap: 8px; margin-bottom: 12px; font-size: 12.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-3); }
 .h b { color: var(--fg-2); font-weight: 600; }
-.rows { display: grid; gap: 16px; }
+.rows { display: grid; gap: 14px; }
 .row { display: grid; grid-template-columns: minmax(0, 44%) minmax(0, 1fr); gap: 12px; align-items: start; }
 .row:active .thumb img { opacity: .7; }
 .thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: var(--bg-2); }
@@ -101,10 +107,12 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tt { margin-top: 3px; color: var(--fg-2); font-size: 13.5px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .gm { margin-top: 4px; color: var(--fg-3); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-@media (min-width: 760px) {
-  .rows { grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 26px 18px; }
-  .row { grid-template-columns: 1fr; gap: 10px; }
+/* with the room, pictures side by side. Too short for that (a closed Duo or a phone on its side), a picture beside its words, two across */
+@media (min-width: 600px) and (min-height: 540px) {
+  .rows { grid-template-columns: repeat(auto-fill, minmax(265px, 1fr)); gap: 20px 14px; }
+  .row { grid-template-columns: 1fr; gap: 8px; }
 }
+@media (min-width: 600px) and (max-height: 539px) { .rows { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; } }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { display: inline-flex; align-items: center; height: 38px; padding-left: 5px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); font-size: 14px; max-width: 100%; }
 .chip a { display: flex; align-items: center; gap: 8px; height: 100%; min-width: 0; }
@@ -122,7 +130,6 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .note button { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
 .sk { background: linear-gradient(90deg, var(--bg-2) 0, #202026 50%, var(--bg-2) 100%); background-size: 200% 100%; animation: sk 1.3s ease infinite; border-radius: 6px; }
 .sk-line { height: 12px; margin-top: 8px; }
-.foot { margin-top: 44px; color: var(--fg-3); font-size: 12.5px; line-height: 1.6; max-width: 520px; }
 
 /* ── watch ────────────────────────────────────────── */
 #watch { position: fixed; inset: 0; display: flex; flex-direction: column; padding-top: var(--sat); background: #000; }
@@ -226,7 +233,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 #paneChat.talk .more { bottom: 14px; }
 .say input { flex: 1; min-width: 0; height: 40px; padding: 0 15px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); outline: 0; font-size: 16px; -webkit-appearance: none; appearance: none; }
 .say input:focus { border-color: var(--line-2); }
-.say input::placeholder { color: var(--fg-3); }
+.say input::placeholder { color: var(--fg-3); font-size: 14.5px; }
 .send { width: 40px; height: 40px; display: grid; place-items: center; flex: none; border-radius: 50%; background: var(--fg); color: #000; }
 .send svg { width: 20px; height: 20px; }
 .send:disabled { opacity: .3; cursor: default; }
@@ -284,29 +291,53 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   #watch { container-type: size; --col: min(300px, 38cqw); }
   #watch:not(.kb) { flex-direction: column; }
   #watch:not(.kb) .main { flex: none; justify-content: flex-start; }
-  #watch:not(.kb, .full) .stage { max-height: none; margin-left: var(--sal); width: min(calc(100cqw - var(--sar) - var(--sal)), calc((100cqh - 150px) * 16 / 9)); }
+  #watch:not(.kb, .full) .stage { max-height: none; margin-left: var(--sal); width: min(calc(100cqw - var(--sar) - var(--sal)), calc((100cqh - 132px) * 16 / 9)); }
   #watch:not(.kb) .bar { padding-left: 6px; padding-right: 6px; }
   #watch:not(.kb) .unmute { right: 12px; }
   #watch:not(.kb) .side { flex: 1; width: auto; min-height: 0; border-left: 0; border-top: 1px solid var(--line); }
   #watch:not(.kb) #paneChat { display: grid; grid-template-columns: minmax(0, 1fr) var(--col); grid-template-rows: minmax(0, 1fr) auto auto auto; }
   #watch:not(.kb) .log { grid-column: 1; grid-row: 1 / -1; border-right: 1px solid var(--line); }
   #watch:not(.kb) .chat { padding-bottom: max(10px, calc(var(--sab) - 14px)); }
-  #watch:not(.kb) .m { padding-right: 14px; }
+  #watch:not(.kb) .m { padding-left: 14px; padding-right: 14px; }
   #watch:not(.kb) .rpb, #watch:not(.kb) .ac, #watch:not(.kb) .say { grid-column: 2; position: relative; z-index: 1; background: var(--bg); }
   #watch:not(.kb) .rpb { grid-row: 2; }
   #watch:not(.kb) .ac { grid-row: 3; }
   #watch:not(.kb) .say { grid-row: 4; border-top: 0; padding: 8px 16px 14px 10px; }
-  #watch:not(.kb) .ep { position: absolute; z-index: 2; right: 0; bottom: 62px; width: min(360px, 45cqw); height: min(60cqh, 360px); border: 1px solid var(--line); border-right: 0; border-radius: 12px 0 0 0; }
+  /* the emotes take chat's place, which leaves the picture clear */
+  #watch:not(.kb) .ep { grid-column: 1; grid-row: 1 / -1; z-index: 2; height: auto; min-height: 0; border-top: 0; border-right: 1px solid var(--line); }
+  #watch:not(.kb) .ep input { margin: 6px 10px 2px; }
+  #watch:not(.kb) .epl { padding: 0 10px 6px; }
+  #watch:not(.kb) .epl h4 { margin: 6px 2px 3px; }
   #watch:not(.kb) .info { position: absolute; z-index: 1; right: 0; bottom: 8px; width: var(--col); padding: 0 12px 0 4px; border: 0; background: none; }
   #watch:not(.kb):has(#paneChat.talk) .info, #watch.chan:not(.kb) .info { bottom: 62px; }
   /* the channel, in chat's place */
   #watch:not(.kb) #paneVods, #watch:not(.kb) #paneAbout { margin-right: var(--col); border-right: 1px solid var(--line); }
-  #watch:not(.kb) .vods { padding: 8px 14px 8px max(14px, var(--sal)); }
+  #watch:not(.kb) .vods { padding: 8px 14px; }
   #watch:not(.kb) #vods { display: grid; grid-auto-flow: column; grid-auto-columns: 290px; grid-template-rows: repeat(auto-fill, 72px); gap: 0 12px; align-content: start; overflow: auto hidden; }
   #watch:not(.kb) #vods .vod { grid-template-columns: 112px minmax(0, 1fr); gap: 10px; padding: 4px 0; }
   #watch:not(.kb) #vods .note { grid-row: 1; }
   #watch:not(.kb) .tabs { position: absolute; right: 0; bottom: 0; width: var(--col); height: 62px; padding: 8px 16px 14px 10px; border: 0; }
+  #watch.chan:not(.kb) { --col: min(320px, 46cqw); }
   #bChat, #watch.vodw #bChat2 { display: none; }
+  /* The strip beside the picture is iOS's: its island, clock and Wi-Fi run down it to about 185, centred 48 in from the edge. Below
+     them it's dead space with room for the controls, in line with those: there they can stay out, off the picture. */
+  html[data-strip] #watch:not(.kb, .full) .stage { overflow: visible; }
+  html[data-strip] #watch:not(.kb, .full) .hud { opacity: 1; background: none; }
+  html[data-strip] #watch:not(.kb, .full) .hud .bar:first-child { display: none; }
+  html[data-strip] #watch:not(.kb, .full) .hud .bar:last-child { position: absolute; top: 190px; bottom: 0; width: 72px; flex-direction: column; justify-content: space-evenly; gap: 0; padding: 0; pointer-events: auto; }
+  html[data-strip=right] #watch:not(.kb, .full) .hud .bar:last-child { left: 100%; }
+  html[data-strip=left] #watch:not(.kb, .full) .hud .bar:last-child { right: 100%; }
+  html[data-strip] #watch:not(.kb, .full) .hud .sp { display: none; }
+  html[data-strip] #watch:not(.kb, .full) .lat { margin: 0; padding: 0 4px; background: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  html[data-strip] #watch:not(.kb, .full) .banner { opacity: 1; }
+  html[data-strip] #watch:not(.kb, .full) .toast, html[data-strip] #watch:not(.kb, .full) .unmute { bottom: 12px; }
+  html[data-strip] #watch:has(#msgbox:not([hidden])) .hud { display: none; }
+}
+/* a shorter picture leaves less of the strip below iOS's things: the same controls, in pairs */
+@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (max-height: 599px) {
+  html[data-strip] #watch:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
+  html[data-strip] #watch:not(.kb, .full) .hud .cb { width: 40px; }
+  html[data-strip] #watch:not(.kb, .full) .lat { flex-basis: 100%; justify-content: center; }
 }
 /* where that strip is tall, the row has room above the box for all of it */
 @media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (min-height: 600px) {
@@ -317,11 +348,34 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   #watch:not(.kb) .info .tt { display: -webkit-box; -webkit-line-clamp: 2; margin-top: 1px; font-size: 13px; }
   #watch:not(.kb) .info .gm { margin-top: 2px; }
 }
+/* typing: the box is well below iOS's things in the strip, and the picture stays out of it */
+html[data-strip=right] #watch.kb .say { padding-right: 10px; }
+html[data-strip=left] #watch.kb .main { padding-left: var(--sal); }
 @media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
 /* fullscreen with nothing to hand to iOS's player yet: the player fills the screen (see UI.fill) */
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; max-height: none; aspect-ratio: auto; }
 #watch.full .hud { padding: var(--sat) 0 var(--sab); }
 #watch.full #bChat { display: none; }
+/* An offline channel has no picture to give the screen to: its page is its row, a line saying so, and its videos. */
+@media not ((orientation: landscape) and (min-aspect-ratio: 8/5)) {
+  #watch.idle .info { order: -1; border-bottom: 0; }
+  #watch.idle .info .gm { display: none; }
+  #watch.idle .stage { aspect-ratio: auto; width: 100%; max-height: none; margin: 0; overflow: visible; background: var(--bg); }
+  #watch.idle .stage > :not(.msgbox, .toast) { display: none; }
+  #watch.idle .msgbox { position: static; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: 0 8px; padding: 2px max(14px, var(--sar)) 6px max(14px, var(--sal)); text-align: left; background: none; font-size: 13.5px; }
+  #watch.idle .msgbox img { display: none; }
+  #watch.idle .msgbox b { font-size: 13.5px; }
+  #watch.idle .side { border-top: 1px solid var(--line); }
+  #watch.idle #vods { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 14px; align-content: start; }
+}
+@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) {
+  #watch.idle:not(.kb) .info { position: static; width: auto; padding: 4px max(12px, var(--sar)) 4px max(4px, var(--sal)); background: var(--bg); }
+  #watch.idle:not(.kb) .tabs { position: static; width: auto; height: auto; padding: 6px max(12px, var(--sar)) 6px max(12px, var(--sal)); border-bottom: 1px solid var(--line); }
+  #watch.idle:not(.kb) #paneVods, #watch.idle:not(.kb) #paneAbout { margin-right: 0; border-right: 0; }
+  #watch.idle:not(.kb) .vods { padding-left: max(14px, var(--sal)); padding-right: max(14px, var(--sar)); }
+  #watch.idle:not(.kb) #vods { grid-auto-flow: row; grid-auto-columns: auto; grid-template-rows: none; gap: 2px 14px; overflow: hidden auto; }
+  #watch.idle:not(.kb) #vods .vod { grid-template-columns: 136px minmax(0, 1fr); gap: 12px; padding: 6px 0; }
+}
 /* typing, with the on-screen keyboard up: picture, chat and the box share the space above it (see fitKeyboard) */
 #watch.kb .info, #watch.kb .tabs { display: none; }
 #watch.kb .say { padding-bottom: 8px; }
@@ -332,7 +386,16 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .sheet { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
 .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.55); animation: fade .2s; }
 .panel { position: relative; width: 100%; max-width: 520px; max-height: 86dvh; overflow-y: auto; padding: 8px 16px calc(18px + var(--sab)); background: var(--bg-1); border: 1px solid var(--line); border-bottom: 0; border-radius: 20px 20px 0 0; animation: up .25s cubic-bezier(.2,.8,.2,1); }
-@media (min-width: 600px) and (min-height: 561px) { .sheet { align-items: center; } .panel { border-radius: 20px; border-bottom: 1px solid var(--line); } }
+@keyframes side { from { transform: translateX(28px); opacity: 0; } }
+@media (orientation: portrait) and (min-width: 600px) { .sheet { align-items: center; } .panel { border-radius: 20px; border-bottom: 1px solid var(--line); } }
+/* on its side, a sheet comes in from the edge, as tall as the screen, and the picture stays in view */
+@media (orientation: landscape) and (min-width: 640px) {
+  .sheet { align-items: stretch; justify-content: flex-end; }
+  .scrim { background: rgba(0,0,0,.3); }
+  .panel { width: calc(min(380px, 50vw) + var(--sar)); max-width: none; max-height: none; padding: calc(var(--sat) + 8px) calc(var(--sar) + 16px) calc(18px + var(--sab)) 16px; border-width: 0 0 0 1px; border-radius: 0; animation-name: side; }
+  .grab { display: none; }
+  .panel h3:first-child, .panel .card:first-child { margin-top: 8px; }
+}
 .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--line-2); margin: 2px auto 8px; }
 .panel h3 { margin: 16px 4px 8px; font-size: 12.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-3); }
 .opts { background: var(--bg-2); border-radius: 13px; overflow: hidden; }
@@ -362,23 +425,21 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 <main id="home">
   <header class="top">
     <a class="brand" href="./" id="brand"><span id="logo"></span><span>wraith</span></a>
-    <span class="sp"></span>
+    <nav class="seg"><button type="button" data-view="follow">Following</button><button type="button" data-view="browse">Browse</button></nav>
+    <div class="searchw">
+      <form class="search" id="search" autocomplete="off">
+        <span data-i="search"></span>
+        <input id="q" type="search" enterkeyhint="go" placeholder="Search Twitch" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Channel, category or Twitch link">
+      </form>
+      <div class="sgl" id="sgl" hidden></div>
+    </div>
     <button class="ib" id="refresh" type="button" aria-label="Refresh" data-i="refresh"></button>
     <button class="ib" id="acct" type="button" aria-label="Account" data-i="user"></button>
   </header>
-  <div class="searchw">
-    <form class="search" id="search" autocomplete="off">
-      <span data-i="search"></span>
-      <input id="q" type="search" enterkeyhint="go" placeholder="Search Twitch" autocapitalize="none" autocorrect="off" spellcheck="false" aria-label="Channel, category or Twitch link">
-    </form>
-    <div class="sgl" id="sgl" hidden></div>
-  </div>
-  <nav class="seg"><button type="button" data-view="follow">Following</button><button type="button" data-view="browse">Browse</button></nav>
   <div id="vFollow">
     <section class="sec"><div class="h">Live <b id="liveN"></b></div><div class="rows" id="live"></div></section>
     <section class="sec" id="secRecent" hidden><div class="h">Recent</div><div class="chips" id="recent"></div></section>
     <section class="sec" id="secOff" hidden><div class="h">Offline</div><div class="offl" id="off"></div></section>
-    <p class="foot">Live streams play at low latency with Twitch’s ads cut out. Sub-only streams and past broadcasts play from Twitch’s CDN.</p>
   </div>
   <div id="vBrowse" hidden>
     <div class="brh" id="brHead" hidden>
@@ -813,6 +874,16 @@ function recoverHls(hls, media) {
 }
 
 // ── player ──────────────────────────────────────────
+// The iPhone Duo keeps a strip down one side of its screen for iOS's island, clock and Wi-Fi, unlike a phone on its side,
+// which keeps a margin down both around its notch. The CSS puts what's left of it to use, and needs telling which side it's on.
+const stripSides = el('div');
+stripSides.style.cssText = 'position: fixed; visibility: hidden; pointer-events: none; width: var(--sal); height: var(--sar);';
+document.body.append(stripSides);
+new ResizeObserver(() => {
+  const l = stripSides.offsetWidth, r = stripSides.offsetHeight, side = l > 40 && !r ? 'left' : r > 40 && !l ? 'right' : null;
+  if (side) document.documentElement.dataset.strip = side; else delete document.documentElement.dataset.strip;
+}).observe(stripSides);
+
 const stage = $('stage'), vL = $('vLL'), vC = $('vCDN');
 vL.disableRemotePlayback = true;   // iOS only hands Managed Media Source to players without AirPlay
 const nativeHls = !!vC.canPlayType('application/vnd.apple.mpegurl');
@@ -2513,10 +2584,10 @@ const Talk = {
   },
   hint() {
     const r = Chat.room, bits = [];
-    if (r['subs-only'] === '1') bits.push('subscribers only');
+    if (r['subs-only'] === '1') bits.push('subs only');
     if (r['emote-only'] === '1') bits.push('emotes only');
-    if (r['followers-only'] !== undefined && +r['followers-only'] >= 0) bits.push('followers only');
-    if (+r.slow > 0) bits.push(`slow mode ${r.slow} s`);
+    if (r['followers-only'] !== undefined && +r['followers-only'] >= 0) bits.push('followers');
+    if (+r.slow > 0) bits.push(`slow ${r.slow} s`);
     this.tx.placeholder = bits.length ? bits.join(' · ') : 'Send a message';
   },
   setReply(r) {
@@ -2898,7 +2969,8 @@ const UI = {
   },
   offline(u, ended) {
     this.spin(false);
-    UI.msg(u.profileImageURL, ended ? `${u.displayName}’s stream ended` : `${u.displayName} is offline`, 'Starts by itself if they go live. Past broadcasts are under Videos.');
+    UI.msg(u.profileImageURL, ended ? `${u.displayName}’s stream ended` : `${u.displayName} is offline`, 'Starts by itself if they go live.');
+    $('watch').classList.add('idle');
     const gen = P.gen;
     About.fetch(u.login).then(x => {
       const next = x?.channel?.schedule?.nextSegment;
@@ -2932,7 +3004,7 @@ const UI = {
     this.spin(false);
   },
   clear() {
-    $('msgbox').hidden = true; $('banner').hidden = true; $('toast').hidden = true;
+    $('msgbox').hidden = true; $('banner').hidden = true; $('toast').hidden = true; $('watch').classList.remove('idle');
     this.unmute(false); this.big(false); this.spin(false); this.fill(false);
   },
   spin(on) { $('spin').hidden = !on || P.userPaused; },

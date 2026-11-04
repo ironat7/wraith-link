@@ -995,7 +995,32 @@ if (want('layout')) {
   ok('the box to their right, on screen', b.say && b.say.x >= b.log.r - 1 && b.say.y >= b.stage.b && b.say.b <= 669 && b.say.r <= 951, JSON.stringify(b.say));
   ok('the channel row above the box', b.info && b.info.y >= b.stage.b && b.info.b <= b.say.y + 1 && b.info.x >= b.log.r - 1, JSON.stringify(b.info));
   ok('no tabs, follow button', !b.tabs && !b.follow, JSON.stringify([b.tabs, b.follow]));
+  // the strip beside the picture holds the controls, out all the time and off the picture, below iOS's island, clock and Wi-Fi (they run to 183, 2026-11-03)
+  const rail = () => page.evaluate(() => {
+    const seen = id => { const n = document.getElementById(id), b = n.getBoundingClientRect(); return !n.offsetParent || getComputedStyle(n.closest('.hud')).opacity !== '1' ? null : { x: Math.round(b.x), r: Math.round(b.right), y: Math.round(b.y), b: Math.round(b.bottom) }; };
+    return { play: seen('bPlay'), mute: seen('bMute'), lat: seen('bLat'), set: seen('bSet'), full: seen('bFull'), back: seen('bBack') };
+  });
+  const railIn = async (name, left, right, bottom) => {
+    const r = await rail(), all = [r.play, r.mute, r.lat, r.set, r.full];
+    const apart = all.every((c, i) => all.every((d, j) => j <= i || !c || !d || c.r <= d.x || d.r <= c.x || c.b <= d.y || d.b <= c.y));
+    ok(name, all.every(c => c && c.x >= left && c.r <= right && c.y >= 186 && c.b <= bottom) && apart && !r.back, JSON.stringify(r));
+    const hit = await page.evaluate(() => ['bPlay', 'bMute', 'bLat', 'bSet', 'bFull'].filter(id => { const n = document.getElementById(id), b = n.getBoundingClientRect(); return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('button') !== n; }));
+    ok('and each one there to tap', !hit.length, hit.join());
+  };
+  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
+  await railIn('the controls in the strip beside the picture, below iOS’s things, without a tap', 867, 951, 488);
+  ok('in line with iOS’s things', await page.evaluate(() => { const b = document.getElementById('bPlay').getBoundingClientRect(); return Math.abs(b.x + b.width / 2 - 903) <= 2; }), String(await page.evaluate(() => { const b = document.getElementById('bPlay').getBoundingClientRect(); return b.x + b.width / 2; })));
   await page.screenshot({ path: 'fixes-duo-inner.png', timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(300);
+  const pk = await page.evaluate(() => { const b = document.getElementById('ep').getBoundingClientRect(); return { y: Math.round(b.y), r: Math.round(b.right), h: Math.round(b.height) }; });
+  ok('the emotes take chat’s place, leaving the picture clear', pk.y >= b.stage.b - 1 && pk.r <= b.log.r + 1 && pk.h > 120, JSON.stringify(pk));
+  await page.screenshot({ path: 'fixes-duo-emotes.png', timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
+  await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
+  const sh = await page.evaluate(() => { const b = document.querySelector('.panel').getBoundingClientRect(); return { x: Math.round(b.x), r: Math.round(b.right), y: Math.round(b.y), b: Math.round(b.bottom) }; });
+  ok('a sheet comes in from the edge, as tall as the screen, leaving most of the picture in view', sh.r === 951 && sh.x >= 480 && sh.y === 0 && sh.b === 669, JSON.stringify(sh));
+  await page.screenshot({ path: 'fixes-duo-sheet.png', timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => document.getElementById('scrim').click()); await sleep(200);
   await page.click('#bChan'); await sleep(400);
   b = await box();
   ok('tapping the channel leaves the picture where it is', near(b.stage.w, 867) && b.stage.y === 0, JSON.stringify(b.stage));
@@ -1020,9 +1045,14 @@ if (want('layout')) {
   await shape(951, 669, { left: 84, bottom: 34 });
   b = await box();
   ok('turned around, clear of the strip on the left', b.stage.x === 84 && b.stage.r === 951 && near(b.stage.h, 488), JSON.stringify(b.stage));
+  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
+  await railIn('with the controls in the strip there', 0, 84, 488);
+  ok('and chat, below all of iOS’s things, free to use its side', await page.evaluate(() => { const n = document.querySelector('#chat .m'); return n && parseFloat(getComputedStyle(n).paddingLeft) === 14; }));
   await shape(678, 466, { right: 84, bottom: 21 });
   b = await box();
-  ok('Duo closed, on its side: clear of the strip, and chat has room', b.stage.r <= 594 && b.log.h >= 140 && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.log, b.say, b.info]));
+  ok('Duo closed, on its side: as wide as the strip allows, and chat has room', near(b.stage.r, 594, 1) && b.log.h >= 125 && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.log, b.say, b.info]));
+  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
+  await railIn('with the controls in the strip', 594, 678, b.stage.b);
   await page.screenshot({ path: 'fixes-duo-closed.png', timeout: 8000 }).catch(() => {});
   await shape(669, 951, { top: 59, bottom: 34 });
   b = await box();
@@ -1046,6 +1076,41 @@ if (want('layout')) {
   await page.evaluate(() => document.getElementById('watch').classList.add('nochat')); await sleep(200);
   b = await box();
   ok('and chat can still be hidden there', !b.side, JSON.stringify(b.side));
+
+  // the home screen on each shape: as much of it on screen as there's room for
+  await page.goto(base); await page.waitForSelector('#live a.row', { timeout: 15000 }).catch(() => {});
+  const home = () => page.evaluate(() => {
+    const r = s => { const b = document.querySelector(s).getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom) }; };
+    return { brand: r('.brand'), q: r('#q'), acct: r('#acct'), live: r('#live'), cols: getComputedStyle(document.getElementById('live')).gridTemplateColumns.split(' ').length, wide: document.documentElement.scrollWidth <= innerWidth };
+  });
+  await shape(951, 669, { right: 84, bottom: 34 });
+  let h = await home();
+  ok('home, Duo open: three across', h.cols === 3 && h.wide, JSON.stringify(h));
+  ok('its header on one line, and all of it out of the strip', h.q.y < h.brand.b && h.acct.r <= 867 && h.live.r <= 867, JSON.stringify(h));
+  await page.screenshot({ path: 'fixes-duo-home.png', timeout: 8000 }).catch(() => {});
+  await shape(951, 669, { left: 84, bottom: 34 });
+  h = await home();
+  ok('turned around: the same, the other way', h.cols === 3 && h.brand.x >= 84 && h.live.x >= 84, JSON.stringify(h));
+  await shape(669, 951, { top: 59, bottom: 34 });
+  h = await home();
+  ok('upright: two across, header on one line', h.cols === 2 && h.q.y < h.brand.b && h.wide, JSON.stringify(h));
+  await shape(678, 466, { right: 84, bottom: 21 });
+  h = await home();
+  ok('closed, on its side: two across, header on one line', h.cols === 2 && h.q.y < h.brand.b && h.acct.r <= 594 && h.wide, JSON.stringify(h));
+  await page.screenshot({ path: 'fixes-duo-closed-home.png', timeout: 8000 }).catch(() => {});
+  await shape(466, 678, { top: 59, bottom: 34 });
+  h = await home();
+  ok('closed, upright: one, with nothing cut off', h.cols === 1 && h.wide && h.acct.r <= 466 - 8, JSON.stringify(h));
+  await shape(390, 844, { top: 59, bottom: 34 });
+  h = await home();
+  ok('a phone: the same', h.cols === 1 && h.wide && h.acct.r <= 390 - 8 && h.q.y >= h.brand.b - 8, JSON.stringify(h));
+  // a margin down both sides is a notch, not the Duo's strip
+  await shape(844, 390, { left: 59, right: 59, bottom: 21 });
+  ok('a phone on its side has no strip', await page.evaluate(() => !('strip' in document.documentElement.dataset)));
+  await shape(1180, 820, {});
+  ok('nor does an iPad', await page.evaluate(() => !('strip' in document.documentElement.dataset)));
+  await shape(951, 669, { right: 84, bottom: 34 });
+  ok('and the Duo’s comes back', await page.evaluate(() => document.documentElement.dataset.strip === 'right'));
   await done();
 }
 
@@ -1877,6 +1942,23 @@ if (want('screen')) {
       const r = await page.evaluate(() => { const b = document.getElementById('bBack2').getBoundingClientRect(); return { h: b.height, on: document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('button')?.id }; });
       ok('an error card on a phone on its side leaves a way back', r.h > 0 && r.on === 'bBack2', JSON.stringify(r));
       await done();
+    })(),
+    (async () => {
+      // nothing on: no picture to give the screen to, so the channel's page is its videos
+      const videos = { user: { videos: { edges: Array.from({ length: 12 }, (_, i) => ({ node: { id: String(i), title: `video ${i}`, lengthSeconds: 100, createdAt: ago(60), status: 'RECORDED', previewThumbnailURL: null, resourceRestriction: null, game: null } })) } } };
+      const look = page => page.evaluate(() => {
+        const r = n => { const b = n.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom), h: Math.round(b.height) }; }, q = s => document.querySelector(s);
+        return { row: r(q('.info')), stage: r(q('#stage')), msg: q('#msgbox').textContent, tabs: r(q('.tabs')), across: new Set([...document.querySelectorAll('#vods a.vod')].map(n => Math.round(n.getBoundingClientRect().x))).size, n: document.querySelectorAll('#vods a.vod').length };
+      });
+      for (const [w, h, across, name] of [[951, 669, 3, 'Duo open'], [669, 951, 2, 'Duo upright'], [466, 678, 1, 'Duo closed']]) {
+        const { page, done } = await stage(answer, { offline: true, w, h, gql: b => { if (!b.includes('users(logins') && b.includes('videos(first')) return videos; } });
+        await page.waitForSelector('#vods a.vod', { state: 'attached', timeout: 8000 }).catch(never);
+        await sleep(200);
+        const s = await look(page);
+        ok(`an offline channel, ${name}: its row, then a line saying so, then its videos`, s.row.b <= s.stage.y + 1 && s.stage.h < 90 && s.tabs.y >= s.stage.b - 1 && /offline/i.test(s.msg) && s.across === across, JSON.stringify(s));
+        await page.screenshot({ path: `fixes-offline-${w}.png`, timeout: 8000 }).catch(never);
+        await done();
+      }
     })(),
   ]);
 }
