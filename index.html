@@ -1512,7 +1512,8 @@ const P = {
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
-  wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back
+  wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back, or iOS handing it back
+  lent: 0,       // when iOS gave the sound to another app
   claim() {
     const ms = navigator.mediaSession, m = ms?.metadata;
     if (!ms) return;
@@ -1577,6 +1578,19 @@ const BG = {
     h.loadSource(url);
     aBG.play().catch(() => {});
   },
+  // Back to what's current after a stop, on the one that's playing: live once its playlist has reloaded.
+  resume() {
+    this.held = false; this.wanted = true; this.lent = 0;
+    const h = this.hls;
+    if (h) {
+      h.once(window.Hls.Events.LEVEL_UPDATED, () => {
+        const p = h.liveSyncPosition;
+        if (this.hls === h && Number.isFinite(p) && p > aBG.currentTime + 3) aBG.currentTime = p;
+      });
+      this.load(h);
+    } else if (aBG.error) aBG.load();
+    else if (P.feed === 'cdn') { const to = P.cdnSpot(aBG); if (to > aBG.currentTime + 3) aBG.currentTime = to; }
+  },
   next() {
     const u = this.srcs?.shift();
     if (!u) return false;
@@ -1586,7 +1600,7 @@ const BG = {
   },
   stop(silent) {
     if (!this.on) return;
-    this.on = this.wanted = false;
+    this.on = this.wanted = false; this.lent = 0;
     const at = aBG.currentTime;
     if (this.hls) { this.hls.destroy(); this.hls = null; }
     aBG.pause(); aBG.removeAttribute('src'); aBG.load(); this.srcs = null;
@@ -1618,18 +1632,24 @@ aBG.addEventListener('error', () => {
   if (!BG.on || !BG.srcs || BG.next()) return;
   askAgain(aBG, () => { if (BG.wanted) { aBG.load(); aBG.play().catch(() => {}); } });
 });
-// Anything else pausing it, other than its load failing, is iOS giving the sound to another app (YouTube, a call). iOS
-// plays it again once that app stops, unless it's paused again now, and a play from here would take the sound back off that app.
+// Anything else pausing it, other than its load failing, is iOS giving the sound to another app (the mic, YouTube, a call). A
+// play from here would take it back off that app. iOS plays it again if that app says it's done, like any player's, unless it's
+// paused again now, which is what WebKit takes as you having stopped it. Much later than that, you've moved on.
+const LENT_FOR = 15 * 60e3;
 aBG.addEventListener('pause', () => {
   if (!BG.on || !BG.wanted || aBG.ended || aBG.error) return;
   Away.add('iOS paused the sound');
-  BG.wanted = false;
-  aBG.pause();
+  BG.wanted = false; BG.lent = Date.now();
   BG.hls?.stopLoad();
 });
 aBG.addEventListener('play', () => {
   if (!BG.on || BG.wanted) return;
+  if (BG.lent && Date.now() - BG.lent < LENT_FOR) {
+    Away.add('iOS gave the sound back');
+    return BG.resume();
+  }
   Away.add('stopped a restart');
+  BG.lent = 0;
   aBG.pause();
 });
 aBG.addEventListener('playing', () => {
@@ -1677,21 +1697,13 @@ document.addEventListener('visibilitychange', () => {
 });
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const ms = navigator.mediaSession;
-  const hold = () => { BG.held = true; BG.wanted = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
+  const hold = () => { BG.held = true; BG.wanted = false; BG.lent = 0; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
   ms.setActionHandler('play', () => {
     Away.add('button: play');
     if (document.hidden && !BG.on) { P.userPaused = false; BG.start(); if (BG.on) return; }
     if (BG.on) {
       if (!aBG.paused) return hold();   // iOS is showing something else as paused: its button still has to stop what you hear
-      BG.held = false; BG.wanted = true;
-      const h = BG.hls;
-      if (h) {   // live: back at the edge as soon as the playlist has reloaded
-        h.once(window.Hls.Events.LEVEL_UPDATED, () => {
-          const p = h.liveSyncPosition;
-          if (BG.hls === h && Number.isFinite(p) && p > aBG.currentTime + 3) aBG.currentTime = p;
-        });
-        BG.load(h);
-      } else if (aBG.error) aBG.load();
+      BG.resume();
       aBG.play().catch(() => {});
     } else if (P.active()?.paused) togglePlay();
   });

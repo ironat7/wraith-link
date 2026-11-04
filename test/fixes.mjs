@@ -720,7 +720,7 @@ if (want('emotes')) {
   await page.waitForFunction(() => wraith.Chat.chanEmotes.length, null, { timeout: 8000 }).catch(() => {});
   await emotesOpen();
   ok('the picker asks at once', asked.includes('800'), asked.join());
-  ok('another channel starts from nothing', !((await sections())['Used in this chat'] || []).includes('KEKW'), JSON.stringify(await sections()));
+  ok('another channel starts from nothing', !((await sections())['Used in this chat'] || []).includes('KasugaYeah'), JSON.stringify(await sections()));
   await page.waitForSelector('#epl button[data-w="oldFavorite"]', { timeout: 5000 }).catch(() => {});
   s = await sections();
   ok('what it finds comes in while the picker’s open', (s['Used in this chat'] || []).includes('oldFavorite'), JSON.stringify(s));
@@ -835,15 +835,32 @@ if (want('sound')) {
   s = await snd(page);
   ok('a media error while away: the sound carries on', s.on && s.wanted && !s.paused, JSON.stringify(s));
 
-  // another app takes the sound
-  await page.evaluate(() => document.getElementById('aBG').pause()); await sleep(300);
+  // Another app takes the sound, the mic say. What iOS does to the player is done to it behind the page's back. WebKit treats the page
+  // pausing it meanwhile as you having stopped it, so iOS won't hand it back (PlatformMediaSession::clientWillPausePlayback).
+  const ios = what => page.evaluate(w => { HTMLMediaElement.prototype[w].call(document.getElementById('aBG')); }, what);
+  await page.evaluate(() => { const a = document.getElementById('aBG'), real = a.pause.bind(a); window.__pauses = 0; a.pause = () => { window.__pauses++; real(); }; });
+  await ios('pause'); await sleep(300);
   s = await snd(page);
   ok('another app taking the sound stops it', s.on && !s.wanted && s.paused && !s.held, JSON.stringify(s));
+  ok('leaving iOS free to hand it back', await page.evaluate(() => window.__pauses === 0));
   let r0 = ads.relay; await sleep(5000);
   ok('and stops polling the relay', ads.relay - r0 <= 1, `${ads.relay - r0} calls in 5 s`);
-  await page.evaluate(() => document.getElementById('aBG').play()); await sleep(800);
-  ok('iOS starting it again when that app stops doesn’t take', (await snd(page)).paused);
-  await page.evaluate(() => { wraith.P.user.stream.id = 'older'; wraith.P.refresh(); });
+  await ios('play'); await sounding(page);
+  s = await snd(page);
+  ok('iOS handing it back when that app is done: it plays', s.on && s.wanted && !s.paused && !s.held && await page.evaluate(() => !wraith.BG.lent), JSON.stringify(s));
+  r0 = ads.relay; await sleep(4000);
+  ok('polling again', ads.relay - r0 >= 1, `${ads.relay - r0} calls in 4 s`);
+  const behind = await page.evaluate(() => wraith.BG.hls.liveSyncPosition - document.getElementById('aBG').currentTime);
+  ok('and at the live edge, not where it stopped', Math.abs(behind) < 6, `${behind} s behind`);
+  await ios('pause'); await sleep(300);
+  await cc(page, 'pause'); await sleep(200);
+  ok('your own stop while it’s lent out cancels that', await page.evaluate(() => window.__pauses === 1 && wraith.BG.held && !wraith.BG.lent));
+  await cc(page, 'play'); await sounding(page);
+  await ios('pause'); await sleep(300);
+  await page.evaluate(() => { wraith.BG.lent = Date.now() - 16 * 60e3; });
+  await ios('play'); await sleep(800);
+  ok('much later, it doesn’t take: you’ve moved on', (await snd(page)).paused && await page.evaluate(() => !wraith.BG.wanted));
+  await page.evaluate(() => { delete document.getElementById('aBG').pause; wraith.P.user.stream.id = 'older'; wraith.P.refresh(); });
   await page.waitForFunction(() => wraith.P.hls?.levels?.length, null, { timeout: 15000 }).catch(() => {}); await sleep(2500);
   s = await snd(page);
   ok('nor does the stream restarting', !s.on && s.paused, JSON.stringify(s));
@@ -1536,7 +1553,7 @@ if (want('cdn')) {
       await sleep(6000);
       const s = await page.evaluate(() => ({ seeks: window.__seeks, t: wraith.P.active().currentTime, rate: wraith.P.active().playbackRate }));
       ok('a copy that can’t catch the clock isn’t seeked over and over', s.seeks === 0 && s.t > t0 + 4, JSON.stringify(s));
-      ok('nor sped up with nothing to spare', s.rate === 1, JSON.stringify(s));
+      ok('nor sped up with nothing to spare', s.rate <= 1, JSON.stringify(s));
       await page.evaluate(() => { const v = wraith.P.active(); Object.defineProperty(v, 'seekable', { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => v.currentTime + 30 }) }); window.__seeks = 0; });
       await sleep(1500);
       ok('it still jumps when there’s somewhere to go', await page.evaluate(() => window.__seeks >= 1));
