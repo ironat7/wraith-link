@@ -1546,6 +1546,13 @@ const P = {
 // makes that choice as the app leaves, before the sound has started, finds no player it can use and
 // drops the page; nothing makes it look again, so Control Center stays on whatever app played last.
 // Setting the track details again once the sound is playing makes it look again.
+// In iOS's own fullscreen player the only thing over the picture is the pill, which is Now Playing: a Duo's inner screen has no other
+// island. iOS keeps Now Playing for sound that takes over from other apps, so while that player is up the sound calls itself ambient.
+// That also puts it under the silent switch, and it stops with the screen, so it's only for then.
+function soundAmbient(on) {
+  try { if (navigator.audioSession) navigator.audioSession.type = on ? 'ambient' : 'auto'; } catch {}
+}
+
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
@@ -1561,6 +1568,7 @@ const BG = {
     if (!this.ios || this.on || !v || Sound.muted || P.userPaused) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
     this.on = this.wanted = true; this.held = false;
+    soundAmbient(false);
     // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
     if (v.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}
     aBG.muted = false;
@@ -1806,7 +1814,10 @@ for (const v of [vL, vC]) {
   v.addEventListener('pause', () => { P.pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
   // iOS's fullscreen player pauses the video as you close it, some time around telling the page it closed,
   // so the video is kept going for a moment after, unless it was already paused
+  v.addEventListener('webkitbeginfullscreen', () => soundAmbient(true));
+  v.addEventListener('webkitpresentationmodechanged', () => { if (v.webkitPresentationMode !== 'fullscreen') soundAmbient(false); });   // into picture in picture, say
   v.addEventListener('webkitendfullscreen', () => {
+    soundAmbient(false);
     if (v.paused && performance.now() - P.pausedAt > 1500) return;
     const until = performance.now() + 2500;
     const t = setInterval(() => {

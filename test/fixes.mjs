@@ -2439,6 +2439,27 @@ if (want('duo')) {
       ok('coming back with the keyboard gone restores the layout', await page.evaluate(() => !document.getElementById('watch').classList.contains('kb')));
       await done();
     })(),
+    // the pill: Now Playing, over the picture in iOS's own player, for sound that takes over from other apps
+    (async () => {
+      const { page, done } = await on(OPEN);
+      await levels(page, 15000);
+      await page.evaluate(() => { Object.defineProperty(navigator, 'audioSession', { configurable: true, value: { type: 'auto' } }); const a = document.getElementById('aBG'), real = a.play.bind(a); a.play = () => { window.__typeAtPlay = navigator.audioSession.type; return real(); }; });
+      const type = () => page.evaluate(() => navigator.audioSession.type);
+      const fire = (name, mode) => page.evaluate(([n, m]) => { const v = document.getElementById('vLL'); if (m) Object.defineProperty(v, 'webkitPresentationMode', { configurable: true, get: () => m }); v.dispatchEvent(new Event(n)); }, [name, mode]);
+      await fire('webkitbeginfullscreen');
+      ok('in iOS’s own player the sound calls itself ambient, which has no pill', await type() === 'ambient', await type());
+      await fire('webkitpresentationmodechanged', 'fullscreen');
+      ok('and goes on doing so as that player settles', await type() === 'ambient', await type());
+      await fire('webkitendfullscreen');
+      ok('out of it, it’s back to what plays through the silent switch', await type() === 'auto', await type());
+      await fire('webkitbeginfullscreen');
+      await fire('webkitpresentationmodechanged', 'picture-in-picture');
+      ok('into picture in picture too, where it has to go on with the screen locked', await type() === 'auto', await type());
+      await fire('webkitbeginfullscreen');
+      await vis(page, true); await sounding(page);
+      ok('and leaving the app from that player: the background sound starts as the kind that lasts', await page.evaluate(() => window.__typeAtPlay) === 'auto', String(await page.evaluate(() => window.__typeAtPlay)));
+      await done();
+    })(),
     // a stream ending under iOS's own player
     (async () => {
       const { page, done } = await on(OPEN);
