@@ -3636,11 +3636,13 @@ const Browse = {
     } catch (e) {
       if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
     } finally { if (run === this.run) this.busy = false; }
-    // A window tall enough to show the whole page has nothing to scroll, so the observer below won't be calling again.
-    if (loaded && run === this.run && $('brEnd').getClientRects().length && $('brEnd').getBoundingClientRect().top + scrollY < innerHeight + 600) this.page();
+    // The observer below only calls when the end of the list comes into reach or goes out of it. With it still in reach after this page (a
+    // tall window, few rows, a scroll landing as they went in), it would never call again: watching afresh has it say how things stand.
+    if (loaded && run === this.run) { this.near.unobserve($('brEnd')); this.near.observe($('brEnd')); }
   },
 };
-new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' }).observe($('brEnd'));
+Browse.near = new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' });
+Browse.near.observe($('brEnd'));
 $('brLang').onclick = () => { store.set('lang', Browse.lang() === 'all' ? 'English' : 'all'); Browse.load(true); };
 
 // Search as you type: your follows at once, everyone else as Twitch answers.

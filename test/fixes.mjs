@@ -2355,7 +2355,7 @@ if (want('lists')) {
       await onBrowse(page);
       const list = () => page.evaluate(() => document.querySelectorAll('#brList .row').length);
       await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never);
-      await page.waitForFunction(() => { scrollTo(0, document.documentElement.scrollHeight - ((window.__up = !window.__up) ? 200 : 0)); return document.querySelectorAll('#brList .row').length >= 60; }, null, { timeout: 15000, polling: 100 }).catch(never);   // up and down, as a scroll to where it already is says nothing
+      await page.waitForFunction(() => { scrollTo(0, document.documentElement.scrollHeight); return document.querySelectorAll('#brList .row').length >= 60; }, null, { timeout: 15000, polling: 100 }).catch(never);
       const was = await list();
       await page.evaluate(() => window.dispatchEvent(new Event('online'))); await sleep(500);
       ok('the network coming back leaves a long Browse list alone', await list() >= was && was >= 60, `${was} then ${await list()}`);
