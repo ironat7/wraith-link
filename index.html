@@ -1802,20 +1802,38 @@ const Sound = {
   },
 };
 
-// The screen stays on while a picture is playing, sound or no sound.
+// The screen stays on while a picture is playing, sound or no sound. iOS does that by itself only for a picture with sound, so this
+// lock is all a muted one has, and WebKit grants it only within 5 s of a tap or to a page it has already granted it to that way
+// (WakeLock::request). A picture can start later than that, or with no tap at all, so any tap asks, and with nothing playing lets go at once.
 const Awake = {
-  lock: null, asking: false,
-  async sync() {
-    const v = P.active(), want = !!v && !v.paused && !document.hidden;
-    if (!want) { const l = this.lock; this.lock = null; l?.release().catch(() => {}); return; }
+  lock: null, asking: false, granted: false, refused: '',
+  wanted() { const v = P.active(); return !!v && !v.paused && !document.hidden; },
+  async ask() {
     if (this.lock || this.asking || !navigator.wakeLock) return;
     this.asking = true;
-    try { this.lock = await navigator.wakeLock.request('screen'); this.lock.addEventListener('release', () => { this.lock = null; }); } catch {}
+    try {
+      const l = this.lock = await navigator.wakeLock.request('screen');
+      this.granted = true;
+      if (this.refused) { this.refused = ''; Away.add('screen lock granted'); }
+      l.addEventListener('release', () => {   // by iOS, if it's still the one held
+        if (this.lock !== l) return;
+        this.lock = null;
+        setTimeout(() => this.sync(), 1000);
+      });
+    } catch (e) {
+      if (this.wanted() && this.refused !== e.message) Away.add(`screen lock refused: ${this.refused = e.message}`);
+    }
     this.asking = false;
     if (this.lock) this.sync();   // the picture may have stopped while that was on its way
   },
+  sync() {
+    if (this.wanted()) return this.ask();
+    const l = this.lock; this.lock = null; l?.release().catch(() => {});
+  },
 };
 document.addEventListener('visibilitychange', () => Awake.sync());
+// touchend too: iOS sends no click for a tap on something that doesn't take one, like chat
+for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => (Awake.granted ? Awake.sync() : Awake.ask()), { capture: true, passive: true });
 
 // A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
 window.addEventListener('online', () => {

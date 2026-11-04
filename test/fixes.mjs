@@ -1940,6 +1940,53 @@ if (want('screen')) {
       ok('a wake lock arriving after the pause lets go', await page.evaluate(() => window.__rel === 1), await page.evaluate(() => String(window.__rel)));
       await done();
     })(),
+    // the lock as WebKit grants it: within 5 s of a tap, or to a page it has already granted it to that way. It keeps its own clock of
+    // real taps, since whatever page.evaluate runs counts as one to navigator.userActivation
+    ...[true, false].map(straight => (async () => {
+      const webkit = () => {
+        let tap = -1e9, granted = false;
+        window.__held = window.__asks = 0;
+        for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => { tap = performance.now(); }, true);
+        Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: async () => {
+          window.__asks++;
+          if (performance.now() - tap > 5000 && !granted) throw new DOMException('Permission was denied', 'NotAllowedError');
+          granted = true; window.__held++;
+          const s = window.__lock = { release: async () => { if (s.gone) return; s.gone = true; window.__held--; s.heard?.(); }, addEventListener(t, f) { s.heard = f; } };
+          return s;
+        } } });
+      };
+      const { page, done } = await stage(answer, straight ? { init: webkit } : { init: webkit, path: '' });
+      const held = () => page.evaluate(() => window.__held), asks = () => page.evaluate(() => window.__asks);
+      const playing = () => page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing')));
+      if (straight) {
+        await levels(page, 15000);
+        await playing(); await sleep(200);
+        ok('a picture that started by itself, with no tap, is refused the lock', await held() === 0 && await asks() >= 1, `${await held()} ${await asks()}`);
+        ok('the settings sheet says so', await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away')).some(x => x.includes('screen lock refused: Permission was denied'))));
+        const tried = await asks();
+        await sleep(2500);
+        ok('refused, it doesn\u2019t keep asking', await asks() <= tried + 1, `${tried} ${await asks()}`);
+        await page.mouse.click(5, 600); await sleep(200);
+        ok('so the next tap anywhere gets it', await held() === 1, String(await held()));
+        ok('the settings sheet says that too', await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away')).at(-1).endsWith('screen lock granted')));
+        const had = await asks();
+        await page.mouse.click(5, 600); await sleep(200);
+        ok('and a tap with it held asks for nothing more', await asks() === had && await held() === 1, `${had} ${await asks()} ${await held()}`);
+        await page.evaluate(() => window.__lock?.release()); await sleep(1300);
+        ok('if iOS takes it back with the picture still going, it\u2019s asked for again', await held() === 1, String(await held()));
+        await page.evaluate(() => wraith.P.active().pause()); await sleep(200);
+        ok('and a pause lets it go', await held() === 0, String(await held()));
+      } else {
+        await page.mouse.click(5, 5); await sleep(200);
+        ok('the first tap on the home screen gets the go-ahead for the lock, and lets go with nothing playing', await asks() === 1 && await held() === 0, `${await asks()} ${await held()}`);
+        await sleep(5500);
+        await page.evaluate(() => { wraith.P.open('staged'); });
+        await levels(page, 15000);
+        await playing(); await sleep(200);
+        ok('so a picture slower to start than a tap lasts still gets it', await held() === 1, String(await held()));
+      }
+      await done();
+    })()),
     (async () => {
       // a phone on its side gives the channel row to the picture, and a message card covers the controls in the picture
       const { page, done } = await stage(answer, { path: '?c=nosuchchannel', w: 844, h: 390, gql: b => b.includes('users(logins') ? { users: [null] } : undefined });
