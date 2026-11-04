@@ -173,7 +173,7 @@ if (want('cover')) {
   await page.evaluate(() => { window.__old = wraith.P.hls; wraith.P.setPref('live'); }); await sleep(500);
   ok('low latency during a cover destroys the player it replaces', await page.evaluate(() => window.__old.media === null && window.__old !== wraith.P.hls));
   ads.on = NONE; await playing(page);
-  ok('one new session', ads.masters.length === n + 1, ads.masters.slice(n).join());
+  ok('one new session', ads.masters.slice(n).filter(k => k === 'site').length === 1, ads.masters.slice(n).join());   // the search for a clean one can still have a look under way: that's no player
 
   // leaving the app during a cover
   ads.on = ALL; await page.evaluate(() => wraith.P.dodged.clear()); await covered();

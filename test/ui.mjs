@@ -82,8 +82,8 @@ if (which === 'all' || which === 'watch') {
   // a chatter's card
   await page.click('#bChanX'); await sleep(300);
   ok('the x goes back to chat', await page.evaluate(() => !document.getElementById('watch').classList.contains('chan') && !document.getElementById('paneChat').hidden));
-  const hasName = await page.$('#chat .m .n');
-  if (hasName) { await hasName.click(); await sleep(900); ok('tapping a name opens the card', !(await page.$eval('#sheet', x => x.hidden))); await page.screenshot({ path: 'ui-card.png' }); await page.evaluate(() => document.getElementById('scrim').click()); }
+  const hasName = await page.evaluate(() => { const n = [...document.querySelectorAll('#chat .m .n')].pop(); n?.click(); return !!n; });   // the newest: a busy chat drops the oldest while you reach for it
+  if (hasName) { await sleep(900); ok('tapping a name opens the card', !(await page.$eval('#sheet', x => x.hidden))); await page.screenshot({ path: 'ui-card.png' }); await page.evaluate(() => document.getElementById('scrim').click()); }
   // settings sheet
   await page.evaluate(() => document.getElementById('bSet').click()); await sleep(1200);
   const stats = await page.$eval('#sheetBody .stats:last-child', x => x.textContent);
