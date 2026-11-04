@@ -2314,6 +2314,22 @@ if (want('duo')) {
       ok('closed, upright, the emotes open: they and the box both on screen', b['#say'].b <= 678 && b['#ep'].h >= 120, JSON.stringify(b));
       await done();
     })(),
+    // turning or folding the phone while it plays: changing how the video's parents display rebuilds its layer, and iOS can leave that black
+    (async () => {
+      const { c, page, done } = await on(OPEN);
+      await levels(page, 15000);
+      const cdp = await c.newCDPSession(page);
+      const shown = () => page.evaluate(() => { const out = []; for (let n = document.getElementById('vLL'); n && n !== document.documentElement; n = n.parentElement) out.push(`${n.id || n.className.split(' ')[0] || n.tagName}:${getComputedStyle(n).display}`); return out.join(); });
+      const start = await shown(), seen = [];
+      for (const [w, h, insets] of [CLOSEDUP, CLOSED, CLOSEDFLIP, UP, FLIP, [390, 844, { top: 59, bottom: 34 }], [844, 390, { left: 59, right: 59, bottom: 21 }], OPEN]) {
+        await page.setViewportSize({ width: w, height: h });
+        await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 0, left: 0, ...insets } });
+        await sleep(150);
+        seen.push(await shown());
+      }
+      ok('the video’s parents display the same way on every shape', seen.every(x => x === start), [start, ...seen.filter(x => x !== start)].join(' | '));
+      await done();
+    })(),
     // closed and upright: iOS's things run down the right to 228, and the picture goes below them
     (async () => {
       const { page, done } = await on(CLOSEDUP);
@@ -2383,28 +2399,28 @@ if (want('duo')) {
     (async () => {
       const { page, done } = await on(OPEN);
       await levels(page, 15000);
-      await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); wraith.Chat.resumeAfter = 1500; }, Array.from({ length: 80 }, (_, i) => LINE('f' + i, i))); await sleep(300);
+      await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); wraith.Chat.resumeAfter = 2500; }, Array.from({ length: 80 }, (_, i) => LINE('f' + i, i))); await sleep(300);
       const st = () => page.evaluate(() => { const b = wraith.Chat.box; return { stick: wraith.Chat.stick, more: !document.getElementById('more').hidden, end: b.scrollHeight - b.scrollTop - b.clientHeight < 40 }; });
       const up = () => page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollTop > 200 ? 100 : 0; });
       await up(); await sleep(200);
       let s = await st();
       ok('scrolled up, chat stays there', !s.stick && !s.end, JSON.stringify(s));
-      await page.evaluate(l => wraith.Chat.line(l), LINE('f100', 100)); await sleep(100);
+      await page.evaluate(l => wraith.Chat.line(l), LINE('f100', 100));
+      await page.waitForFunction(() => !document.getElementById('more').hidden, null, { timeout: 1500 }).catch(never);
       ok('saying there’s more', (await st()).more);
-      await sleep(600);
-      await page.evaluate(() => { wraith.Chat.box.scrollTop += 30; }); await sleep(1100);
+      await page.evaluate(() => { wraith.Chat.box.scrollTop += 30; }); await sleep(1800);
       ok('moving it starts the wait again', !(await st()).stick, JSON.stringify(await st()));
-      await sleep(800);
+      await sleep(1300);
       s = await st();
       ok('left alone for a while, it goes back to following', s.stick && s.end && !s.more, JSON.stringify(s));
-      await page.evaluate(() => wraith.Chat.box.dispatchEvent(new Event('touchstart'))); await up(); await sleep(2000);
+      await page.evaluate(() => wraith.Chat.box.dispatchEvent(new Event('touchstart'))); await up(); await sleep(3000);
       ok('not with a finger on it', !(await st()).stick);
-      await page.evaluate(() => wraith.Chat.box.dispatchEvent(new Event('touchend'))); await sleep(1800);
+      await page.evaluate(() => wraith.Chat.box.dispatchEvent(new Event('touchend'))); await sleep(2900);
       ok('and it does once the finger’s gone', (await st()).stick);
       await up(); await sleep(100);
-      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(2000);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(3000);
       ok('not with a sheet open', !(await st()).stick);
-      await page.evaluate(() => document.getElementById('scrim').click()); await sleep(1800);
+      await page.evaluate(() => document.getElementById('scrim').click()); await sleep(3000);
       ok('and it does once that’s closed', (await st()).stick);
       await done();
     })(),

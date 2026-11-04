@@ -430,25 +430,25 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
   #watch.kb:not(.idle):has(#epq:focus) .side { flex-basis: 193px; }
 }
 /* A closed Duo upright has iOS's island, clock and Wi-Fi down the right to about 228, and nothing across the top. So chat goes beside
-   them and the picture below them, and what's below that has the width to itself. A sheet stops short of them too. */
+   them and the picture below them, and what's below that has the width to itself. A sheet stops short of them too. Only what doesn't
+   hold the video gets rearranged: changing how a playing video's parents display rebuilds its layer, and iOS can leave that black. */
 @media (orientation: portrait) {
-  html[data-strip] #watch:not(.full, .idle) { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto auto auto auto auto; background: var(--bg); }
-  html[data-strip] #watch:not(.full, .idle) :is(.main, .side, #paneChat) { display: contents; }
-  html[data-strip] #watch:not(.full, .idle) :is(.log, .ep, #paneVods, #paneAbout) { grid-area: 1 / 1; min-height: 0; }
-  html[data-strip] #watch:not(.full, .idle) .ep { z-index: 1; }
-  html[data-strip] #watch:not(.full, .idle) .stage { grid-area: 2 / 1; }
-  html[data-strip] #watch:not(.full, .idle) .info { grid-area: 3 / 1; }
-  html[data-strip] #watch:not(.full, .idle) :is(.tabs, .rpb) { grid-area: 4 / 1; }
-  html[data-strip] #watch:not(.full, .idle) .ac { grid-area: 5 / 1; }
-  html[data-strip] #watch:not(.full, .idle) .say { grid-area: 6 / 1; }
+  html[data-strip] #watch:not(.full, .idle) { background: var(--bg); }
+  html[data-strip] #watch:not(.full, .idle) :is(.side, #paneChat) { display: contents; }
+  html[data-strip] #watch:not(.full, .idle) :is(.log, .ep, .pane) { order: 1; flex: 1 1 0; min-height: 0; }
+  html[data-strip] #watch:not(.full, .idle):has(#ep:not([hidden])) .log { display: none; }
+  html[data-strip] #watch:not(.full, .idle) .main { order: 2; }
+  html[data-strip] #watch:not(.full, .idle) :is(.tabs, .rpb) { order: 3; }
+  html[data-strip] #watch:not(.full, .idle) .ac { order: 4; }
+  html[data-strip] #watch:not(.full, .idle) .say { order: 5; }
   html[data-strip] #watch:not(.full, .idle) :is(.stage > *, .info, .tabs, .rpb, .ac, .say) { --sal: 0px; --sar: 0px; }
   html[data-strip] #watch:not(.full, .idle) .chat { padding-bottom: 10px; }
   html[data-strip] #watch:not(.full, .idle) .vods { padding-bottom: 8px; }
   html[data-strip] #watch:not(.full, .idle) .tabs { padding-bottom: calc(8px + var(--sab)); border-bottom: 0; }
   html[data-strip] #watch:not(.full, .idle, .chan):not(:has(#paneChat.talk)) .info { padding-bottom: calc(2px + var(--sab)); border-bottom: 0; }
-  html[data-strip] #watch.kb:not(.full, .idle) { grid-template-rows: minmax(110px, 1fr) minmax(0, auto) auto auto auto auto; }
-  html[data-strip] #watch.kb:not(.full, .idle):has(#epq:focus) { grid-template-rows: minmax(136px, 1fr) minmax(0, auto) auto auto auto auto; }
-  html[data-strip] #watch.kb:not(.full, .idle) .stage { width: calc(100% - var(--sal) - var(--sar)); height: 100%; min-height: 0; margin-left: var(--sal); }
+  html[data-strip] #watch.kb:not(.full, .idle) .log { flex: 1 0 110px; }
+  html[data-strip] #watch.kb:not(.full, .idle):has(#epq:focus) .ep { flex: 1 0 136px; }
+  html[data-strip] #watch.kb:not(.full, .idle) .stage { width: calc(100% - var(--sal) - var(--sar)); margin-left: var(--sal); }
   html[data-strip] .panel { max-height: calc(100dvh - 236px); }
 }
 
