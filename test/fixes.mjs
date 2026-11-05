@@ -1066,7 +1066,7 @@ if (want('layout')) {
   b = await box();
   ok('turned around, the same on the left', near(b.stage.x, 84, 1) && near(b.stage.r, 678, 1) && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.say, b.info]));
   await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
-  await railIn('with the controls below the island at its top', 0, 84, b.stage.b);
+  await railIn('with the controls below the island at its top', 0, 84, b.stage.b, 90);
   await shape(669, 951, { top: 59, bottom: 34 });
   b = await box();
   ok('Duo open, upright: picture, one thin row, chat', b.stage.w === 669 && b.info.h <= 46 && near(b.info.y, b.stage.b) && near(b.side.y, b.info.b) && !b.tabs, JSON.stringify([b.stage, b.info, b.side]));
@@ -2257,6 +2257,27 @@ if (want('screen')) {
       await done();
     })()),
     (async () => {
+      // an ask iOS never answers doesn't stop the asking, and the settings sheet says how the screen is being kept on (Jerry,
+      // 2026-11-05: "It's not keeping the screen awake", with the page unable to say which of the two had let go)
+      const { page, done } = await stage(answer, { init: () => {
+        window.__asks = 0;
+        Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: () => ++window.__asks === 1 ? new Promise(() => {}) : Promise.resolve({ release: async () => {}, addEventListener() {} }) } });
+      } });
+      await levels(page, 15000);
+      await page.mouse.click(5, 600); await sleep(200);
+      const playing = () => page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing')));
+      await playing(); await sleep(200);
+      ok('a first ask with no answer yet holds nothing', await page.evaluate(() => !wraith.Awake.lock && window.__asks === 1));
+      ok('and the sheet says it’s waiting', /^Screen: lock asked for \d+ s ago, no answer/.test(await page.evaluate(() => wraith.Awake.say())), await page.evaluate(() => wraith.Awake.say()));
+      await sleep(5200); await playing(); await sleep(200);
+      ok('5 s on, it asks again and gets one', await page.evaluate(() => !!wraith.Awake.lock && window.__asks === 2), String(await page.evaluate(() => window.__asks)));
+      ok('the Away log says the first never came', await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away')).some(x => x.endsWith('screen lock: no answer in 5 s'))));
+      ok('and the sheet says what keeps the screen on', /^Screen: kept on by the lock since \d\d:\d\d/.test(await page.evaluate(() => wraith.Awake.say())), await page.evaluate(() => wraith.Awake.say()));
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(1300);
+      ok('which the settings sheet shows', await page.evaluate(() => [...document.querySelectorAll('#sheetBody .stats div')].some(d => d.textContent.startsWith('Screen: '))));
+      await done();
+    })(),
+    (async () => {
       // a phone on its side gives the channel row to the picture, and a message card covers the controls in the picture
       const { page, done } = await stage(answer, { path: '?c=nosuchchannel', w: 844, h: 390, gql: b => b.includes('users(logins') ? { users: [null] } : undefined });
       await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 10000 }).catch(never);
@@ -2610,7 +2631,7 @@ if (want('duo')) {
       const b = await box(page, '#say', '.log', '#stage');
       ok(`${name}, keyboard up: the box above it, with chat and the picture`, b['#say'].b <= left && b['.log'].h >= 100 && b['#stage'].h >= 90, JSON.stringify(b));
       if (shape[0] === 390) ok('and a phone’s picture stays the size it was', b['#stage'].h === 219, JSON.stringify(b['#stage']));
-      if (shape === CLOSEDUP) ok('in the same order as without it, and the picture beside iOS’s things, not under them', b['.log'].b <= b['#stage'].y + 1 && b['#stage'].b <= b['#say'].y + 1 && b['#stage'].r <= 382, JSON.stringify(b));
+      if (shape === CLOSEDUP) ok('in the same order as without it, and the picture beside iOS’s things, not under them', b['#stage'].b <= b['.log'].y + 1 && b['.log'].b <= b['#say'].y + 1 && b['#stage'].r <= 382, JSON.stringify(b));
       await done();
     })()),
     (async () => {
@@ -2647,35 +2668,42 @@ if (want('duo')) {
       ok('the video’s parents display the same way on every shape', seen.every(x => x === start), [start, ...seen.filter(x => x !== start)].join(' | '));
       await done();
     })(),
-    // closed and upright: iOS's things run down the right to 228, and the picture goes below them
+    // closed and upright: iOS's things run down the right to 161 (228 with Now Playing in there), the picture goes just below them,
+    // the channel's row beside them, and chat under the picture down to its box
     (async () => {
       const { page, done } = await on(CLOSEDUP);
       await levels(page, 15000);
       await page.evaluate(l => wraith.Chat.line(l), LINE('c1', 1)); await sleep(300);
-      let b = await box(page, '.log', '#stage', '.info', '#say', '#sayGo', '#sayTx');
+      await page.evaluate(() => { document.getElementById('iName').textContent = 'JellyHoshiumi'; document.getElementById('iTitle').textContent = 'A very long stream title that goes on and on '.repeat(8); document.getElementById('iSub').textContent = 'Sir, We Have an Orc Problem · 1.2K · 3h 12m'; }); await sleep(150);
+      let b = await box(page, '.info', '#iName', '#iTitle', '#iSub', '#stage', '.log', '#say', '#sayGo', '#sayTx');
       const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingRight));
-      ok('closed, upright: chat on top', b['.log'].y === 0 && b['.log'].h >= 200 && b['.log'].b <= b['#stage'].y + 1, JSON.stringify(b));
-      ok('beside iOS’s things', pad >= 84, String(pad));
-      ok('the picture below them, the width of the screen', b['#stage'].y >= 228 && b['#stage'].w === 466, JSON.stringify(b['#stage']));
-      ok('the channel row and the box under it, clear of the home bar', b['.info'].y >= b['#stage'].b - 1 && b['#say'].y >= b['.info'].b - 1 && b['#sayTx'].b <= 678 - 55, JSON.stringify(b));
+      ok('closed, upright: the picture just below iOS’s things, the width of the screen', b['#stage'].y >= 165 && b['#stage'].y <= 176 && b['#stage'].w === 466, JSON.stringify(b['#stage']));
+      ok('the channel’s row above it, beside them, with the name, the title and the game one over another', b['.info'].y === 0 && Math.abs(b['.info'].b - b['#stage'].y) <= 1 && [b['#iName'], b['#iTitle'], b['#iSub']].every(t => t.seen && t.r <= 382 && t.b <= b['#stage'].y) && b['#iName'].b <= b['#iTitle'].y + 1 && b['#iTitle'].b <= b['#iSub'].y + 1 && b['#iTitle'].h >= 50, JSON.stringify(b));
+      ok('chat under the picture, the width of the screen, down to its box', b['.log'].y >= b['#stage'].b - 1 && b['.log'].h >= 120 && pad < 84 && b['#say'].y >= b['.log'].b - 1 && b['#sayTx'].b <= 678 - 55, `${pad} ${JSON.stringify(b)}`);
       ok('the box with the width to itself', b['#sayGo'].r >= 466 - 12, JSON.stringify(b['#sayGo']));
       await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(200);
       const full = await rect(page, '#bFull');
       ok('the picture’s controls run to its edge', full.r >= 466 - 8, JSON.stringify(full));
+      await page.evaluate(() => wraith.Pill.set(false)); await sleep(200);
+      b = await box(page, '#stage', '.info');
+      ok('with Now Playing let back in, the picture keeps below it', b['#stage'].y >= 228 && Math.abs(b['.info'].b - b['#stage'].y) <= 1, JSON.stringify(b));
+      await page.evaluate(() => wraith.Pill.set(true)); await sleep(200);
       await page.evaluate(() => { document.getElementById('stage').classList.remove('ui'); document.getElementById('bChan').click(); }); await sleep(300);
-      b = await box(page, '#paneVods', '#stage', '.tabs', '#bChanX');
-      ok('the channel’s videos take chat’s place, and the picture stays below iOS’s things', b['#paneVods'].y === 0 && b['#paneVods'].w === 466 && b['#paneVods'].b <= b['#stage'].y + 1 && b['#stage'].w === 466 && b['#stage'].y >= 228, JSON.stringify(b));
-      ok('with its tabs clear of the home bar', b['.tabs'].y >= b['#stage'].b && b['#bChanX'].b <= 678 - 55, JSON.stringify(b));
+      b = await box(page, '#paneVods', '#stage', '.tabs', '#bChanX', '#bFollow');
+      const vodsPad = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById('vods')).paddingBottom));
+      ok('the channel’s videos take chat’s place under its tabs, and the picture stays put', b['.tabs'].y >= b['#stage'].b - 1 && b['#paneVods'].y >= b['.tabs'].b - 1 && b['#paneVods'].w === 466 && b['#paneVods'].b <= 678 && b['#stage'].w === 466 && b['#stage'].y >= 165 && b['#stage'].y <= 176, JSON.stringify(b));
+      ok('with the list clear of the home bar, and the follow button beside iOS’s things', vodsPad >= 55 && (!b['#bFollow'].seen || b['#bFollow'].r <= 382), `${vodsPad} ${JSON.stringify(b['#bFollow'])}`);
       await page.evaluate(() => document.getElementById('bChanX').click()); await sleep(200);
       await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
       b = await box(page, '#ep', '#stage', '#say');
-      ok('the emotes take chat’s place too', b['#ep'].x === 0 && b['#ep'].w === 466 && b['#ep'].y === 0 && b['#ep'].b <= b['#stage'].y + 1 && b['#ep'].h >= 200 && b['#stage'].w === 466 && b['#say'].b <= 678, JSON.stringify(b));
+      ok('the emotes take chat’s place too', b['#ep'].x === 0 && b['#ep'].w === 466 && b['#ep'].y >= b['#stage'].b - 1 && b['#ep'].h >= 110 && b['#say'].y >= b['#ep'].b - 1 && b['#stage'].w === 466 && b['#say'].b <= 678, JSON.stringify(b));
       await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); }, Array.from({ length: 12 }, (_, i) => LINE('e' + i, i))); await sleep(200);
-      ok('on top of it', await page.evaluate(() => [[100, 30], [100, 120], [200, 200]].every(([x, y]) => document.elementFromPoint(x, y)?.closest('#ep'))));
+      ok('on top of it', await page.evaluate(() => { const r = document.getElementById('ep').getBoundingClientRect(); return [[0.2, 0.15], [0.5, 0.5], [0.8, 0.9]].every(([x, y]) => document.elementFromPoint(r.x + r.width * x, r.y + r.height * y)?.closest('#ep')); }));
       await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
+      await page.screenshot({ path: 'fixes-duo-closed-upright.png', timeout: 8000 }).catch(() => {});
       await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
       const sheet = await rect(page, '.panel');
-      ok('a sheet stops short of iOS’s things', sheet.y >= 228 && sheet.b === 678, JSON.stringify(sheet));
+      ok('a sheet stops short of iOS’s things', sheet.y >= 165 && sheet.b === 678, JSON.stringify(sheet));
       await done();
     })(),
     // closed on its side: the camera, and so the island, stays where it is as you turn the phone
@@ -2692,9 +2720,15 @@ if (want('duo')) {
     (async () => {
       const { page, done } = await on(CLOSEDFLIP);
       await levels(page, 15000);
-      const b = await box(page, '#sayGo', '.info', '#stage', '#bPlay', '#bFull');
+      let b = await box(page, '#sayGo', '.info', '#stage', '#bPlay', '#bMute', '#bLat', '#bSet', '#bFull');
       ok('closed, strip on the left: the strip along the bottom has the width, the island being at the top', b['#sayGo'].r >= 678 - 20 && b['.info'].r === 678, JSON.stringify(b));
-      ok('and the controls below it', b['#bPlay'].y >= 186 && b['#bFull'].b <= b['#stage'].b && b['#bFull'].r <= 84, JSON.stringify(b));
+      const column = ['#bPlay', '#bMute', '#bLat', '#bSet', '#bFull'].map(q => b[q]);
+      ok('and the controls in a column below it, in line with it', column.every((c, i) => c.seen && c.r <= 84 && Math.abs(c.x + c.w / 2 - 48) <= 2 && c.y >= (i ? column[i - 1].b : 90)) && column[4].b <= b['#stage'].b, JSON.stringify(column));
+      ok('each one there to tap', await page.evaluate(() => ['bPlay', 'bMute', 'bLat', 'bSet', 'bFull'].every(id => { const n = document.getElementById(id), r = n.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('button') === n; })));
+      await page.screenshot({ path: 'fixes-duo-closed-left.png', timeout: 8000 }).catch(() => {});
+      await page.evaluate(() => wraith.Pill.set(false)); await sleep(200);
+      b = await box(page, '#stage', '#bPlay', '#bFull');
+      ok('with Now Playing let back in, they keep below it, in pairs', b['#bPlay'].y >= 186 && b['#bFull'].b <= b['#stage'].b && b['#bFull'].r <= 84, JSON.stringify(b));
       await done();
     })(),
     // the channel row: its text gets the room there is, rather than being cut off under empty space

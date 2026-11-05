@@ -344,12 +344,15 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
   html[data-strip] #watch:has(#msgbox:not([hidden])) .hud { display: none; }
 }
 /* The closed screen's island is around its camera, which stays where it is as you turn the phone. With the strip on the left it's at
-   the top of the strip, and a shorter picture leaves less room below it: the same controls, in pairs. With the strip on the right it's
-   at the foot, level with the strip along the bottom, which stops short of it, and the controls have the top to themselves. */
+   the top of the strip, to 134 with Now Playing in it and well short of 96 without (Jerry, 2026-11-05: "this orientation no longer has
+   pill either"): the controls run down the rest of the strip in a column, in line with it, as on the open screen. Where Now Playing can
+   show (the pill setting on Shown), the shorter room below it takes the same controls in pairs. With the strip on the right it's at the
+   foot, level with the strip along the bottom, which stops short of it, and the controls have the top to themselves. */
 @media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (max-height: 599px) {
-  html[data-strip=left] #watch:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
-  html[data-strip=left] #watch:not(.kb, .full) .hud .cb { width: 40px; }
-  html[data-strip=left] #watch:not(.kb, .full) .lat { flex-basis: 100%; justify-content: center; }
+  html[data-strip=left] #watch:not(.kb, .full, .pillshown) .hud .bar:last-child { top: 96px; }
+  html[data-strip=left] #watch.pillshown:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
+  html[data-strip=left] #watch.pillshown:not(.kb, .full) .hud .cb { width: 40px; }
+  html[data-strip=left] #watch.pillshown:not(.kb, .full) .lat { flex-basis: 100%; justify-content: center; }
   html[data-strip=right] #watch:not(.kb, .full) .hud .bar:last-child { top: 0; width: 84px; }
   html[data-strip=right] #watch:not(.kb, .idle) .side { margin-right: var(--sar); }
   html[data-strip=right] #watch:not(.kb, .idle) .info, html[data-strip=right] #watch:not(.kb, .idle) .tabs { right: var(--sar); }
@@ -432,27 +435,36 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
   #watch.kb:not(.idle) .side { flex: 1 0 167px; }
   #watch.kb:not(.idle):has(#epq:focus) .side { flex-basis: 193px; }
 }
-/* A closed Duo upright has iOS's island, clock and Wi-Fi down the right to about 228, and nothing across the top. So chat goes beside
-   them and the picture below them, and what's below that has the width to itself. A sheet stops short of them too. Only what doesn't
-   hold the video gets rearranged: changing how a playing video's parents display makes iOS rebuild its layer. */
+/* A closed Duo upright has iOS's island, clock and Wi-Fi down the right and nothing across the top: to 161 (Jerry's screenshot,
+   2026-11-05), or to 228 with Now Playing in there, which shows for a past video or with the pill setting on Shown. So the picture
+   starts just below them, the width of the screen; the channel's row goes beside them, above it; and chat runs from under the picture
+   down to its box (Jerry, 2026-11-05: "you can move the video up ... find an elegant solution for the chat"). A sheet stops short of
+   them too. Only what doesn't hold the video gets rearranged: changing how a playing video's parents display makes iOS rebuild its layer. */
 @media (orientation: portrait) {
-  html[data-strip] #watch:not(.full, .idle) { background: var(--bg); }
+  html[data-strip] #watch:not(.full, .idle) { --top: 170px; background: var(--bg); }
+  html[data-strip] #watch:not(.full, .idle):is(.vodw, .pillshown) { --top: 232px; }
   html[data-strip] #watch:not(.full, .idle) :is(.side, #paneChat) { display: contents; }
-  html[data-strip] #watch:not(.full, .idle) :is(.log, .ep, .pane) { order: 1; flex: 1 1 0; min-height: 0; }
+  html[data-strip] #watch:not(.full, .idle) .main { order: 1; }
+  html[data-strip] #watch:not(.full, .idle) .tabs { order: 2; }
+  html[data-strip] #watch:not(.full, .idle) :is(.log, .ep, .pane) { order: 3; flex: 1 1 0; min-height: 0; }
   html[data-strip] #watch:not(.full, .idle):has(#ep:not([hidden])) .log { display: none; }
-  html[data-strip] #watch:not(.full, .idle) .main { order: 2; }
-  html[data-strip] #watch:not(.full, .idle) :is(.tabs, .rpb) { order: 3; }
-  html[data-strip] #watch:not(.full, .idle) .ac { order: 4; }
-  html[data-strip] #watch:not(.full, .idle) .say { order: 5; }
-  html[data-strip] #watch:not(.full, .idle) :is(.stage > *, .info, .tabs, .rpb, .ac, .say) { --sal: 0px; --sar: 0px; }
-  html[data-strip] #watch:not(.full, .idle) .chat { padding-bottom: 10px; }
-  html[data-strip] #watch:not(.full, .idle) .vods { padding-bottom: 8px; }
-  html[data-strip] #watch:not(.full, .idle) .tabs { padding-bottom: calc(8px + var(--sab)); border-bottom: 0; }
-  html[data-strip] #watch:not(.full, .idle, .chan):not(:has(#paneChat.talk)) .info { padding-bottom: calc(2px + var(--sab)); border-bottom: 0; }
+  html[data-strip] #watch:not(.full, .idle) .rpb { order: 4; }
+  html[data-strip] #watch:not(.full, .idle) .ac { order: 5; }
+  html[data-strip] #watch:not(.full, .idle) .say { order: 6; }
+  html[data-strip] #watch:not(.full, .idle) :is(.stage > *, .tabs, .log, .ep, .pane, .rpb, .ac, .say) { --sal: 0px; --sar: 0px; }
+  /* the row, beside iOS's things: its text one line over another, with as much of the title as fits */
+  html[data-strip] #watch:not(.full, .idle) .info { order: -1; min-height: var(--top); gap: 6px; padding-top: 10px; padding-bottom: 10px; border-bottom: 0; }
+  html[data-strip] #watch:not(.full, .idle) .info .who { height: auto; gap: 12px; }
+  html[data-strip] #watch:not(.full, .idle) .info .av { width: 48px; height: 48px; }
+  html[data-strip] #watch:not(.full, .idle) .info .meta { display: block; }
+  html[data-strip] #watch:not(.full, .idle) .info .nm { max-width: none; font-size: 17px; }
+  html[data-strip] #watch:not(.full, .idle) .info .tt { display: -webkit-box; -webkit-line-clamp: 3; margin-top: 3px; font-size: 13.5px; }
+  html[data-strip] #watch:not(.full, .idle) .info .gm { margin-top: 4px; font-size: 13px; }
   html[data-strip] #watch.kb:not(.full, .idle) .log { flex: 1 0 110px; }
   html[data-strip] #watch.kb:not(.full, .idle):has(#epq:focus) .ep { flex: 1 0 136px; }
   html[data-strip] #watch.kb:not(.full, .idle) .stage { width: calc(100% - var(--sal) - var(--sar)); margin-left: var(--sal); }
-  html[data-strip] .panel { max-height: calc(100dvh - 236px); }
+  html[data-strip] .panel { max-height: calc(100dvh - 174px); }
+  html[data-strip]:has(#watch:not([hidden]):is(.vodw, .pillshown)) .panel { max-height: calc(100dvh - 236px); }
 }
 
 /* ── settings sheet ───────────────────────────────── */
@@ -2066,6 +2078,7 @@ const Pill = {
       Remote.off();
     } else { this.decoy?.remove(); Remote.on(); }
     stage.classList.toggle('pillfree', hide);
+    $('watch').classList.toggle('pillshown', ios && !this.on);   // it has room kept for it beside the picture (see the Duo's strip)
     if (hide !== this.hiding) Away.add(hide ? 'pill hidden' : 'pill back');
     this.hiding = hide;
   },
@@ -2126,38 +2139,50 @@ const Sound = {
 // The screen stays on while a picture is playing, sound or no sound. iOS does that by itself only for a picture with sound, so this
 // lock is all a muted one has, and WebKit grants it only within 5 s of a tap or to a page it has already granted it to that way
 // (WakeLock::request). A picture can start later than that, or with no tap at all, so any tap asks, and with nothing playing lets go at once.
+// Jerry, 2026-11-05: "It's not keeping the screen awake", with the sound on, and the page couldn't say which of the two had let go. The
+// settings sheet now says how the screen is being kept on, and an answer from iOS that never comes no longer stops the asking.
 const Awake = {
-  lock: null, asking: false, granted: false, refused: '',
+  lock: null, asking: 0, granted: false, refused: '', since: 0, lost: 0,
   wanted() { const v = P.active(); return !!v && !v.paused && !document.hidden; },
   async ask() {
-    if (this.lock || this.asking || !navigator.wakeLock) return;
-    this.asking = true;
+    if (this.lock || !navigator.wakeLock) return;
+    if (this.asking && Date.now() - this.asking < 5e3) return;   // WebKit asks iOS before it answers
+    if (this.asking) Away.add('screen lock: no answer in 5 s');
+    const at = this.asking = Date.now();
     try {
-      const l = this.lock = await navigator.wakeLock.request('screen');
-      this.granted = true;
+      const l = await navigator.wakeLock.request('screen');
+      if (this.lock) { l.release().catch(() => {}); return; }   // an earlier ask's answer got here first
+      this.lock = l; this.granted = true; this.since = Date.now();
       if (this.refused) { this.refused = ''; Away.add('screen lock granted'); }
       l.addEventListener('release', () => {   // by iOS, if it's still the one held
         if (this.lock !== l) return;
         this.lock = null;
+        if (this.wanted() && ++this.lost <= 3) Away.add('screen lock taken back');
         setTimeout(() => this.sync(), 1000);
       });
     } catch (e) {
       if (this.wanted() && this.refused !== e.message) Away.add(`screen lock refused: ${this.refused = e.message}`);
-    }
-    this.asking = false;
+    } finally { if (this.asking === at) this.asking = 0; }
     if (this.lock) this.sync();   // the picture may have stopped while that was on its way
   },
   sync() {
     if (this.wanted()) return this.ask();
     const l = this.lock; this.lock = null; l?.release().catch(() => {});
   },
+  say() {   // for the settings sheet
+    const v = P.active(), own = v && !v.paused && !v.muted ? ', and iOS keeps it on for a picture with sound' : '';
+    if (!navigator.wakeLock) return `Screen: this phone has no screen lock${own}`;
+    if (this.lock) return `Screen: kept on by the lock since ${new Date(this.since).toTimeString().slice(0, 5)}${this.lost ? ` (iOS took it back ${this.lost}×)` : ''}${own}`;
+    if (this.asking) return `Screen: lock asked for ${Math.round((Date.now() - this.asking) / 1e3)} s ago, no answer${own}`;
+    return `Screen: no lock${this.refused ? ` (refused: ${this.refused}, a tap gets it)` : this.wanted() ? '' : ' (nothing playing)'}${own}`;
+  },
 };
 document.addEventListener('visibilitychange', () => Awake.sync());
 // touchend too: iOS sends no click for a tap on something that doesn't take one, like chat
 for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
+  if (Awake.granted) Awake.sync(); else Awake.ask();   // first: the tap only counts for it a few seconds
   Pages.touchedAt = Date.now();
   Pages.see();
-  if (Awake.granted) Awake.sync(); else Awake.ask();
 }, { capture: true, passive: true });
 
 // A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
@@ -3749,6 +3774,7 @@ const Sheet = {
     if (Quota.n) lines.push(`Relay today: ${Quota.n.toLocaleString()} of 20,000`);
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
+    if (ios) lines.push(Awake.say());
     const away = store.get('away', []);
     if (away.length) lines.push('Away: ' + away.slice(-16).join(' · '));
     s.textContent = '';
@@ -4147,7 +4173,7 @@ Me.save(Me.acct);
 Me.check();
 Me.sync();
 setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota, Pill };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);
