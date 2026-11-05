@@ -94,8 +94,10 @@ function spent_(now) {
 function seat_(who, take) {
   try {
     var cache = CacheService.getScriptCache();
-    if (take) cache.put('seat', who, 21600);   // 6 hours, the longest it keeps anything
-    var holder = take ? who : cache.get('seat');
+    if (take) { cache.putAll({ seat: who, seatT: String(Date.now()) }, 21600); return true; }   // 6 hours, the longest it keeps anything
+    var got = cache.getAll(['seat', 'seatT']), holder = got.seat;
+    // the page still playing keeps it, past those 6 hours, without any page that comes along then taking it as empty
+    if (holder === who && Date.now() - (+got.seatT || 0) > 1800e3) cache.putAll({ seat: who, seatT: String(Date.now()) }, 21600);
     return !holder || holder === who;
   } catch (err) {
     return true;   // better two pages for a moment than none

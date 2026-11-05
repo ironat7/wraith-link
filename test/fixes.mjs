@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3167,6 +3167,118 @@ if (want('unseen')) {
       await sleep(1000);
       const s = await snd(page);
       ok('a CDN feed starting by itself with another page in the seat never loads', !s.feed && copies === 0 && await page.evaluate(() => !document.getElementById('vCDN').getAttribute('src')), JSON.stringify({ copies, s }));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('return')) {
+  // Leaving, coming back and the seat, from the 2026-11-05 review.
+  const seated = () => Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  const goLive = user => { user.stream = { id: 'new' + Date.now(), createdAt: ago(20), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }; };
+  const offlineCard = page => page.waitForFunction(() => !document.getElementById('msgbox').hidden && /offline/i.test(document.getElementById('msgbox').textContent), null, { timeout: 10000 }).catch(never);
+  // the relay's seat as Code.gs keeps it: a take sets it, any other named page is turned away
+  const seatRelay = seat => route => {
+    const q = new URL(route.request().url()).searchParams, who = q.get('who');
+    if (who && q.get('take')) seat.holder = who;
+    seat.calls.push({ who, pg: q.get('pg'), take: !!q.get('take'), ping: !!q.get('ping') });
+    return who && seat.holder && seat.holder !== who ? said(route, '409\nanother page is playing') : answer(route);
+  };
+  await Promise.all([
+    (async () => {
+      // a channel you're waiting on whose seat went to a page iOS has since dropped: coming back claims it, so going live later plays
+      const seat = { holder: null, calls: [] };
+      const { page, done, user } = await stage(seatRelay(seat), { offline: true, init: seated });
+      await offlineCard(page); await sleep(300);
+      seat.holder = 'gone';
+      await page.evaluate(() => { wraith.Pages.takeAt = 0; wraith.Pages.askedAt = 0; });
+      await vis(page, true); await vis(page, false); await sleep(500);
+      ok('coming back to a channel waiting to go live claims the seat', seat.holder === await page.evaluate(() => wraith.Pages.id), JSON.stringify(seat));
+      await page.evaluate(() => { wraith.Pages.takeAt = Date.now() - 61e3; wraith.Pages.touchedAt = Date.now(); });
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive());
+      await levels(page, 8000);
+      const s = await snd(page);
+      ok('so going live a while later plays there', s.feed === 'live' && !/another window/.test(s.msg), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // nobody touching the screen for a quarter of an hour: going live starts muted, with the button to unmute
+      const { page, done, user } = await stage(answer, { offline: true });
+      await offlineCard(page);
+      await page.evaluate(() => { wraith.Pages.touchedAt = Date.now() - 16 * 60e3; });
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive());
+      await levels(page, 8000); await sleep(500);
+      let s = await page.evaluate(() => ({ muted: document.getElementById('vLL').muted, button: !document.getElementById('unmute').hidden }));
+      ok('going live long after the last touch starts muted, with the unmute button', s.muted && s.button, JSON.stringify(s));
+      await page.evaluate(() => document.getElementById('unmute').click()); await sleep(300);
+      s = await page.evaluate(() => ({ muted: document.getElementById('vLL').muted, button: !document.getElementById('unmute').hidden }));
+      ok('and unmuting there is all it takes', !s.muted && !s.button, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // with a touch lately it plays with sound, as before
+      const { page, done, user } = await stage(answer, { offline: true });
+      await offlineCard(page);
+      await page.evaluate(() => { wraith.Pages.touchedAt = Date.now(); });
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive());
+      await levels(page, 8000); await sleep(500);
+      ok('going live just after a touch plays with sound', await page.evaluate(() => !document.getElementById('vLL').muted && document.getElementById('unmute').hidden));
+      await done();
+    })(),
+    (async () => {
+      // a page reloaded out of sight that nobody has looked at yet stays out of the seat: its calls name it without sitting
+      const { page, done } = await stage(answer, { init: seated, offline: true });
+      await offlineCard(page);
+      const s = await page.evaluate(() => { wraith.Pages.shown = false; const a = wraith.Pages.seat(); wraith.Pages.shown = true; return [a, wraith.Pages.seat()]; });
+      ok('a page not looked at yet names itself without sitting', /&pg=/.test(s[0]) && /&who=/.test(s[1]), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the lock screen's play button counts as you; and leaving with a start still asking Twitch carries its sound
+      const { page, done } = await stage(answer, { init: seated, offline: true });
+      await offlineCard(page);
+      await page.evaluate(() => { wraith.Pages.takeAt = 0; });
+      await cc(page, 'play');
+      ok('the lock screen’s play counts as you', await page.evaluate(() => Date.now() - wraith.Pages.takeAt < 2000));
+      await done();
+    })(),
+    (async () => {
+      let slow = true;
+      const { page, done } = await stage(answer, { path: '', gql: async b => { if (b.includes('users(logins') && slow) await sleep(1500); } });
+      await sleep(500);
+      await page.evaluate(() => wraith.P.open('staged', true));
+      await sleep(100);
+      await vis(page, true);
+      await sounding(page);
+      const s = await snd(page);
+      ok('leaving in the first second of a start brings its sound once it has started', s.on && !s.paused, JSON.stringify(s));
+      slow = false;
+      await done();
+    })(),
+    (async () => {
+      // stopped from the lock screen, the stream starting over keeps it stopped for when you're back
+      const { page, done, user } = await stage(answer);
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      await cc(page, 'pause'); await sleep(300);
+      user.stream = { ...user.stream, id: 'again' };
+      await page.evaluate(() => wraith.P.refresh());
+      await page.waitForFunction(() => wraith.P.user?.stream?.id === 'again', null, { timeout: 15000 }).catch(never);
+      await sleep(1500);
+      await vis(page, false); await sleep(2000);
+      const s = await snd(page);
+      ok('stopped from the lock screen, a restart stays stopped on return', s.vPaused !== false && s.userPaused, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // coming back while a restart is still asking Twitch: it plays once it's there
+      const { page, done } = await stage(answer, { offline: true });
+      await offlineCard(page);
+      const s = await page.evaluate(() => { const P = wraith.P; P.feed = null; P.pausedAway = P.userPaused = true; P.wake(); return { away: P.pausedAway, paused: P.userPaused }; });
+      ok('coming back while a restart is still on its way clears the hold', !s.away && !s.paused, JSON.stringify(s));
       await done();
     })(),
   ]);
