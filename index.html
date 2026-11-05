@@ -137,6 +137,9 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; overflow: hidden; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .stage video.off { visibility: hidden; }
+/* laid out small and scaled up to fill, so WebKit doesn't count it as main content (see Pill) */
+.stage.pillfree video { inset: auto; left: 0; top: 0; width: calc(100% / var(--k, 2)); height: calc(100% / var(--k, 2)); transform: scale(var(--k, 2)); transform-origin: 0 0; }
+video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-index: -1; pointer-events: none; background: transparent; }
 .hud { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; opacity: 0; transition: opacity .18s; pointer-events: none;
   background: linear-gradient(rgba(0,0,0,.5), rgba(0,0,0,0) 30%, rgba(0,0,0,0) 58%, rgba(0,0,0,.66)); }
 .stage.ui .hud { opacity: 1; }
@@ -1012,6 +1015,7 @@ aBG.disableRemotePlayback = true;
 // Inside a tap, start-and-stop every player: Safari then lets any of them start with sound later
 // (an ad break or leaving the app switches players with no tap to hang it on).
 function unlock() {
+  if (Pill.on && ios && !Pill.decoy) Pill.make();   // its stand-in made inside a tap, and ready by the time a picture plays
   for (const v of [vL, vC, aBG]) {
     const was = v.paused;
     const p = v.play(); if (p) p.catch(() => {});
@@ -1463,6 +1467,7 @@ const P = {
     out.pause();
     this.rate = 'normal';
     UI.feed();
+    Pill.sync();
   },
 
   play(v) {
@@ -1721,7 +1726,7 @@ const P = {
     this.user = u; UI.info(u);
     Vods.channel(u.login); About.channel(u.login);   // what they just streamed is a past broadcast now
     UI.offline(u, true);
-    Awake.sync();
+    Awake.sync(); Pill.sync();
     this.awaitLive();
   },
 
@@ -1741,7 +1746,7 @@ const P = {
     primed = null; shownSegs.clear();
     stage.classList.remove('vod'); $('watch').classList.remove('vodw');
     Replay.close();
-    Awake.sync();
+    Awake.sync(); Pill.sync();
     Chat.close(); UI.clear();
   },
 };
@@ -1777,9 +1782,8 @@ const BG = {
     aBG.pause(); this.hls?.stopLoad();
   },
   claim() {
-    const ms = navigator.mediaSession, m = ms?.metadata;
-    if (!ms) return;
-    try { ms.metadata = m ? new MediaMetadata({ title: m.title, artist: m.artist, album: m.album, artwork: [...m.artwork] }) : null; } catch {}
+    if (!('mediaSession' in navigator) || !Remote.up) return;
+    Remote.show(Remote.meta);
   },
   start() {
     const v = P.active();
@@ -1995,6 +1999,7 @@ const Away = {
 document.addEventListener('visibilitychange', () => {
   Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}` : 'back');
   saidHidden = document.hidden;
+  Pill.sync();   // the lock screen's details and buttons back before any sound starts, or off again in front
   if (!document.hidden) { Pages.see(); Pages.tell('here'); }
   if ($('watch').hidden) return;
   if (!document.hidden) {
@@ -2022,8 +2027,64 @@ document.addEventListener('visibilitychange', () => {
 });
 // Your taps go to whichever page iOS has in front: one that hasn't had them can't tell it's on screen till then.
 window.addEventListener('focus', () => { if ($('watch').hidden || document.hidden || BG.on) return; P.wake(); P.lookLive(); });
+// The lock screen's and Control Center's buttons, and what they show. Kept here as well as set, so they can be taken off while Wraith is
+// in front with the pill hidden, and put back as it leaves.
+const Remote = {
+  handlers: {}, meta: null, up: true,
+  set(action, fn) { this.handlers[action] = fn; if (this.up) try { navigator.mediaSession.setActionHandler(action, fn); } catch {} },
+  show(meta) { this.meta = meta; if (this.up) try { navigator.mediaSession.metadata = meta ? new MediaMetadata(meta) : null; } catch {} },
+  on() {
+    if (this.up || !('mediaSession' in navigator)) return;
+    this.up = true;
+    for (const [a, f] of Object.entries(this.handlers)) try { navigator.mediaSession.setActionHandler(a, f); } catch {}
+    this.show(this.meta);
+  },
+  off() {
+    if (!this.up || !('mediaSession' in navigator)) return;
+    this.up = false;
+    for (const a of Object.keys(this.handlers)) try { navigator.mediaSession.setActionHandler(a, null); } catch {}
+    try { navigator.mediaSession.metadata = null; } catch {}
+  },
+};
+// iOS's Now Playing pill sits over the picture whenever WebKit has a player of the page's to publish (Jerry, 2026-11-05: "try to get rid of
+// the pill if u can"). From WebKit's source (MediaElementSession hasNowPlayingInfo, 305865@main, in iOS 26's branch): nothing is published
+// while the page's active media element plays a MediaStream and the page has no Now Playing details or buttons; and the active element is the
+// one in view and large, a box of at least 400×300 CSS px before transforms. So in front, with a picture: a silent stand-in that never plays,
+// large and behind everything; the picture laid out small and scaled up to fill (a fullscreen one too: it keeps its box); and no details or
+// buttons. As the app leaves it all goes back, before the sound starts, so the lock screen and Control Center work as ever. While Wraith is
+// in front, Control Center's and AirPods' buttons don't reach it. Unproven on the phone: the sheet can turn it off.
+const Pill = {
+  on: store.get('noPill', true), decoy: null, hiding: false,
+  set(on) { this.on = on; store.set('noPill', on); this.sync(); },
+  sync() {
+    const hide = this.on && ios && !document.hidden && !$('watch').hidden && (P.feed === 'live' || P.feed === 'cdn');
+    if (hide && !this.decoy) this.make();
+    if (hide) {
+      const r = stage.getBoundingClientRect();
+      stage.style.setProperty('--k', Math.max(2, Math.ceil(Math.sqrt(r.width * r.height / 1e5) * 4) / 4));   // under 120,000 px² laid out
+      if (!this.decoy.isConnected) document.body.append(this.decoy);
+      Remote.off();
+    } else { this.decoy?.remove(); Remote.on(); }
+    stage.classList.toggle('pillfree', hide);
+    if (hide !== this.hiding) Away.add(hide ? 'pill hidden' : 'pill back');
+    this.hiding = hide;
+  },
+  // A MediaStream with sound, as WebKit needs for it to count, whose sound then stops: a live audio track keeps iOS's audio
+  // running in short buffers, which costs battery. A canvas track with no frames keeps the stream itself going.
+  make() {
+    const d = this.decoy = document.createElement('video');
+    d.className = 'decoy'; d.playsInline = true; d.setAttribute('playsinline', ''); d.disableRemotePlayback = true;
+    try {
+      const ac = new (window.AudioContext || window.webkitAudioContext)(), dest = ac.createMediaStreamDestination(), cv = document.createElement('canvas');
+      cv.width = 4; cv.height = 3;
+      d.srcObject = new MediaStream([...dest.stream.getAudioTracks(), ...cv.captureStream(0).getVideoTracks()]);
+      d.addEventListener('loadedmetadata', () => { for (const t of dest.stream.getAudioTracks()) t.stop(); ac.close().catch(() => {}); }, { once: true });
+    } catch (e) { Away.add('pill: no stand-in (' + e.name + ')'); }
+  },
+};
+window.addEventListener('resize', () => { if (Pill.hiding) Pill.sync(); });
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
-  const ms = navigator.mediaSession;
+  const ms = { setActionHandler: (a, f) => Remote.set(a, f) };
   const hold = () => { BG.held = true; BG.wanted = BG.carry = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
   ms.setActionHandler('play', () => {
     Away.add('button: play');
@@ -2126,6 +2187,8 @@ for (const v of [vL, vC]) {
   v.addEventListener('playing', () => {
     if (P.active() === v) {
       P.started = true;
+      // paused muted for the pill, then played from iOS's own controls rather than the page's
+      if (v.muted && !Sound.muted && !P.quietStart && !BG.on && $('unmute').hidden) v.muted = false;
       if (!v.paused) P.userPaused = false;   // only you can have started a paused picture, with iOS's own controls
       if (P.feed === 'cdn') P.asks = 0;
       UI.spin(false); UI.big(false);
@@ -3383,9 +3446,9 @@ const UI = {
   nowPlaying(title, artist, avatar) {
     if (!('mediaSession' in navigator)) return;
     const key = [title, artist, avatar].join('\n');
-    if (key === this.npKey && navigator.mediaSession.metadata) return;
+    if (key === this.npKey) return;
     this.npKey = key;
-    try { navigator.mediaSession.metadata = new MediaMetadata({ title, artist, artwork: avatar ? [{ src: avatar, sizes: '150x150' }] : [] }); } catch {}
+    Remote.show({ title, artist, artwork: avatar ? [{ src: avatar, sizes: '150x150' }] : [] });
   },
   info(u) {
     const s = u.stream, name = u.displayName || u.login, title = u.broadcastSettings?.title || '';
@@ -3525,7 +3588,10 @@ function togglePlay() {
     if (P.feed === 'live') { if (P.hls?.loadingEnabled) P.toLiveEdge(); } else if (P.feed === 'cdn') P.cdnSeek();
     P.userPaused = false;
     P.play(v);
-  } else { P.userPaused = true; v.pause(); UI.spin(false); }   // a pause you chose: leaving the app won't start the sound
+  } else {   // a pause you chose: leaving the app won't start the sound
+    P.userPaused = true; v.pause(); UI.spin(false);
+    if (Pill.hiding) v.muted = true;   // a paused picture with sound is one WebKit would publish, pill and all; playing restores it
+  }
   hud(true);
 }
 $('bPlay').onclick = togglePlay;
@@ -3626,6 +3692,10 @@ const Sheet = {
       ...(P.hls ? [{ label: 'Auto', desc: 'Lets the player drop quality on a weak connection.', on: P.q === 'auto', pick: () => P.setQuality('auto') }] : []),
     ]);
     if (live && !past) this.group(body, null, [{ label: 'Reload the picture', desc: 'If it’s gone black with the sound still going.', pick: () => { this.close(); P.reload(); } }]);
+    if (ios && !past) this.group(body, 'Now Playing pill', [
+      { label: 'Hidden while you watch', desc: 'Control Center and AirPods buttons reach Wraith once you leave it.', on: Pill.on, pick: () => { Pill.set(true); this.close(); } },
+      { label: 'Shown', on: !Pill.on, pick: () => { Pill.set(false); this.close(); } },
+    ]);
     this.accountItems(body);
     body.append(el('div', 'stats'));
     this.stats();
@@ -4060,7 +4130,7 @@ Me.save(Me.acct);
 Me.check();
 Me.sync();
 setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota, Pill };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);

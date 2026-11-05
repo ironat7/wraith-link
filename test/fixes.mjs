@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3222,6 +3222,38 @@ if (want('player')) {
       await page.evaluate(() => wraith.relayGet('https://x.playlist.ttvnw.net/a.m3u8'));
       const n2 = await page.evaluate(() => wraith.Quota.n);
       ok('the relay count is what it fetched', n1 - n0 === 2 && n2 === n1, JSON.stringify([n0, n1, n2]));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('pill')) {
+  // The Now Playing pill hidden in front (2026-11-05), as far as Chrome can show it: what WebKit would see, not what iOS draws.
+  const look = page => page.evaluate(() => {
+    const v = document.getElementById('vLL'), r = v.getBoundingClientRect(), s = document.querySelector('.stage').getBoundingClientRect(), d = document.querySelector('video.decoy');
+    return { free: document.querySelector('.stage').classList.contains('pillfree'), laidOut: v.offsetWidth * v.offsetHeight, fills: Math.abs(r.width - s.width) < 2 && Math.abs(r.height - s.height) < 2,
+      decoy: !!d?.isConnected, stream: d?.srcObject instanceof MediaStream, decoyBox: d ? d.offsetWidth * d.offsetHeight : 0, meta: !!navigator.mediaSession.metadata, play: !!window.__ms.play, muted: v.muted };
+  });
+  await Promise.all([
+    (async () => {
+      const { page, done } = await stage(answer);
+      await levels(page, 15000); await sleep(500);
+      let s = await look(page);
+      ok('in front with a picture: a large stand-in, the picture laid out small but filling the stage, no Now Playing details or buttons',
+        s.free && s.decoy && s.stream && s.decoyBox >= 120000 && s.laidOut < 120000 && s.fills && !s.meta && !s.play, JSON.stringify(s));
+      await vis(page, true); await sounding(page);
+      s = await look(page);
+      ok('leaving puts the details and buttons back and takes the stand-in away, and the sound plays', !s.free && !s.decoy && s.meta && s.play && (await snd(page)).on, JSON.stringify(s));
+      await vis(page, false); await sleep(1500);
+      s = await look(page);
+      ok('and coming back hides them again', s.free && s.decoy && !s.meta && !s.play, JSON.stringify(s));
+      await page.evaluate(() => document.getElementById('bPlay').click()); await sleep(300);
+      ok('a paused picture is muted meanwhile, so WebKit has nothing to publish', (await look(page)).muted);
+      await page.evaluate(() => document.getElementById('bPlay').click()); await sleep(500);
+      ok('and playing again has its sound back', !(await look(page)).muted);
+      await page.evaluate(() => wraith.Pill.set(false)); await sleep(300);
+      s = await look(page);
+      ok('turned off in the sheet, everything is as it was', !s.free && !s.decoy && s.meta && s.play && s.fills, JSON.stringify(s));
       await done();
     })(),
   ]);
