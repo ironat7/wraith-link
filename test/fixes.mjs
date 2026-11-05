@@ -2093,6 +2093,52 @@ if (want('screen')) {
       await done();
     })(),
     (async () => {
+      // the relay keeps the one seat, for a page nothing on the phone can reach
+      let taken = false;
+      const calls = [];
+      const relay = route => {
+        const q = new URL(route.request().url()).searchParams;
+        if (q.get('who')) calls.push({ who: q.get('who'), take: q.get('take'), ping: q.get('ping') });
+        return taken ? route.fulfill({ status: 200, headers, body: '409\nanother page is playing' }).catch(never) : answer(route);
+      };
+      const { page, done } = await stage(relay, { init: () => Object.defineProperty(navigator, 'webdriver', { get: () => false }) });
+      await levels(page, 15000);
+      await page.waitForFunction(() => wraith.Pages.taking === false, null, { timeout: 5000 }).catch(never);
+      const id = await page.evaluate(() => wraith.Pages.id);
+      ok('a stream takes the seat with its first calls', calls[0]?.who === id && calls[0]?.take === '1', JSON.stringify(calls[0]));
+      await page.evaluate(() => wraith.Pages.ask());
+      await sleep(200);
+      ok('and after that only says who’s asking', calls.at(-1)?.who === id && !calls.at(-1)?.take, JSON.stringify(calls.at(-1)));
+      taken = true;
+      await page.evaluate(() => wraith.Pages.ask());
+      await page.waitForFunction(() => !wraith.P.feed, null, { timeout: 5000 }).catch(never);
+      ok('told another page has it, this one stops and says so', await page.evaluate(() => !wraith.P.feed && !wraith.P.hls && /another window/.test(document.getElementById('msgbox').textContent) && JSON.parse(localStorage.getItem('wraith.away')).some(x => x.endsWith('another page took over'))));
+      taken = false;
+      const n = calls.length;
+      await page.evaluate(() => document.querySelector('#msgbox button').click());
+      await levels(page, 5000);
+      ok('and its button takes the seat back', calls.slice(n).some(c => c.who === id && c.take === '1') && await page.evaluate(() => wraith.P.feed === 'live'), JSON.stringify(calls.slice(n, n + 2)));
+      await done();
+    })(),
+    (async () => {
+      // a player on a playlist call told the same, and test runs staying out of the real seat
+      let taken = false, seen = 0;
+      const relay = route => {
+        if (new URL(route.request().url()).searchParams.get('who')) seen++;
+        return taken ? route.fulfill({ status: 200, headers, body: '409\nanother page is playing' }).catch(never) : answer(route);
+      };
+      const { page, done } = await stage(relay, { init: () => Object.defineProperty(navigator, 'webdriver', { get: () => false }) });
+      await levels(page, 15000);
+      taken = true;
+      await page.waitForFunction(() => !wraith.P.feed, null, { timeout: 8000 }).catch(never);
+      ok('a player polling for its playlist hears it the same way', await page.evaluate(() => !wraith.P.feed && !wraith.P.hls));
+      await done();
+      const quiet = await stage(route => { if (new URL(route.request().url()).searchParams.get('who')) seen = -1e6; return answer(route); });
+      await levels(quiet.page, 15000);
+      ok('a test run never touches the real seat', seen >= 0);
+      await quiet.done();
+    })(),
+    (async () => {
       // the settings sheet says what the player says, and can start the picture over by hand
       const { page, done } = await stage(answer);
       await levels(page, 15000);

@@ -8,7 +8,9 @@ var ALLOW = /^https:\/\/(([a-z0-9-]+\.)*ttvnw\.net\/|[a-z0-9]+\.cloudfront\.net\
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
-  if (p.ping) return reply_(200, 'pong');
+  var seated = !p.who || seat_(p.who, p.take);
+  if (p.ping) return reply_(seated ? 200 : 409, 'pong');
+  if (!seated) return reply_(409, 'another page is playing');
   if (!p.u || !ALLOW.test(p.u)) return reply_(400, 'only Twitch playlist URLs');
   try {
     var r = UrlFetchApp.fetch(p.u, { muteHttpExceptions: true, followRedirects: true });
@@ -19,6 +21,19 @@ function doGet(e) {
     return reply_(code, body);
   } catch (err) {
     return reply_(599, String(err));
+  }
+}
+
+// One page plays at a time. iOS can keep a page running behind a new one where nothing on the phone reaches it (2026-11-04), but every
+// player's playlists come through here. The page you start a stream on or come back to takes the seat, and any other hears on its next call.
+function seat_(who, take) {
+  try {
+    var cache = CacheService.getScriptCache();
+    if (take) cache.put('seat', who, 21600);   // 6 hours, the longest it keeps anything
+    var holder = take ? who : cache.get('seat');
+    return !holder || holder === who;
+  } catch (err) {
+    return true;   // better two pages for a moment than none
   }
 }
 

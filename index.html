@@ -734,7 +734,7 @@ async function cdnBase(u) {
 
 // ── relay + playlist rewriting ──────────────────────
 let relayN = 0, primed = null;   // primed: the first media playlist, delivered with the master
-const relayUrl = u => { Quota.note(); return `${RELAY}?u=${encodeURIComponent(u)}&n=${++relayN}`; };
+const relayUrl = u => { Quota.note(); return `${RELAY}?u=${encodeURIComponent(u)}&n=${++relayN}${Pages.seat()}`; };
 // Google allows the relay 20,000 fetches a day. This counts this device's, for the stats panel.
 const Quota = {
   day: new Date().toDateString(), n: 0,
@@ -753,8 +753,9 @@ const audioIn = master => master?.match(/VIDEO="audio_only"[^\n]*\n(\S+)/)?.[1] 
 
 async function relayGet(url) {   // { code, body }, with code 0 if the relay couldn't be reached
   try {
-    const t = await (await fetch(relayUrl(url), { cache: 'no-store', signal: AbortSignal.timeout(10e3) })).text(), nl = t.indexOf('\n');
-    return { code: parseInt(t.slice(0, nl), 10) || 0, body: t.slice(nl + 1) };
+    const t = await (await fetch(relayUrl(url), { cache: 'no-store', signal: AbortSignal.timeout(10e3) })).text(), nl = t.indexOf('\n'), code = parseInt(t.slice(0, nl), 10) || 0;
+    Pages.answered(code);
+    return { code, body: t.slice(nl + 1) };
   } catch { return { code: 0, body: '' }; }
 }
 async function relayText(url) {   // the body, or null on any failure
@@ -890,6 +891,8 @@ class RelayLoader {
   parse(t, real) {
     const nl = t.indexOf('\n'), code = parseInt(t.slice(0, nl), 10);
     let body = t.slice(nl + 1);
+    Pages.answered(code);
+    if (code === 409 || !this.callbacks) return;   // another page has the seat, and this player's gone
     if (code !== 200) return this.callbacks.onError({ code: code || 0, text: (code ? body : t).slice(0, 200) }, this.context, null, this.stats);
     const cut = body.indexOf('\n#WRAITH-MEDIA:');
     if (cut >= 0) {
@@ -1777,14 +1780,25 @@ aBG.addEventListener('playing', () => {
 // iOS can leave a page running with its sound on behind a new one (2026-11-02: one played on for 13 minutes under three
 // fresh starts of the same stream), and no button in the new page reaches it. So only one page plays: a page coming on
 // screen stops any that's out of sight, a page going out of sight asks if one's on screen, and a page starting a stream
-// stops all the others.
+// stops all the others. That's by message, and iOS can leave one out of reach of those too (2026-11-04: a poller unbroken from
+// before a new page started on the same stream to long after, with nothing in the log). Every player has to come to the relay for its
+// playlists, though, so the relay keeps the one seat: the page you start a stream on or come back to takes it, and any other hears on its next call.
 const Pages = {
   id: Math.random().toString(36).slice(2, 6),
   shown: !document.hidden, waiting: [],
+  seated: ios && !navigator.webdriver, taking: !document.hidden, ticks: 0,   // test runs share the real relay, and leave the seat to the phone
+  seat() { return this.seated ? `&who=${this.id}${this.taking ? '&take=1' : ''}` : ''; },
+  answered(code) {
+    if (code === 409) this.heard('play');
+    else if (code) this.taking = false;
+  },
+  ask() {   // a CDN feed or a past broadcast sends nothing else through the relay
+    fetch(`${RELAY}?ping=1${this.seat()}`, { cache: 'no-store' }).then(r => r.text()).then(t => this.answered(parseInt(t, 10))).catch(() => {});
+  },
   // iOS reloads a page it has dropped while the app's away (four times in 23 minutes on 2026-11-04). Out of sight that page starts no
   // player until it's looked at: it would have no sound to give, and the memory and relay calls are likely what got it dropped.
   seen() { return this.shown ? Promise.resolve() : new Promise(go => this.waiting.push(go)); },
-  see() { this.shown = true; for (const go of this.waiting.splice(0)) go(); },
+  see() { this.shown = this.taking = true; for (const go of this.waiting.splice(0)) go(); },
   ch: ios && window.BroadcastChannel ? new BroadcastChannel('wraith') : null,
   tell(what) { if (!document.hidden) this.ch?.postMessage(what); },
   heard(what) {
@@ -1967,6 +1981,7 @@ setInterval(() => {
   if (P.feed) { P.tick(); UI.banner(); }
   if (P.feed && Awake.granted) Awake.sync();
   P.checkFull();
+  if (Pages.seated && P.feed && P.feed !== 'live' && ++Pages.ticks % 30 === 0) Pages.ask();
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
@@ -3132,6 +3147,7 @@ $('bChanX').onclick = () => Tabs.show('chat');
 let hudTimer = 0, toastTimer = 0;
 const UI = {
   watch(login, u) {
+    if (!document.hidden) Pages.taking = true;
     Pages.tell('play');
     $('home').hidden = true; $('watch').hidden = false;
     if (u) this.info(u);
