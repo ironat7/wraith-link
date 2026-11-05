@@ -78,6 +78,7 @@ const iosFullscreen = () => {
   HTMLVideoElement.prototype.dispatchEvent = function (e) { const r = send.call(this, e); if (e.type === 'webkitendfullscreen' && window.__fs !== this) window.__told++; return r; };
 };
 const answer = route => { const u = route.request().url(); return route.fulfill({ status: 200, headers, body: u.includes('usher') ? MASTER : u.includes('audio') ? AUDIO() : MEDIA }).catch(never); };
+const outOfFetches = route => route.fulfill({ status: 200, headers, body: '599\nService invoked too many times for one day: urlfetch.' }).catch(never);
 const ago = s => new Date(Date.now() - s * 1000).toISOString();
 const ME = { token: 'TOK', id: '212375133', login: 'ironat___', name: 'Ironat___' };
 // `relay` answers relay calls; `gql(body, route)` can answer GQL itself by returning data, or true once it has fulfilled the route.
@@ -1422,6 +1423,58 @@ if (want('relay')) {
       await done();
     })(),
     (async () => {
+      // Google's daily limit: the relay says so, and retrying can't help
+      let calls = 0;
+      const { page, done, t } = await stage(route => { calls++; return outOfFetches(route); }, { copy: () => true }), ms = await toCdn(page, t);
+      const n = calls;
+      ok('the relay out of fetches: straight to the CDN, with no tries first', ms < 8000 && n <= 2, `${ms} ms, ${n} calls`);
+      await page.waitForFunction(() => wraith.P.active().readyState >= 3, null, { timeout: 15000 }).catch(never);
+      ok('and it plays', await page.evaluate(() => { const v = wraith.P.active(); return !v.paused && !wraith.P.hls; }), JSON.stringify(await st(page)));
+      await sleep(3000);
+      ok('and leaves the relay alone from there', calls === n, `${calls - n} calls in 3 s`);
+      await done();
+    })(),
+    (async () => {
+      let out = false;
+      const { page, done } = await stage(route => out ? outOfFetches(route) : answer(route), { copy: () => true });
+      await levels(page, 15000);
+      await page.waitForFunction(() => { const v = wraith.P.active(); return !v.paused; }, null, { timeout: 5000 }).catch(never);
+      out = true;
+      await page.waitForFunction(() => wraith.P.feed === 'cdn', null, { timeout: 15000 }).catch(never);
+      ok('running out with a stream under way: on the CDN', await page.evaluate(() => wraith.P.feed === 'cdn' && !wraith.P.hls), JSON.stringify(await st(page)));
+      await done();
+    })(),
+    (async () => {
+      let out = false, calls = 0;
+      const { page, done } = await stage(route => { if (out) calls++; return out ? outOfFetches(route) : answer(route); }, { copy: () => true });
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      out = true;
+      await page.waitForFunction(() => wraith.BG.srcs && wraith.P.feed === 'cdn', null, { timeout: 15000 }).catch(never);
+      await sounding(page);
+      const s = await snd(page);
+      ok('running out while away: the sound goes on from the CDN’s copy', s.on && s.wanted && !s.paused && s.feed === 'cdn' && await page.evaluate(() => !wraith.BG.hls && !wraith.P.hls && document.getElementById('aBG').currentTime > 0), JSON.stringify(s));
+      ok('the picture staying out of it', await page.evaluate(() => { const v = document.getElementById('vCDN'); return v.paused && v.muted; }));
+      const n = calls; await sleep(3000);
+      ok('and leaving the relay alone', calls - n === 0, `${calls - n} calls in 3 s`);
+      await backPlays(page, 'and coming back plays from the CDN');
+      ok('with no message', await page.evaluate(() => wraith.P.feed === 'cdn' && document.getElementById('msgbox').hidden));
+      await done();
+    })(),
+    (async () => {
+      let out = false;
+      const { page, done } = await stage(route => out ? outOfFetches(route) : answer(route), { copy: () => true });
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      await cc(page, 'pause'); await sleep(300);
+      out = true;
+      await page.evaluate(() => wraith.BG.hls.trigger('hlsError', { type: 'networkError', details: 'levelLoadError', fatal: false, response: { code: 599, text: 'Service invoked too many times for one day: urlfetch.' } }));
+      await sleep(500);
+      const s = await snd(page);
+      ok('the sound you stopped stays stopped when it runs out', s.on && s.paused && !s.wanted && s.held, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
       let hung = false;
       const { page, done } = await stage(route => hung ? null : answer(route));
       await levels(page, 15000); hung = true;
@@ -1457,6 +1510,15 @@ if (want('vod')) {
   const stageVod = (relay, how = {}) => stage(relay, { path: '?v=123', copy: () => true, init: blobs, gql: withVod, ...how });
   const corrected = async page => { await page.waitForFunction(() => window.__blobs?.length, null, { timeout: 15000 }).catch(never); return page.evaluate(() => window.__blobs); };
   const started = page => page.waitForFunction(() => { const v = document.getElementById('vCDN'); return !v.paused && v.readyState >= 3 && v.currentTime > 0; }, null, { timeout: 20000 }).catch(never);
+  await (async () => {
+    // Google's daily limit: no asking under every name, since nothing gets through
+    const asked = [];
+    const { page, done } = await stageVod(route => { asked.push(relayOf(route)); return outOfFetches(route); });
+    await started(page);
+    const chunked = asked.filter(u => u.includes('index-dvr') && !u.includes('audio_only')).length;
+    ok('the relay out of fetches: a past broadcast plays Twitch’s own playlist, after one ask', chunked === 1 && await page.evaluate(() => wraith.P.feed === 'vod' && !document.getElementById('vCDN').paused), `${chunked} asks: ${JSON.stringify(await st(page))}`);
+    await done();
+  })();
   await Promise.all([
     (async () => {
       const { page, done } = await stageVod(listing(FMP4));

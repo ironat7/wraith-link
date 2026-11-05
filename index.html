@@ -762,6 +762,9 @@ async function relayText(url) {   // the body, or null on any failure
   const r = await relayGet(url);
   return r.code === 200 ? r.body : null;
 }
+// Past Google's daily limit no retry gets through until it clears, so only the CDN's copies can play. A failed load's answer says so.
+const relayOut = d => /too many times/i.test(String(d.response?.text || ''));
+const RELAY_OUT = 'The relay hit Google’s daily limit';
 
 // What a stream's copy on the CDN can be under, best first. The source is usually "chunked", but some copies only have it as "1080p60".
 const CDN_RENDITIONS = ['chunked', '1080p60', '1080p30', '720p60', '720p30', '480p30', '360p30', '160p30'];
@@ -774,7 +777,7 @@ async function vodSources(base, rends = CDN_RENDITIONS) {
   const direct = r => `${base}/${r}/index-dvr.m3u8`;
   if (cdnLive) for (const r of rends) {
     const { code, body } = await relayGet(direct(r));
-    if (!code) break;
+    if (!code || code === 599) break;
     if (code !== 200 || !body.includes('#EXTINF')) continue;
     const whole = name => `${base}/${r}/${name.replace(/-unmuted(?=\.\w+$)/, '-muted')}`;
     const fixed = body.split('\n').map(l => {
@@ -1176,7 +1179,7 @@ const P = {
   onError(d) {
     const Hls = window.Hls;
     this.noteErr(d);
-    if (/too many times/i.test(String(d.response?.text || ''))) return this.fallback('The relay hit Google’s daily limit');
+    if (relayOut(d)) return this.fallback(RELAY_OUT);
     if (!d.fatal) {   // this one hls.js has dealt with itself, the same way as below, which leaves the video paused without a pause event
       if (d.details === Hls.ErrorDetails.MEDIA_SOURCE_REQUIRES_RESET && this.feed === 'live') this.play(vL);
       return;
@@ -1667,6 +1670,7 @@ const BG = {
       h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly
         P.noteErr(d, 'background ');
         if (this.hls !== h) return;
+        if (relayOut(d) && this.wanted && cdnLive && P.base) return this.toCdn();
         if (!d.fatal) {   // as in P.onError
           if (d.details === window.Hls.ErrorDetails.MEDIA_SOURCE_REQUIRES_RESET && this.wanted) aBG.play().catch(() => {});
         } else if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
@@ -1697,6 +1701,12 @@ const BG = {
     P.rest();
   },
   load(h) { if (h.levels.length) h.startLoad(-1); else h.loadSource(h.url); },   // with no playlist yet, startLoad does nothing
+  // The relay's out for the day: the sound goes on from the CDN's copy, where the picture is going too. The picture's player first, which stays quiet while the sound's on.
+  toCdn() {
+    P.fallback(RELAY_OUT);
+    this.stop(true);
+    this.start();
+  },
   // Twitch has ended this session, after hours away perhaps, and asking for it again won't change that: it takes a new one.
   async renew(h) {
     const tok = await tokenFor(P.login);

@@ -12,6 +12,7 @@ function doGet(e) {
   if (p.ping) return reply_(seated ? 200 : 409, 'pong');
   if (!seated) return reply_(409, 'another page is playing');
   if (!p.u || !ALLOW.test(p.u)) return reply_(400, 'only Twitch playlist URLs');
+  if (spent_()) return reply_(599, 'Service invoked too many times for one day: urlfetch.');
   try {
     var r = UrlFetchApp.fetch(p.u, { muteHttpExceptions: true, followRedirects: true });
     var code = r.getResponseCode(), body = r.getContentText();
@@ -20,7 +21,20 @@ function doGet(e) {
     if (code === 200 && p.first) body += first_(body, p.first);
     return reply_(code, body);
   } catch (err) {
+    if (/too many times/i.test(String(err))) spent_(true);
     return reply_(599, String(err));
+  }
+}
+
+// Past Google's daily limit a fetch sits for 10 s before it fails, about as long as the page waits to hear why (2026-11-04).
+// So the first to fail says so for the next 5 minutes, and only then does one try again.
+function spent_(now) {
+  try {
+    var cache = CacheService.getScriptCache();
+    if (now) cache.put('spent', '1', 300);
+    return !!cache.get('spent');
+  } catch (err) {
+    return false;
   }
 }
 
