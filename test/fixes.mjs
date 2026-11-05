@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3167,6 +3167,47 @@ if (want('unseen')) {
       await sleep(1000);
       const s = await snd(page);
       ok('a CDN feed starting by itself with another page in the seat never loads', !s.feed && copies === 0 && await page.evaluate(() => !document.getElementById('vCDN').getAttribute('src')), JSON.stringify({ copies, s }));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('chatq')) {
+  // What waits for the picture before it's drawn (2026-11-05 review): a busy chat 20 s behind on the CDN's feed, what you say, and what
+  // came in while the app was away long enough for the socket to close.
+  const irc = (i, ts, uid = String(1000 + i), text = 'line ' + i) => `@badges=;color=#FF0000;display-name=U${i};emotes=;id=id-${i}-${ts};tmi-sent-ts=${ts};user-id=${uid} :u${i}!u${i}@u${i}.tmi.twitch.tv PRIVMSG #staged :${text}`;
+  const drawn = (page, re) => page.evaluate(r => [...document.querySelectorAll('#chat .m')].filter(n => new RegExp(r).test(n.textContent)).length, re);
+  await Promise.all([
+    (async () => {
+      const { page, done } = await stage(answer, { offline: true });
+      await page.waitForFunction(() => wraith.Chat.login === 'staged' && wraith.P.user); await page.evaluate(() => document.getElementById('bChanX').click());
+      await page.waitForFunction(() => document.getElementById('chat').offsetParent);
+      await page.evaluate(() => { wraith.P.chatDelay = () => 20000; });
+      const now = Date.now();
+      await page.evaluate(lines => { for (const l of lines) wraith.Chat.line(l); }, Array.from({ length: 3000 }, (_, i) => irc(i, now - 30000 + i * 10)));
+      await sleep(800);
+      ok('a busy chat 20 s behind still draws what is due', await drawn(page, '^U\\d+.*line \\d+') > 50, String(await drawn(page, 'line')));
+      await page.evaluate(() => { wraith.Me.acct = { id: '777', login: 'me', name: 'Me', token: 'x' }; });
+      await page.evaluate(lines => { for (const l of lines) wraith.Chat.line(l); }, Array.from({ length: 7000 }, (_, i) => irc(5000 + i, Date.now() + i)));
+      await page.evaluate(l => wraith.Chat.line(l), irc(1, Date.now(), '777', 'what I said'));
+      await sleep(800);
+      ok('what you say shows at once, however much is waiting', await drawn(page, 'what I said') === 1);
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await stage(answer, { offline: true });
+      await page.waitForFunction(() => wraith.Chat.login === 'staged' && wraith.P.user); await page.evaluate(() => document.getElementById('bChanX').click());
+      await page.waitForFunction(() => document.getElementById('chat').offsetParent);
+      await page.evaluate(() => { wraith.P.chatDelay = () => 0; wraith.Chat.napAfter = 300; });
+      await vis(page, true);
+      const t = Date.now(), lines = Array.from({ length: 40 }, (_, i) => irc(i, t - 20000 + i * 100, String(2000 + i), 'away line ' + i));
+      await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); wraith.Chat.nap(); }, lines);
+      await sleep(800);
+      await page.evaluate(ls => { wraith.Chat.recent = async () => ls.map(l => { const sp = l.indexOf(' '), tags = Object.fromEntries(l.slice(1, sp).split(';').map(kv => kv.split('='))); return { tags, prefix: 'x', cmd: 'PRIVMSG', params: ['#staged'], text: l.slice(l.lastIndexOf(' :') + 2) }; }); }, lines);
+      await vis(page, false);
+      await page.evaluate(() => wraith.Chat.history(300));
+      await sleep(800);
+      ok('what came in while the app was away is filled in on the way back', await drawn(page, 'away line') === 40, String(await drawn(page, 'away line')));
       await done();
     })(),
   ]);

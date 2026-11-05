@@ -2127,6 +2127,7 @@ const loginOf = m => m.tags.login || m.prefix.split('!')[0];   // a subscription
 
 const Chat = {
   box: $('chat'), ws: null, login: null, uid: null, queue: [], stick: true, retry: 0, timer: 0, pinger: 0,
+  mine: [],                               // what you said, shown at once rather than waiting with everyone else's for the picture
   emotes: new Map(), global: new Map(), globalParts: [[], [], []], globalDone: false, badges: new Map(), gbadges: null, zero: new Set(),
   chanEmotes: [], globalEmotes: [],     // the same emotes as lists, for the picker
   seen: new Set(), rx: 0, behind: false,  // ids already handled; when the socket last said anything; a gap to fill in
@@ -2200,6 +2201,7 @@ const Chat = {
     if (document.hidden) this.napT = setTimeout(() => {
       if (!document.hidden) return;
       if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+      for (const q of this.queue) this.seen.delete(q.m.tags.id);   // never drawn, so the history fetched on the way back fills them in
       this.behind = true; this.queue = [];
     }, this.napAfter);
   },
@@ -2236,7 +2238,10 @@ const Chat = {
         }
         break;
     }
-    if (this.queue.length > 800) this.queue.splice(0, this.queue.length - 800);
+    // Out of sight only the newest screenful will be drawn, so that's all that needs keeping. On screen everything waiting for the picture
+    // is still to come: on the CDN's feed, 20 s behind, a busy chat has thousands waiting, and dropping the oldest dropped every line due.
+    const cap = document.hidden || !this.box.offsetParent ? 800 : 6000;
+    if (this.queue.length > cap) this.queue.splice(0, this.queue.length - cap);
   },
 
   fresh(m) {   // not seen before, and not from someone you've blocked
@@ -2259,7 +2264,7 @@ const Chat = {
     if (!this.fresh(m)) return;
     this.heard(m);
     // what you send shows at once, rather than waiting with everyone else's for the picture
-    if (m.cmd === 'PRIVMSG' && Me.acct && m.tags['user-id'] === Me.acct.id) { this.queue.unshift({ ts: 0, m }); Talk.ircWait?.({ ok: true }); }
+    if (m.cmd === 'PRIVMSG' && Me.acct && m.tags['user-id'] === Me.acct.id) { this.mine.push(m); Talk.ircWait?.({ ok: true }); }
     else this.queue.push({ ts: +m.tags['tmi-sent-ts'] || Date.now(), m });
   },
 
@@ -2320,17 +2325,17 @@ const Chat = {
   // Out of sight (app in the background, side chat hidden, Videos tab) nothing is drawn: lines
   // wait in the queue and only the newest screenful is drawn once chat is back in view.
   flush() {
-    if (!this.queue.length || document.hidden || !this.box.offsetParent) return;
+    if ((!this.queue.length && !this.mine.length) || document.hidden || !this.box.offsetParent) return;
     const cut = Date.now() - P.chatDelay();
     let n = 0;
     while (n < this.queue.length && this.queue[n].ts <= cut) n++;
-    if (!n) return;
-    const lines = this.queue.splice(0, n).slice(-220);
+    if (!n && !this.mine.length) return;
+    const lines = this.queue.splice(0, n).slice(-220), own = this.mine.splice(0);
     // history can come back after newer lines are up, and goes in above them, where its times say
     const late = lines.filter(q => q.m.old && q.ts < this.newest), next = late.length ? lines.filter(q => !late.includes(q)) : lines;
     if (late.length) this.insert(late);
     for (const q of next) if (q.ts > this.newest) this.newest = q.ts;
-    if (next.length) this.append(next.map(q => this.render(q.m)));
+    if (next.length || own.length) this.append([...next.map(q => this.render(q.m)), ...own.map(m => this.render(m))]);
   },
 
   insert(late) {   // both in time order
@@ -2545,7 +2550,7 @@ const Chat = {
   close() {
     clearInterval(this.timer); clearInterval(this.pinger); clearTimeout(this.sampleT); clearTimeout(this.napT); clearTimeout(this.againT);
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
-    this.login = null; this.uid = null; this.queue = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
+    this.login = null; this.uid = null; this.queue = []; this.mine = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
     this.seen = new Set(); this.names = new Map(); this.said = []; this.sampled = false;
     this.badges = new Map(); this.emotes = new Map(this.global);
     Picker.show(false);
