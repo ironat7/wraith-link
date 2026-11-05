@@ -735,17 +735,11 @@ async function cdnBase(u) {
 // ── relay + playlist rewriting ──────────────────────
 let relayN = 0, primed = null;   // primed: the first media playlist, delivered with the master
 const relayUrl = u => { Quota.note(); return `${RELAY}?u=${encodeURIComponent(u)}&n=${++relayN}${Pages.seat()}`; };
-// Google allows the relay 20,000 fetches a day. This counts this device's, for the stats panel.
+// Google allows the relay 20,000 fetches a day. This counts this device's, every page's, for the stats panel.
 const Quota = {
-  day: new Date().toDateString(), n: 0,
-  load() { const q = store.get('relayDay', null); if (q?.day === this.day) this.n = q.n; return this; },
-  note() {
-    const today = new Date().toDateString();
-    if (today !== this.day) { this.day = today; this.n = 0; }
-    this.n++;
-    if (this.n % 10 === 0) store.set('relayDay', { day: this.day, n: this.n });
-  },
-}.load();
+  get n() { const q = store.get('relayDay', null); return q?.day === new Date().toDateString() ? q.n : 0; },
+  note() { store.set('relayDay', { day: new Date().toDateString(), n: this.n + 1 }); },
+};
 fetch(RELAY + '?ping=1').catch(() => {});   // Apps Script wakes faster when warm
 
 const attr = (line, k) => (line.match(new RegExp(`[:,]${k}="?([^",]*)`)) || [])[1] || '';
@@ -924,7 +918,13 @@ class RelayLoader {
   getCacheAge() { return null; }
   getResponseHeader() { return null; }
 }
-class QuietRelayLoader extends RelayLoader { get quiet() { return true; } }
+class QuietRelayLoader extends RelayLoader {
+  get quiet() { return true; }
+  load(context, config, callbacks) {
+    if (BG.on && !BG.going()) return BG.lapse();   // woken after too long quiet: nothing more to fetch, nothing to start
+    super.load(context, config, callbacks);
+  }
+}
 
 const hlsReady = new Promise((res, rej) => {
   const s = $('hlsjs');
@@ -1002,6 +1002,9 @@ const nothingOpen = () => ({
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
   userPaused: false, pausedAt: 0, resumedAt: 0,   // a pause you chose; when the picture last paused; when its loading last started up again
+  pausedAway: false,                 // held only because the stream restarted with nobody looking or listening: coming back plays it
+  playBack: false,                   // a start iOS wouldn't take out of sight: coming back plays it
+  started: false, relayGone: false,  // whether a picture has played since this was opened; whether the relay's out for the day
   errs: {},                          // player errors this stream, for the stats panel
 });
 
@@ -1028,11 +1031,15 @@ const P = {
       if (!u) return UI.msg(null, `No channel called “${login}”`, 'Check the spelling and try again.');
       this.user = u;
       UI.info(u); Recent.add(u); Chat.channel(u.id);
-      if (!u.stream) { UI.offline(u); return this.awaitLive(); }
+      if (!u.stream) {   // the seat's this page's from now, as for a stream: a page you opened later, or come back to, takes it from here
+        if (Pages.seated && Pages.taking()) Pages.ask();
+        UI.offline(u);
+        return this.awaitLive();
+      }
       this.start = Date.parse(u.stream.createdAt) / 1000;
       this.base = await cdnBase(u);
       await Pages.seen();
-      if (gen !== this.gen) return;
+      if (gen !== this.gen || !(await Pages.confirm()) || gen !== this.gen) return;
       if (this.pref === 'cdn' && cdnLive) this.playCdn(); else this.playLive();
       this.timer = setInterval(() => this.refresh(), 60e3);
     } catch (e) {
@@ -1128,8 +1135,8 @@ const P = {
   onManifest() {
     this.groups = this.hls.levels.map((l, i) => ({ i, id: l.attrs?.VIDEO || `${l.height}p`, h: l.height || 0, fps: Math.round(l.frameRate || 0), br: l.bitrate }));
     this.applyQuality();
-    // the stream (re)started while the app was in the background; once hls.js is done with this manifest, or its own start undoes the handover
-    if (document.hidden && Pages.shown) queueMicrotask(() => BG.start());
+    // started over while you were away listening; once hls.js is done with this manifest, or its own start undoes the handover
+    if (BG.may()) queueMicrotask(() => BG.start());
   },
 
   ladder() { return this.groups.filter(x => x.h).sort((a, b) => b.br - a.br); },
@@ -1210,6 +1217,7 @@ const P = {
   fallback(why) {
     this.destroyHls();
     this.noAd();
+    this.relayGone = why === RELAY_OUT;   // out for the day: nothing's coming back soon
     if (cdnLive && this.base) {
       UI.toast(`${why} · playing from the CDN`);
       if (!this.subOnly && this.pref === 'live') this.retryLive();
@@ -1219,12 +1227,12 @@ const P = {
   },
 
   // On the CDN feed only because low latency failed: look every few minutes for the relay to come back, and every few
-  // seconds while away, where the sound is waiting on it.
+  // seconds while away with the sound waiting on it. Away with no sound, nobody's waiting, and the relay's fetches are kept for you.
   retryLive() {
     const gen = this.gen;
     setTimeout(async () => {
       if (gen !== this.gen || this.feed !== 'cdn' || this.pref !== 'live') return;
-      if (BG.on) return this.retryLive();
+      if (BG.on || (document.hidden && !BG.may())) return this.retryLive();
       if (!window.Hls?.isSupported()) { hlsAgain(); return this.retryLive(); }   // nothing to go back to yet: the picture stays put
       const tok = await tokenFor(this.login);
       const master = tok && !tok.authorization?.isForbidden ? await relayText(usherUrl(this.login, tok)) : null;
@@ -1232,7 +1240,7 @@ const P = {
       if (!master?.includes('#EXT-X-STREAM-INF')) return this.retryLive();
       this.retries = 0; this.tokenP = Promise.resolve(tok);
       this.playLive();
-    }, document.hidden ? 15e3 : 180e3);
+    }, BG.may() ? 15e3 : 180e3);
   },
 
   noAd() { this.cover = this.ad = false; this.adEnd = 0; UI.banner(); },
@@ -1295,8 +1303,8 @@ const P = {
     vC.muted = Sound.muted;
     this.show('cdn');
     UI.spin(vC.paused || vC.readyState < 3);
-    // the stream (re)started while the app was in the background, and there's no relay to come back and bring the sound
-    if (document.hidden && Pages.shown && (this.subOnly || this.pref === 'cdn')) BG.start();
+    // started over while you were away listening, with no relay to come back and bring the sound: it goes on from this copy
+    if (BG.may() && (this.subOnly || this.pref === 'cdn' || this.relayGone)) BG.start();
     this.play(vC);
   },
 
@@ -1400,14 +1408,30 @@ const P = {
 
   play(v) {
     if (!v || this.userPaused || BG.on) return;   // a pause you chose holds until you undo it, and the pictures stay out of the background sound
+    // iOS won't start a picture out of sight, and its refusal isn't the autoplay rule's: taken for one, it left the picture muted on your
+    // return, and then nothing to carry on the next time you left. Coming back starts it (wake).
+    if (ios && document.hidden) { this.playBack = true; return; }
     v.muted = Sound.muted;
     Sound.icon(v.muted);
     const p = v.play();
     if (p) p.catch(err => {
-      if (err.name !== 'NotAllowedError' || v.classList.contains('off')) return;
+      if (err.name !== 'NotAllowedError' || v.classList.contains('off') || document.hidden) return;
       v.muted = true; UI.unmute(true); Sound.icon(true);   // browsers still allow muted autoplay
       v.play().catch(() => UI.big(true));
     });
+  },
+
+  // Back in the app with no sound of its own going: a picture that should be playing, but that iOS wouldn't start out of sight, starts now.
+  // One that was paused as you left stays as it was: iOS plays again what it paused itself.
+  wake() {
+    const v = this.active();
+    if (!v || !(this.playBack || this.pausedAway)) return;
+    this.playBack = false;
+    if (this.pausedAway) this.pausedAway = this.userPaused = false;
+    if (this.userPaused || !v.paused || v.ended || (this.feed === 'live' && !this.hls)) return;
+    if (this.feed === 'live') this.resume();
+    else if (this.feed === 'cdn') this.cdnSeek();
+    this.play(v);
   },
 
   active() { return this.feed === 'live' ? vL : this.feed ? vC : null; },
@@ -1572,10 +1596,12 @@ const P = {
     try {
       const [u] = await getUsers([this.login]);
       if (gen !== this.gen || !u) return;
-      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) {   // a new stream: pick it up, as paused or not as this one was
-        const paused = this.userPaused || (document.hidden && !(BG.on && BG.wanted));
+      // A new stream: pick it up, as paused or not as this one was. Out of front with no sound going, it waits for you, and plays once you're back.
+      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) {
+        const carry = BG.may(), away = !this.userPaused && !carry && !Pages.inFront();
+        const paused = this.userPaused || away;
         this.open(this.login);
-        this.userPaused = paused;
+        this.userPaused = paused; this.pausedAway = away; BG.carry = carry;
         return;
       }
       // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
@@ -1586,14 +1612,23 @@ const P = {
     } catch {}
   },
 
-  // Offline: look every so often, and start by itself the moment the channel goes live.
+  // Offline: look every so often, and start by itself the moment the channel goes live, but only in front of you. A page out of sight, or
+  // one iOS keeps running behind another, would start the stream behind whatever you're doing, and its sound over it (2026-11-05, Asmongold
+  // going live over the Twitch app). Coming back to the app looks at once.
   awaitLive() {
     const gen = this.gen;
     clearInterval(this.timer);
-    this.timer = setInterval(async () => {
-      if (document.hidden) return;
-      try { const [u] = await getUsers([this.login]); if (gen === this.gen && u?.stream) this.open(this.login, false, u); } catch {}
-    }, 30e3);
+    this.timer = setInterval(() => this.lookLive(gen), 30e3);
+  },
+  // It doesn't take the seat: opening the channel did that, so it plays if this is still the page you last used, and stops if you've
+  // started something elsewhere since. A page iOS keeps where you can't see it can call itself in front.
+  async lookLive(gen = this.gen) {
+    if (gen !== this.gen || this.feed || !this.user || this.user.stream || !Pages.inFront()) return;
+    try {
+      const [u] = await getUsers([this.login]);
+      if (gen !== this.gen || !u?.stream || !Pages.inFront()) return;
+      this.open(this.login, false, u);
+    } catch {}
   },
 
   async checkEnded() {
@@ -1604,7 +1639,7 @@ const P = {
 
   ended(u) {
     const v = this.active();
-    BG.stop(true);
+    BG.stop(true); BG.carry = false;
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
     if (v?.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}   // iOS's own fullscreen player would sit on the last frame. After the reloads: see checkFull
     this.feed = null; this.noAd();
@@ -1623,7 +1658,7 @@ const P = {
   close() {
     this.gen++;
     clearInterval(this.timer);
-    BG.stop(true);
+    BG.stop(true); BG.carry = false;
     this.destroyHls(); this.stopCdn(); clearTimeout(vC.again);
     revoke(this.vodAudio);
     vC.controls = false; vL.pause(); vL.removeAttribute('src'); vL.load();
@@ -1645,10 +1680,25 @@ const P = {
 // makes that choice as the app leaves, before the sound has started, finds no player it can use and
 // drops the page; nothing makes it look again, so Control Center stays on whatever app played last.
 // Setting the track details again once the sound is playing makes it look again.
+// Nothing else makes a sound out of sight. Only the sound you were hearing as you left carries on, and only while it's been heard in the last
+// few minutes: a player starting over (the stream restarting, a start still under way as you left) brings it back, and its own retries keep
+// it going. A page iOS froze and woke up hours later, still thinking it was playing, stays quiet (2026-11-05).
+const KEEP = 5 * 60e3;
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
   wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back
+  carry: false,  // you were hearing it as you left, and neither you nor iOS has stopped it since. It outlasts the player starting over
+  heard: 0,      // when it was last heard going (or the picture, as you left)
+  may() { return document.hidden && this.carry && Date.now() - this.heard < KEEP; },
+  going() { return this.on && this.wanted && this.carry && Date.now() - this.heard < KEEP; },
+  // Quiet too long to come back by itself, as if iOS had stopped it: coming back to the app, or Control Center's play, brings it back.
+  lapse() {
+    if (!this.on || !this.wanted) return;
+    Away.add('sound gave up');
+    this.wanted = this.carry = false;
+    aBG.pause(); this.hls?.stopLoad();
+  },
   claim() {
     const ms = navigator.mediaSession, m = ms?.metadata;
     if (!ms) return;
@@ -1656,7 +1706,7 @@ const BG = {
   },
   start() {
     const v = P.active();
-    if (!this.ios || this.on || !v || Sound.muted || P.userPaused) return;
+    if (!this.ios || this.on || !v || Sound.muted || P.userPaused || !this.may()) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
     this.on = this.wanted = true; this.held = false;
     // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
@@ -1667,9 +1717,10 @@ const BG = {
       // picture stopped, with more cushion for the slower timers of a backgrounded page
       const h = this.hls = new window.Hls({ ...LOADING, pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12 });
-      h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly
+      h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly, while it's been heard lately
         P.noteErr(d, 'background ');
         if (this.hls !== h) return;
+        if (this.wanted && !this.going()) return this.lapse();
         if (relayOut(d) && this.wanted && cdnLive && P.base) return this.toCdn();
         if (!d.fatal) {   // as in P.onError
           if (d.details === window.Hls.ErrorDetails.MEDIA_SOURCE_REQUIRES_RESET && this.wanted) aBG.play().catch(() => {});
@@ -1679,6 +1730,7 @@ const BG = {
           aBG.play().catch(() => {});
         } else setTimeout(() => {
           if (this.hls !== h || !this.wanted) return;
+          if (!this.going()) return this.lapse();
           if (d.response?.code >= 400 && d.response.code < 500) this.renew(h); else this.load(h);
         }, 2000);
       });
@@ -1695,7 +1747,7 @@ const BG = {
       }, { once: true });
       this.next();
     }
-    const p = aBG.play(); if (p) p.catch(() => {});
+    const p = aBG.play(); if (p) p.catch(e => { if (e.name === 'NotAllowedError') Away.add('iOS refused the sound'); });
     v.pause();
     vL.muted = vC.muted = true;
     P.rest();
@@ -1708,10 +1760,13 @@ const BG = {
     this.start();
   },
   // Twitch has ended this session, after hours away perhaps, and asking for it again won't change that: it takes a new one.
+  // An offline channel has no new session to give, and once it's been quiet a while it stops asking: a channel going live hours later
+  // doesn't start a page's sound out of sight.
   async renew(h) {
     const tok = await tokenFor(P.login);
     const url = tok && audioIn(await relayText(usherUrl(P.login, tok)));
     if (this.hls !== h || !this.wanted) return;
+    if (!this.going()) return this.lapse();
     if (!url) return void setTimeout(() => { if (this.hls === h && this.wanted) this.renew(h); }, 5000);
     P.audioUrl = url;
     h.loadSource(url);
@@ -1719,7 +1774,7 @@ const BG = {
   },
   // Back to what's current after a stop, on the one that's playing: live once its playlist has reloaded.
   resume() {
-    this.held = false; this.wanted = true;
+    this.held = false; this.wanted = this.carry = true; this.heard = Date.now();
     const h = this.hls;
     if (h) {
       h.once(window.Hls.Events.LEVEL_UPDATED, () => {
@@ -1763,17 +1818,17 @@ const BG = {
 };
 // The CDN has no copy for a stream's first seconds, so a refusal is asked again a little later. Anything loaded since clears the error, and the wait with it.
 const askAgain = (m, ask) => { clearTimeout(m.again); m.again = setTimeout(() => { if (m.error) ask(); }, 12e3); };
-// With no other source to try, the sound asks until it's stopped.
+// With no other source to try, the sound asks until it's stopped, or has been quiet too long.
 aBG.addEventListener('error', () => {
   if (!BG.on || !BG.srcs || BG.next()) return;
-  askAgain(aBG, () => { if (BG.wanted) { aBG.load(); aBG.play().catch(() => {}); } });
+  askAgain(aBG, () => { if (BG.going()) { aBG.load(); aBG.play().catch(() => {}); } else BG.lapse(); });
 });
 // Anything else pausing it, other than its load failing, is iOS giving the sound to another app (YouTube, the mic, a call). iOS
 // plays it again once that app stops, unless it's paused again now, and a play from here would take the sound back off that app.
 aBG.addEventListener('pause', () => {
   if (!BG.on || !BG.wanted || aBG.ended || aBG.error) return;
   Away.add('iOS paused the sound');
-  BG.wanted = false;
+  BG.wanted = BG.carry = false;
   aBG.pause();
   BG.hls?.stopLoad();
 });
@@ -1789,32 +1844,50 @@ aBG.addEventListener('playing', () => {
 });
 // iOS can leave a page running with its sound on behind a new one (2026-11-02: one played on for 13 minutes under three
 // fresh starts of the same stream), and no button in the new page reaches it. So only one page plays: a page coming on
-// screen stops any that's out of sight, a page going out of sight asks if one's on screen, and a page starting a stream
+// screen stops any that's out of sight, a page going out of sight asks if one's on screen, and a page you start a stream on
 // stops all the others. That's by message, and iOS can leave one out of reach of those too (2026-11-04: a poller unbroken from
 // before a new page started on the same stream to long after, with nothing in the log). Every player has to come to the relay for its
 // playlists, though, so the relay keeps the one seat: the page you start a stream on or come back to takes it, and any other hears on its next call.
+// Only you take it, by doing something on a page (a tap, opening the app, coming back to it), and only for the calls just after. A page that
+// starts a stream by itself, or one iOS keeps running out of sight, plays only while the seat is still its own (2026-11-05: a page nobody
+// could see started Asmongold the moment he went live, on a tap of its own from long before, and its sound took over from the Twitch app).
 const Pages = {
   id: Math.random().toString(36).slice(2, 6),
   shown: !document.hidden, waiting: [],
-  seated: ios && !navigator.webdriver, taking: !document.hidden, ticks: 0,   // test runs share the real relay, and leave the seat to the phone
-  seat() { return this.seated ? `&who=${this.id}${this.taking ? '&take=1' : ''}` : ''; },
+  seated: ios && !navigator.webdriver, ticks: 0,   // test runs share the real relay, and leave the seat to the phone
+  takeAt: document.hidden ? 0 : Date.now(),        // when you last did something here
+  taking() { return Date.now() - this.takeAt < 60e3; },
+  // On screen and the one iOS is sending your taps to. A page iOS keeps running behind another can still call itself visible. (A computer's
+  // window can be in view without the focus, and there's no such page to tell apart.)
+  inFront() { return !document.hidden && (!ios || document.hasFocus()); },
+  seat() { return this.seated ? `&who=${this.id}${this.taking() ? '&take=1' : ''}` : ''; },
   answered(code) {
     if (code === 409) this.heard('play');
-    else if (code) this.taking = false;
+    else if (code) this.takeAt = 0;
   },
   ask() {   // a CDN feed or a past broadcast sends nothing else through the relay
     fetch(`${RELAY}?ping=1${this.seat()}`, { cache: 'no-store' }).then(r => r.text()).then(t => this.answered(parseInt(t, 10))).catch(() => {});
   },
+  // A stream starting with nobody having asked for it here (going live, starting over) plays only if the seat is still this page's: asked
+  // before anything plays, as a copy on the CDN never goes near the relay, and would play for up to half a minute before hearing.
+  async confirm() {
+    if (!this.seated || this.taking()) return true;
+    try {
+      const code = parseInt(await (await fetch(`${RELAY}?ping=1${this.seat()}`, { cache: 'no-store', signal: AbortSignal.timeout(8e3) })).text(), 10);
+      this.answered(code);
+      return code !== 409;
+    } catch { return true; }   // better to play than not, if the relay can't say
+  },
   // iOS reloads a page it has dropped while the app's away (four times in 23 minutes on 2026-11-04). Out of sight that page starts no
   // player until it's looked at: it would have no sound to give, and the memory and relay calls are likely what got it dropped.
   seen() { return this.shown ? Promise.resolve() : new Promise(go => this.waiting.push(go)); },
-  see() { this.shown = this.taking = true; for (const go of this.waiting.splice(0)) go(); },
+  see() { this.shown = true; this.takeAt = Date.now(); for (const go of this.waiting.splice(0)) go(); },
   ch: ios && window.BroadcastChannel ? new BroadcastChannel('wraith') : null,
   tell(what) { if (!document.hidden) this.ch?.postMessage(what); },
   heard(what) {
     if (what === 'anyone') return this.tell('here');
     if (!P.login && !P.feed && !P.vod) return;
-    if (what === 'here' && !document.hidden && document.hasFocus()) return;
+    if (what === 'here' && this.inFront()) return;
     Away.add('another page took over');
     P.close();
     UI.msg(null, 'Playing in another window', 'Only one Wraith plays at a time.', () => route(true), 'Play here');
@@ -1833,21 +1906,32 @@ document.addEventListener('visibilitychange', () => {
   saidHidden = document.hidden;
   if (!document.hidden) { Pages.see(); Pages.tell('here'); }
   if ($('watch').hidden) return;
-  if (!document.hidden) return BG.stop();
+  if (!document.hidden) {
+    BG.carry = false;
+    if (BG.on) return BG.stop();
+    P.wake();
+    P.lookLive(); setTimeout(() => P.lookLive(), 1500);   // iOS may not have given it your taps yet
+    return;
+  }
   // only a picture that was playing as you left has sound to carry on (iOS pauses it just before saying the app has
-  // left), or one held through an ad break, whose sound comes back with the stream. One still muted because it started
-  // by itself has none
+  // left), or one held through an ad break, whose sound comes back with the stream, or one still on its way. One still
+  // muted because it started by itself has none
   const v = P.active();
-  if (v && !v.muted && (!v.paused || performance.now() - P.pausedAt < 2000 || P.ad)) BG.start();
+  if (v && !v.muted && !Sound.muted && !P.userPaused && (!v.paused || performance.now() - P.pausedAt < 2000 || P.ad || !P.started)) {
+    BG.carry = true; BG.heard = Date.now();   // and if its player's starting over just now, the sound comes on once it has
+    BG.start();
+  }
   if (BG.on) Away.add('sound on');
   Pages.ch?.postMessage('anyone');
 });
+// Your taps go to whichever page iOS has in front: one that hasn't had them can't tell it's on screen till then.
+window.addEventListener('focus', () => { if ($('watch').hidden || document.hidden || BG.on) return; P.wake(); P.lookLive(); });
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const ms = navigator.mediaSession;
-  const hold = () => { BG.held = true; BG.wanted = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
+  const hold = () => { BG.held = true; BG.wanted = BG.carry = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
   ms.setActionHandler('play', () => {
     Away.add('button: play');
-    if (document.hidden && !BG.on) { P.userPaused = false; BG.start(); if (BG.on) return; }
+    if (document.hidden && !BG.on) { P.userPaused = false; BG.carry = true; BG.heard = Date.now(); BG.start(); if (BG.on) return; }
     if (BG.on) {
       if (!aBG.paused) return hold();   // iOS is showing something else as paused: its button still has to stop what you hear
       BG.resume();
@@ -1941,6 +2025,7 @@ for (const v of [vL, vC]) {
   v.addEventListener('timeupdate', () => P.tick());
   v.addEventListener('playing', () => {
     if (P.active() === v) {
+      P.started = true;
       if (!v.paused) P.userPaused = false;   // only you can have started a paused picture, with iOS's own controls
       if (P.feed === 'cdn') P.asks = 0;
       UI.spin(false); UI.big(false);
@@ -1982,8 +2067,19 @@ vC.addEventListener('timeupdate', () => {
   savePlace(vC.currentTime);
   Replay.tick(vC.currentTime);
 });
-aBG.addEventListener('timeupdate', () => { if (BG.on && P.feed === 'vod') savePlace(aBG.currentTime); });
+aBG.addEventListener('timeupdate', () => {
+  if (!BG.on) return;
+  if (!aBG.paused && BG.wanted) BG.heard = Date.now();
+  if (P.feed === 'vod') savePlace(aBG.currentTime);
+});
+let lastTick = Date.now();
 setInterval(() => {
+  // iOS froze the page a while, which it only does with nothing playing. The record says how long: a page you can't see that logs one is
+  // one iOS kept. A sound that hasn't been heard for a while doesn't come back by itself, however it went quiet.
+  const slept = Date.now() - lastTick;
+  lastTick = Date.now();
+  if (slept > 60e3 && document.hidden) Away.add(`woke out of sight, after ${Math.round(slept / 60e3)} min frozen`);
+  if (BG.on && BG.wanted && !BG.going()) BG.lapse();
   if (document.hidden !== saidHidden) {   // iOS doesn't always say the app left or came back (WebKit 207256)
     Away.add('iOS didn’t say');
     document.dispatchEvent(new Event('visibilitychange'));
@@ -3157,8 +3253,7 @@ $('bChanX').onclick = () => Tabs.show('chat');
 let hudTimer = 0, toastTimer = 0;
 const UI = {
   watch(login, u) {
-    if (!document.hidden) Pages.taking = true;
-    Pages.tell('play');
+    if (Pages.taking()) Pages.tell('play');   // one you started stops the other pages; one that starts over by itself, or iOS woke, doesn't
     $('home').hidden = true; $('watch').hidden = false;
     if (u) this.info(u);
     else { this.row({ name: login || '', page: login || 'Video' }); this.owner(null); }
@@ -3314,6 +3409,7 @@ stage.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') hud(
 function togglePlay() {
   const v = P.active();
   if (!v) return;
+  P.pausedAway = false;
   if (v.paused) {
     if (P.feed === 'live') P.toLiveEdge(); else if (P.feed === 'cdn') P.cdnSeek();
     P.userPaused = false;
@@ -3459,7 +3555,7 @@ const Sheet = {
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
     const away = store.get('away', []);
-    if (away.length) lines.push('Away: ' + away.slice(-12).join(' · '));
+    if (away.length) lines.push('Away: ' + away.slice(-16).join(' · '));
     s.textContent = '';
     for (const x of lines) s.append(el('div', null, x));
   },

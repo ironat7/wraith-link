@@ -1,4 +1,4 @@
-// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE } from './lib.mjs';
@@ -8,9 +8,10 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo'].includes(which) && (!A || !B)) {
-  const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login } } } } }')).streams.edges.map(e => e.node.broadcaster.login);
-  A ||= top[0]; B ||= top.find(x => x !== A);
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen'].includes(which) && (!A || !B)) {
+  // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
+  const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
+  A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
 }
 if (A) console.log('channels', A, B);
 const { ok, report } = checks();
@@ -949,6 +950,7 @@ if (want('pages')) {
   await page.goto(base + `?c=${A}`); await playing(page);
   await vis(page, true); await sounding(page);
   const second = await c.newPage();
+  await makeStream(second);   // the stream made here, not Twitch's own copy, which Chrome can't hold to the end of
   await second.goto(base); await sleep(1000);
   let s = await snd(page);
   ok('a page coming up stops the one out of sight', !s.on && s.paused && !s.src && !s.feed, JSON.stringify(s));
@@ -975,6 +977,7 @@ if (want('pages')) {
 
   // out of sight from the start: it doesn't play, and doesn't stop the one you're watching
   const third = await c.newPage();
+  await makeStream(third);
   await third.addInitScript(() => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); });
   await third.goto(base + `?c=${A}`);
   await third.waitForFunction(() => wraith.P.hls?.levels?.length, null, { timeout: 15000 }).catch(() => {}); await sleep(2500);
@@ -2160,7 +2163,7 @@ if (want('screen')) {
       };
       const { page, done } = await stage(relay, { init: () => Object.defineProperty(navigator, 'webdriver', { get: () => false }) });
       await levels(page, 15000);
-      await page.waitForFunction(() => wraith.Pages.taking === false, null, { timeout: 5000 }).catch(never);
+      await page.waitForFunction(() => !wraith.Pages.taking(), null, { timeout: 5000 }).catch(never);
       const id = await page.evaluate(() => wraith.Pages.id);
       ok('a stream takes the seat with its first calls', calls[0]?.who === id && calls[0]?.take === '1', JSON.stringify(calls[0]));
       await page.evaluate(() => wraith.Pages.ask());
@@ -2941,6 +2944,229 @@ if (want('duo')) {
       await page.waitForSelector('#vods a.vod', { state: 'attached', timeout: 8000 }).catch(never); await sleep(100);
       const t = await rect(page, '#vods .thumb');
       ok('and a video’s picture uses the strip’s height', t.h >= 76 && t.b <= 466, JSON.stringify(t));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('unseen')) {
+  // Nothing makes a sound out of sight that you didn't leave playing (2026-11-05: a page nobody could see started Asmongold the moment he went
+  // live, took the seat on a tap of its own from long before, and its sound took over from the Twitch app).
+  const goLive = user => { user.stream = { id: 'new' + Date.now(), createdAt: ago(20), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }; };
+  const seated = () => Object.defineProperty(navigator, 'webdriver', { get: () => false });
+  const offlineCard = page => page.waitForFunction(() => !document.getElementById('msgbox').hidden && /offline/i.test(document.getElementById('msgbox').textContent), null, { timeout: 10000 }).catch(never);
+  const log = page => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]'));
+  // what each call to the relay said about the seat, pings included
+  const seatLog = (calls, answer409 = () => false) => route => {
+    const q = new URL(route.request().url()).searchParams;
+    if (q.get('who')) calls.push({ ping: !!q.get('ping'), take: !!q.get('take') });
+    return answer409() ? said(route, '409\nanother page is playing') : answer(route);
+  };
+  // The staged picture never gets a frame (stage() sends no video), so a picture that has played is marked as one.
+  const played = page => page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing')));
+  // The sound not heard since minutes ago, which is what a page iOS froze, woken hours later, looks like: its clock of hearing it held there.
+  const unheard = page => page.evaluate(() => { const at = Date.now() - 6 * 60e3; Object.defineProperty(wraith.BG, 'heard', { configurable: true, get: () => at, set() {} }); });
+  const heardAgain = page => page.evaluate(() => Object.defineProperty(wraith.BG, 'heard', { configurable: true, writable: true, value: 0 }));
+  await Promise.all([
+    (async () => {
+      // out of sight, a channel going live waits for you, and starts the moment you're back
+      let fetched = 0;
+      const { page, done, user } = await stage(route => { if (relayOf(route)) fetched++; return answer(route); }, { offline: true });
+      await offlineCard(page);
+      await vis(page, true);
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive()); await sleep(1500);
+      let s = await snd(page);
+      ok('a channel going live while you’re away doesn’t start, or fetch anything', !s.feed && !s.on && fetched === 0, JSON.stringify({ ...s, fetched }));
+      await vis(page, false);
+      await levels(page, 8000);
+      s = await snd(page);
+      ok('coming back starts it at once', s.feed === 'live' && !s.msg, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // on screen to itself but not the page iOS sends your taps to: the same
+      const { page, done, user } = await stage(answer, { offline: true });
+      await offlineCard(page);
+      await page.evaluate(() => { document.hasFocus = () => false; });
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive()); await sleep(1500);
+      ok('a page not in front doesn’t start either', !(await snd(page)).feed);
+      await page.evaluate(() => { delete document.hasFocus; window.dispatchEvent(new Event('focus')); });
+      await levels(page, 8000);
+      ok('and starts once it is', (await snd(page)).feed === 'live');
+      await done();
+    })(),
+    (async () => {
+      // opening a channel that's offline takes the seat then; starting by itself later takes nothing, and plays while the seat's still its own
+      const calls = [];
+      const { page, done, user } = await stage(seatLog(calls), { offline: true, init: seated });
+      await offlineCard(page); await sleep(500);
+      ok('opening an offline channel takes the seat', calls.some(c => c.ping && c.take), JSON.stringify(calls));
+      await page.evaluate(() => { wraith.Pages.takeAt = 0; });   // your last tap long ago
+      const n = calls.length;
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive());
+      await levels(page, 8000);
+      ok('starting by itself when they go live takes nothing, and plays', (await snd(page)).feed === 'live' && calls.length > n && calls.slice(n).every(c => !c.take), JSON.stringify(calls.slice(n, n + 3)));
+      await done();
+    })(),
+    (async () => {
+      // the same with another page in the seat since: it stops at its first call, making no sound (what would have saved the Twitch app)
+      const calls = []; let taken = false;
+      const { page, done, user } = await stage(seatLog(calls, () => taken), { offline: true, init: seated });
+      await offlineCard(page); await sleep(500);
+      await page.evaluate(() => { wraith.Pages.takeAt = 0; });
+      taken = true;
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive());
+      await page.waitForFunction(() => /another window/.test(document.getElementById('msgbox').textContent), null, { timeout: 10000 }).catch(never);
+      const s = await snd(page);
+      ok('a page that starts by itself with another in the seat stops, quietly', !s.feed && !s.on && /another window/.test(s.msg) && calls.every(c => !c.take || c.ping), JSON.stringify({ s, calls }));
+      await done();
+    })(),
+    (async () => {
+      // a stream starting over by itself, long after your last tap, plays only while the seat's still its own
+      const calls = []; let taken = false;
+      const { page, done, user } = await stage(seatLog(calls, () => taken), { init: seated });
+      await levels(page, 15000);
+      ok('a stream you open takes the seat', calls.find(c => !c.ping)?.take === true, JSON.stringify(calls.slice(0, 3)));
+      await page.evaluate(() => { wraith.Pages.takeAt = 0; });
+      const n = calls.length;
+      user.stream = { ...user.stream, id: 'restarted' };
+      await page.evaluate(() => wraith.P.refresh());
+      await page.waitForFunction(() => wraith.P.user?.stream?.id === 'restarted' && wraith.P.hls?.levels.length, null, { timeout: 15000 }).catch(never);
+      ok('starting over by itself, it doesn’t take the seat', calls.length > n && calls.slice(n).every(c => !c.take), JSON.stringify(calls.slice(n, n + 4)));
+      taken = true;
+      await page.waitForFunction(() => !wraith.P.feed, null, { timeout: 8000 }).catch(never);
+      const s = await snd(page);
+      ok('so with another page in the seat it stops, making no sound', !s.feed && !s.on && /another window/.test(s.msg), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // a tap long ago doesn't still count
+      const calls = [];
+      const { page, done } = await stage(seatLog(calls), { init: seated, path: '' });
+      await sleep(500);
+      await page.evaluate(() => { wraith.Pages.takeAt = Date.now() - 61e3; wraith.P.open('staged'); });
+      await levels(page, 15000);
+      ok('an old tap doesn’t take the seat', calls.some(c => !c.ping) && calls.every(c => !c.take), JSON.stringify(calls.slice(0, 4)));
+      await done();
+    })(),
+    (async () => {
+      // a sound gone quiet too long doesn't come back by itself
+      let usher = 0;
+      const { page, done } = await stage(route => { if (relayOf(route).includes('usher')) usher++; return answer(route); });
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      await unheard(page); await sleep(1500);
+      let s = await snd(page);
+      ok('a sound unheard for minutes gives up', s.on && !s.wanted && s.paused, JSON.stringify(s));
+      ok('and the record says so', (await log(page)).some(x => x.endsWith('sound gave up')));
+      const u0 = usher;
+      await page.evaluate(() => wraith.BG.hls.trigger(Hls.Events.ERROR, { type: Hls.ErrorTypes.NETWORK_ERROR, details: 'levelLoadError', fatal: true, response: { code: 403 } }));
+      await sleep(3000);
+      ok('a load failing then doesn’t go looking for a new session', usher === u0, `${usher - u0} asks`);
+      await page.evaluate(() => { wraith.P.user.stream.id = 'older'; return wraith.P.refresh(); });
+      await levels(page, 15000); await sleep(2500);
+      s = await snd(page);
+      ok('nor does the stream restarting bring it back', !s.on && s.paused && s.vPaused, JSON.stringify(s));
+      await heardAgain(page);
+      await vis(page, false); await sleep(1000);
+      s = await snd(page);
+      ok('coming back plays it, unmuted', !s.on && !s.vPaused && !s.userPaused && !s.vMuted && await page.evaluate(() => document.getElementById('unmute').hidden), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the playlist the sound's player asks for after waking is where it notices, before anything plays
+      let audio = 0;
+      const { page, done } = await stage(route => { if (relayOf(route).includes('audio')) audio++; return answer(route); });
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      await page.evaluate(() => wraith.BG.hls.stopLoad());
+      await unheard(page);
+      const a0 = audio;
+      await page.evaluate(() => wraith.BG.hls.startLoad(-1)); await sleep(1500);
+      const s = await snd(page);
+      ok('a sound woken after too long fetches nothing and stays quiet', audio === a0 && !s.wanted && s.paused, `${audio - a0} calls ${JSON.stringify(s)}`);
+      await done();
+    })(),
+    (async () => {
+      // a few minutes' quiet while the stream restarts still carries on
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      await page.evaluate(() => { wraith.BG.heard = Date.now() - 3 * 60e3; wraith.P.user.stream.id = 'older'; return wraith.P.refresh(); });
+      await sounding(page);
+      const s = await snd(page);
+      ok('a stream back within a few minutes brings the sound back with it', s.on && s.wanted && !s.paused, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // left with nothing to hear: a player starting over while away makes no sound, and coming back plays it with its sound
+      const { page, done } = await stage(answer);
+      await levels(page, 15000); await played(page);
+      await page.evaluate(() => wraith.P.active().pause()); await sleep(2500);   // iOS paused it well before you left
+      await vis(page, true); await sleep(300);
+      await page.evaluate(() => { window.__plays = 0; const real = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function () { window.__plays++; return real.call(this); }; wraith.P.restart(); });
+      await page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: 15000 }).catch(never); await sleep(2500);
+      let s = await snd(page);
+      ok('a player starting over while you’re away without sound stays quiet', !s.on && s.vPaused && await page.evaluate(() => window.__plays === 0), JSON.stringify(s));
+      await vis(page, false); await sleep(1000);
+      s = await snd(page);
+      ok('and coming back plays it, unmuted', !s.vPaused && !s.vMuted && await page.evaluate(() => document.getElementById('unmute').hidden), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the stream restarting with nobody looking or listening waits, and plays once you're back, not paused as if you'd paused it
+      const { page, done } = await stage(answer);
+      await levels(page, 15000); await played(page);
+      await page.evaluate(() => wraith.P.active().pause()); await sleep(2500);
+      await vis(page, true); await sleep(300);
+      await page.evaluate(() => { wraith.P.user.stream.id = 'older'; return wraith.P.refresh(); });
+      await levels(page, 15000); await sleep(1500);
+      let s = await snd(page);
+      ok('a stream restarting with nobody watching waits', !s.on && s.vPaused, JSON.stringify(s));
+      await vis(page, false); await sleep(1000);
+      s = await snd(page);
+      ok('and plays when you’re back', !s.vPaused && !s.userPaused, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // Control Center's play still brings back a sound that gave up
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      await unheard(page); await sleep(1500);
+      await heardAgain(page);
+      await cc(page, 'play'); await sounding(page);
+      const s = await snd(page);
+      ok('Control Center’s play brings a sound that gave up back', s.on && s.wanted && !s.paused, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // a picture paused as you left (iOS's own controls, say) isn't started by coming back: only one iOS wouldn't start out of sight is
+      const { page, done } = await stage(answer);
+      await levels(page, 15000); await played(page);
+      await page.evaluate(() => wraith.P.active().pause()); await sleep(2500);
+      await vis(page, true); await sleep(300);
+      await vis(page, false); await sleep(1500);
+      const s = await snd(page);
+      ok('a picture paused before you left stays paused when you’re back', s.vPaused && !s.on, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // a copy on the CDN never goes near the relay: a start by itself asks for the seat before anything plays
+      const calls = []; let copies = 0;
+      const { page, done, user } = await stage(seatLog(calls, () => calls.length > 1), { offline: true, pick: true, init: seated, copy: () => { copies++; return true; } });
+      await offlineCard(page); await sleep(500);
+      await page.evaluate(() => { wraith.Pages.takeAt = 0; });
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive());
+      await page.waitForFunction(() => /another window/.test(document.getElementById('msgbox').textContent), null, { timeout: 10000 }).catch(never);
+      await sleep(1000);
+      const s = await snd(page);
+      ok('a CDN feed starting by itself with another page in the seat never loads', !s.feed && copies === 0 && await page.evaluate(() => !document.getElementById('vCDN').getAttribute('src')), JSON.stringify({ copies, s }));
       await done();
     })(),
   ]);

@@ -5,7 +5,7 @@
 //   the look of a screen      layout duo
 //   the player                pause cover misc recover relay screen
 //   the CDN feed, videos      cdn vod replay
-//   leaving and coming back   sound away pages
+//   leaving and coming back   sound away pages unseen
 //   chat                      chat irc scroll emotes keyboard
 //   lists and account         lists browse account
 //   buttons end to end        ui          (about 90 s)
@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeClips } from './lib.mjs';
 
-const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo'.split(' ');
+const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo unseen'.split(' ');
 const queue = process.argv.slice(2).length ? process.argv.slice(2) : [...ALL];
 const SIDE_BY_SIDE = 6;
 const t0 = Date.now(), results = [];
