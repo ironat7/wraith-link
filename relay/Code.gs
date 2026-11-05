@@ -12,6 +12,9 @@ function doGet(e) {
   var seated = !p.who || seat_(p.who, p.take);
   if (p.ping) return note_(p, reply_(seated ? 200 : 409, 'pong'));
   if (!seated) return note_(p, reply_(409, 'another page is playing'), 409);
+  // Every page since 2026-11-05 names itself (who, or pg where it doesn't sit). One that doesn't is older than the seat, still running
+  // somewhere iOS keeps it (2026-11-05: one polled all afternoon, out of anyone's sight, and nothing a page can send reached it).
+  if (!p.who && !p.pg) return note_(p, reply_(410, 'this Wraith page is out of date: go to its home screen to update it'), 410);
   if (!p.u || !ALLOW.test(p.u)) return reply_(400, 'only Twitch playlist URLs');
   if (spent_()) return note_(p, reply_(599, 'Service invoked too many times for one day: urlfetch.'), 599);
   try {
