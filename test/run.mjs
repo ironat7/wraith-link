@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeClips } from './lib.mjs';
 
-const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo unseen update chatq return'.split(' ');
+const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo unseen update chatq return player'.split(' ');
 const queue = process.argv.slice(2).length ? process.argv.slice(2) : [...ALL];
 const SIDE_BY_SIDE = 6;
 const t0 = Date.now(), results = [];

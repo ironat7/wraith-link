@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3167,6 +3167,61 @@ if (want('unseen')) {
       await sleep(1000);
       const s = await snd(page);
       ok('a CDN feed starting by itself with another page in the seat never loads', !s.feed && copies === 0 && await page.evaluate(() => !document.getElementById('vCDN').getAttribute('src')), JSON.stringify({ copies, s }));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('player')) {
+  // The live player's own failures, from the 2026-11-05 review: a stale token, a token that didn't come, a restart already on the new
+  // broadcast, the CDN's names with no ladder, and what the stats count.
+  await Promise.all([
+    (async () => {
+      // usher refusing the first session is a stale token as often as a sub-only stream: a fresh token gets asked first
+      let refused = 0;
+      const { page, done } = await stage(route => relayOf(route).includes('usher') && !refused++ ? said(route, '403\nForbidden') : answer(route));
+      await levels(page, 15000);
+      const s = await st(page);
+      ok('a refused first session asks again with a fresh token before calling it sub-only', s.feed === 'live' && s.hls && !(await page.evaluate(() => wraith.P.subOnly)), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the token not coming once: another start, not the CDN
+      let fails = 1;
+      const { page, done } = await stage(answer, { gql: async (b, route) => { if (b.includes('streamPlaybackAccessToken') && fails-- > 0) { await route.fulfill({ status: 500, headers, body: 'down' }).catch(never); return true; } } });
+      await levels(page, 15000);
+      const s = await st(page);
+      ok('a token that doesn’t come starts again rather than going to the CDN', s.feed === 'live' && s.hls, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // a restart that already picked up the new broadcast isn't torn down again when the minute's check sees it
+      const { page, done, user } = await stage(answer);
+      await levels(page, 15000);
+      const gen = await page.evaluate(() => wraith.P.gen);
+      user.stream = { ...user.stream, id: '2' };
+      await page.evaluate(() => { wraith.P.liveId = '2'; return wraith.P.refresh(); });
+      const s = await page.evaluate(() => ({ gen: wraith.P.gen, id: wraith.P.user?.stream?.id }));
+      ok('a new broadcast the player is already on is taken in without starting over', s.gen === gen && s.id === '2', JSON.stringify({ gen, s }));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await stage(answer, { offline: true });
+      const s = await page.evaluate(() => { const P = wraith.P; P.groups = []; P.rend = null; P.q = '720p60'; const a = P.cdnRendition(); P.q = 'source'; return [a, P.cdnRendition()]; });
+      ok('with no ladder the CDN copy follows the quality picked', s[0] === '720p60' && s[1] === 'chunked', JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the stats count what the relay fetched: two for a start that brings its first playlist along, none for a refusal
+      let reply = '200\n#EXTM3U\n#EXT-X-STREAM-INF:X\nhttps://x.playlist.ttvnw.net/a.m3u8\n#WRAITH-MEDIA:200 https://x.playlist.ttvnw.net/a.m3u8\n#EXTM3U';
+      const { page, done } = await stage(route => said(route, reply), { offline: true });
+      const n0 = await page.evaluate(() => wraith.Quota.n);
+      await page.evaluate(() => wraith.relayGet('https://usher.ttvnw.net/api/channel/hls/x.m3u8'));
+      const n1 = await page.evaluate(() => wraith.Quota.n);
+      reply = '409\nanother page is playing';
+      await page.evaluate(() => wraith.relayGet('https://x.playlist.ttvnw.net/a.m3u8'));
+      const n2 = await page.evaluate(() => wraith.Quota.n);
+      ok('the relay count is what it fetched', n1 - n0 === 2 && n2 === n1, JSON.stringify([n0, n1, n2]));
       await done();
     })(),
   ]);
