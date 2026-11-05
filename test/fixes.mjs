@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -2289,7 +2289,9 @@ if (want('lists')) {
   const line = (id, who, text) => `@id=${id};tmi-sent-ts=${Date.now()};user-id=${who};display-name=u${who} :u${who}!u${who}@u${who}.tmi.twitch.tv PRIVMSG #staged :${text}`;
   const drawn = (page, id, timeout = 1500) => page.waitForFunction(i => document.querySelector(`#chat [data-id="${i}"]`), id, { timeout }).then(() => true, () => false);
   const json = (route, o, status = 200) => route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(o) }).catch(never);
-  const rows = (n, more) => ({ streams: { edges: Array.from({ length: n }, (_, i) => ({ cursor: 'c' + i, node: { viewersCount: 1, type: 'live', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } })), pageInfo: { hasNextPage: more } } });
+  // each page different channels, as Twitch's are (a channel turning up twice is listed once)
+  let rowN = 0;
+  const rows = (n, more) => ({ streams: { edges: Array.from({ length: n }, () => { const i = rowN++; return { cursor: 'c' + i, node: { viewersCount: 1, type: 'live', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } }; }), pageInfo: { hasNextPage: more } } });
   const onBrowse = async page => { await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' }); };
   await Promise.all([
     (async () => {
@@ -3222,6 +3224,55 @@ if (want('player')) {
       await page.evaluate(() => wraith.relayGet('https://x.playlist.ttvnw.net/a.m3u8'));
       const n2 = await page.evaluate(() => wraith.Quota.n);
       ok('the relay count is what it fetched', n1 - n0 === 2 && n2 === n1, JSON.stringify([n0, n1, n2]));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('lists2')) {
+  // Lists and getting around, from the 2026-11-05 review.
+  const row = (login, v) => ({ cursor: login, node: { viewersCount: v, type: 'live', createdAt: ago(60), title: login, previewImageURL: '', game: null, broadcaster: { login, displayName: login, profileImageURL: '' } } });
+  await Promise.all([
+    (async () => {
+      // Browse pages by place in a list that re-sorts: a channel turning up again isn't listed twice
+      let pageN = 0;
+      const gql = async b => { if (!b.includes('streams(first: 30')) return; pageN++; return { streams: { edges: pageN === 1 ? ['a1', 'a2', 'a3'].map((l, i) => row(l, 100 - i)) : ['a3', 'a4'].map((l, i) => row(l, 50 - i)), pageInfo: { hasNextPage: pageN === 1 } } }; };
+      const { page, done } = await stage(answer, { path: '', gql });
+      await page.evaluate(() => { wraith.Home.setView('browse'); });
+      await page.waitForFunction(() => document.querySelectorAll('#brList .row, #brList a').length >= 3, null, { timeout: 8000 }).catch(never);
+      await page.evaluate(() => wraith.Browse.page()); await sleep(800);
+      const names = await page.evaluate(() => [...document.querySelectorAll('#brList [href]')].map(a => new URL(a.href).searchParams.get('c')).filter(Boolean));
+      ok('Browse never lists a channel twice', names.length === new Set(names).size && names.includes('a4'), JSON.stringify(names));
+      await done();
+    })(),
+    (async () => {
+      // your follows asked for again while a load is under way load once it's done
+      let users = 0;
+      const gql = async b => { if (b.includes('users(logins')) { users++; await sleep(1200); } };
+      const { page, done } = await stage(answer, { path: '', gql });
+      await sleep(300);
+      await page.evaluate(() => { wraith.Home.at = 0; wraith.Home.load(true); wraith.Home.load(true); });
+      await sleep(4000);
+      ok('a reload asked for during one comes after it', users >= 2, `${users} loads`);
+      await done();
+    })(),
+    (async () => {
+      // how far in you are survives iOS reloading the page
+      const { page, done } = await stage(answer, { path: '', offline: true });
+      await sleep(300);
+      await page.evaluate(() => { history.pushState({ depth: 1 }, '', '?c=staged'); });
+      await page.reload({ waitUntil: 'domcontentloaded' }); await sleep(800);
+      await page.evaluate(() => document.getElementById('bBack').click()); await sleep(800);
+      const s = await page.evaluate(() => ({ search: location.search, home: !document.getElementById('home').hidden, state: history.state }));
+      ok('back after iOS reloads a channel goes back, not over it', s.search === '' && s.home && !s.state?.depth, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      const { page, done } = await stage(answer, { path: '' });
+      await sleep(300);
+      await page.evaluate(() => { wraith.UI.toast('one'); document.getElementById('home').hidden = true; document.getElementById('watch').hidden = false; wraith.UI.toast('two'); });
+      await sleep(4600);
+      ok('two toasts close by both go', await page.evaluate(() => document.getElementById('gtoast').hidden && document.getElementById('toast').hidden));
       await done();
     })(),
   ]);

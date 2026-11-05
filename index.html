@@ -1105,7 +1105,7 @@ const P = {
       const v = d.video;
       if (!v) return UI.msg(null, 'Video not found', 'It may have been deleted.');
       if (v.status === 'RECORDING' && v.owner?.login) {   // still live: watch the stream instead
-        history.replaceState(null, '', '?c=' + v.owner.login);
+        history.replaceState(history.state, '', '?c=' + v.owner.login);
         return this.open(v.owner.login, false);
       }
       this.vod = v;
@@ -2762,6 +2762,7 @@ const Replay = {
       for (const { node: n } of c.edges) {
         if (n.contentOffsetSeconds < this.last - 3 || this.seen.has(n.id) || Me.blocks.has(n.commenter?.id)) continue;
         this.seen.add(n.id);
+        if (this.seen.size > 5000) this.seen = new Set([...this.seen].slice(-2000));   // hours of a busy chat would otherwise all stay
         this.q.push(n);
       }
       this.q.sort((a, b) => a.contentOffsetSeconds - b.contentOffsetSeconds);
@@ -2819,8 +2820,11 @@ const Me = {
     const a = this.acct;
     if (!a) return;
     this.at.check = Date.now();
+    // A refusal waiting on its second look that can't be had (no network, Twitch erroring) is asked about again in a minute, and only a
+    // second refusal within a few minutes of the first ends the sign-in: an old one, never settled, ended it at the next 401, days later.
+    const again = () => { if (this.doubt) setTimeout(() => this.check(), 60e3); };
     let r;
-    try { r = await this.validate(a.token); } catch { return; }
+    try { r = await this.validate(a.token); } catch { return again(); }
     if (this.acct?.token !== a.token) return;   // signed out, or in again, meanwhile
     if (r.ok) {
       this.doubt = 0;
@@ -2830,9 +2834,10 @@ const Me = {
       const there = store.get('me', null);   // another page may have signed in since
       if (there?.token && there.token !== a.token) return this.save(there);
       this.log({ refused: Date.now() });
+      if (this.doubt && Date.now() - this.doubt > 5 * 60e3) this.doubt = 0;
       if (!this.doubt) { this.doubt = Date.now(); setTimeout(() => this.check(), 60e3); }   // once can be a hiccup at Twitch
       else if (Date.now() - this.doubt > 50e3) this.lost();
-    }
+    } else again();
   },
   lost() {   // Twitch's doing. Your lists stay: nothing about them has changed, and the next sign-in refreshes them.
     this.log({ ended: Date.now(), why: 'Twitch stopped accepting it' });
@@ -3550,10 +3555,10 @@ const UI = {
     $('bannerTxt').textContent = (P.cover ? 'Ad break · ad-free feed until it ends' : 'Ad break blocked · stream resumes when it ends')
       + (left > 1 ? ` (${clock(left)})` : '');
   },
-  toast(text) {
+  toast(text) {   // each of the two toasts with its own timer, or one could be left up for good
     const t = $($('watch').hidden ? 'gtoast' : 'toast');
     t.textContent = text; t.hidden = false;
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 4000);
+    clearTimeout(t.timer); t.timer = setTimeout(() => { t.hidden = true; }, 4000);
   },
 };
 
@@ -3817,7 +3822,8 @@ const Home = {
     this.renderRecent();
     if (Me.acct) Me.sync();
     if (this.view === 'browse') Browse.load();
-    if (this.busy || (!force && Date.now() - this.at < 45e3)) return;
+    if (this.busy) { if (force) this.again = true; return; }   // asked for afresh meanwhile (your follows just came in, Refresh): once this one's done
+    if (!force && Date.now() - this.at < 45e3) return;
     this.busy = true;
     $('refresh').classList.add('busy');
     if (!this.at) this.skeleton();
@@ -3839,6 +3845,7 @@ const Home = {
     } finally {
       this.busy = false;
       $('refresh').classList.remove('busy');
+      if (this.again) { this.again = false; this.load(true); }
     }
   },
   skeleton() {
@@ -3889,7 +3896,7 @@ const Home = {
 // Browse: what's on across Twitch, by category. The language chip is a Twitch tag; most browsing is in one language.
 const STREAM = 'viewersCount type createdAt title previewImageURL(width: 440, height: 248) game { displayName } broadcaster { login displayName profileImageURL(width: 150) }';
 const Browse = {
-  game: null, cursor: null, end: false, busy: false, at: 0, key: null, gameInfo: null, run: 0,
+  game: null, cursor: null, end: false, busy: false, at: 0, key: null, gameInfo: null, run: 0, listed: new Set(),
   lang() { return store.get('lang', 'English'); },
   async load(force) {
     const key = `${this.game || ''}|${this.lang()}`, deep = $('brList').children.length > 30;
@@ -3933,8 +3940,9 @@ const Browse = {
       const res = this.game ? d.game?.streams : d.streams;
       if (this.game && d.game) { $('brTitle').textContent = d.game.displayName; $('brSub').textContent = `${count(d.game.viewersCount)} watching`; }
       const edges = res?.edges || [];
-      if (first) box.textContent = '';
-      for (const { node: s } of edges) box.append(streamRow({ login: s.broadcaster?.login, name: s.broadcaster?.displayName, avatar: s.broadcaster?.profileImageURL, title: s.title,
+      if (first) { box.textContent = ''; this.listed = new Set(); }
+      // Twitch pages by place in a list that keeps re-sorting by viewers, so a channel that slipped a few places comes round again
+      for (const { node: s } of edges) if (!this.listed.has(s.broadcaster?.login) && this.listed.add(s.broadcaster?.login)) box.append(streamRow({ login: s.broadcaster?.login, name: s.broadcaster?.displayName, avatar: s.broadcaster?.profileImageURL, title: s.title,
         game: s.game?.displayName, viewers: s.viewersCount, since: s.createdAt, thumb: s.previewImageURL, type: s.type }));
       this.cursor = edges[edges.length - 1]?.cursor || null;
       this.end = !res?.pageInfo?.hasNextPage || !this.cursor;
@@ -3942,6 +3950,8 @@ const Browse = {
       loaded = true;
     } catch (e) {
       if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
+      // a later page that failed gets another go in a while, if the end of the list is still in reach then
+      else if (run === this.run) setTimeout(() => { if (run === this.run && !this.end) { this.near.unobserve($('brEnd')); this.near.observe($('brEnd')); } }, 15e3);
     } finally { if (run === this.run) this.busy = false; }
     // The observer below only calls when the end of the list comes into reach or goes out of it. With it still in reach after this page (a
     // tall window, few rows, a scroll landing as they went in), it would never call again: watching afresh has it say how things stand.
@@ -4046,7 +4056,7 @@ document.querySelector('.seg').addEventListener('click', e => {
   const b = e.target.closest('[data-view]');
   if (!b) return;
   const view = b.dataset.view;
-  if (Browse.game) { Browse.game = null; history.replaceState(null, '', location.pathname); }
+  if (Browse.game) { Browse.game = null; history.replaceState(history.state, '', location.pathname); }
   else if (view === Home.view) Home.y[view] = 0;   // the tab you're on: its top
   store.set('homeView', view);
   Home.setView(view);
@@ -4093,7 +4103,9 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) Upda
 setInterval(() => { if (!document.hidden) Update.check(); }, 15 * 60e3);
 
 // ── routing ─────────────────────────────────────────
-let depth = 0;
+// How many steps in from where the app opened, kept with each step: a page iOS reloads starts at 0 otherwise, and Back then skipped the
+// channel before and left it behind home, and a forward swipe counted as a back.
+let depth = history.state?.depth || 0;
 history.scrollRestoration = 'manual';
 function route(gesture) {
   const q = new URLSearchParams(location.search);
@@ -4114,14 +4126,14 @@ function route(gesture) {
 }
 function go(url, gesture) {
   if (!$('home').hidden) Home.y[Browse.game ? 'game' : Home.view] = scrollY;
-  history.pushState(null, '', url); depth++; route(gesture);
+  depth++; history.pushState({ depth }, '', url); route(gesture);
   if (url.startsWith('?g=')) scrollTo(0, 0);
 }
 function back() {
   if (depth > 0) history.back();
-  else { history.replaceState(null, '', location.pathname); route(false); }
+  else { history.replaceState({ depth: 0 }, '', location.pathname); route(false); }
 }
-window.addEventListener('popstate', () => { depth = Math.max(0, depth - 1); route(false); });
+window.addEventListener('popstate', () => { depth = history.state?.depth || 0; route(false); });
 
 Sound.setLevel(Sound.level);
 Sound.set(Sound.muted);
