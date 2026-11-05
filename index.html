@@ -593,6 +593,10 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
 (() => {
 'use strict';
 
+// This page's version, worked out from its own code: the relay's counts say which build each page calling it is running, and a
+// newer page on the server is one whose code works out differently.
+const buildOf = s => { let h = 7; for (let i = 0; i < s.length; i += 3) h = Math.imul(h, 31) + s.charCodeAt(i) | 0; return (h >>> 0).toString(36); };
+const BUILD = buildOf(document.currentScript?.textContent || '');
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 // "Wraith relay" Apps Script. Twitch's playlist servers turn away browsers on other
 // sites, so playlists come through it; the video itself loads straight from Twitch's CDN.
@@ -734,7 +738,9 @@ async function cdnBase(u) {
 
 // ── relay + playlist rewriting ──────────────────────
 let relayN = 0, primed = null;   // primed: the first media playlist, delivered with the master
-const relayUrl = u => { Quota.note(); return `${RELAY}?u=${encodeURIComponent(u)}&n=${++relayN}${Pages.seat()}`; };
+// Every call says which page and build it's from, and for what (m: a stream's start, v: the picture, a: the sound away, x: anything else).
+// The relay turns away a call that names no page: that's a page from before 2026-11-05, still running somewhere, which no seat can stop.
+const relayUrl = (u, k = 'x') => { Quota.note(); return `${RELAY}?u=${encodeURIComponent(u)}&n=${++relayN}&k=${k}&b=${BUILD}${Pages.seat()}`; };
 // Google allows the relay 20,000 fetches a day. This counts this device's, every page's, for the stats panel.
 const Quota = {
   get n() { const q = store.get('relayDay', null); return q?.day === new Date().toDateString() ? q.n : 0; },
@@ -874,7 +880,7 @@ class RelayLoader {
     };
     const send = () => {
       sent++;
-      fetch(relayUrl(real) + first, { signal: ctrl.signal, cache: 'no-store' })
+      fetch(relayUrl(real, this.quiet ? 'a' : context.type === 'manifest' ? 'm' : 'v') + first, { signal: ctrl.signal, cache: 'no-store' })
         .then(r => r.text())
         .then(t => finish(() => this.parse(t, real)), () => {
           if (++failed >= 2) finish(() => callbacks.onError({ code: 0, text: 'relay unreachable' }, context, null, st));
@@ -1860,7 +1866,7 @@ const Pages = {
   // On screen and the one iOS is sending your taps to. A page iOS keeps running behind another can still call itself visible. (A computer's
   // window can be in view without the focus, and there's no such page to tell apart.)
   inFront() { return !document.hidden && (!ios || document.hasFocus()); },
-  seat() { return this.seated ? `&who=${this.id}${this.taking() ? '&take=1' : ''}` : ''; },
+  seat() { return this.seated ? `&who=${this.id}${this.taking() ? '&take=1' : ''}` : `&pg=${this.id}`; },   // a page that doesn't sit names itself all the same
   answered(code) {
     if (code === 409) this.heard('play');
     else if (code) this.takeAt = 0;
@@ -3576,7 +3582,7 @@ const Sheet = {
     }
     const lit = this.lit;
     return [
-      `Page: ${Pages.id} · ${document.visibilityState} · ${document.hasFocus() ? 'focused' : 'not focused'}`,
+      `Page: ${Pages.id} · build ${BUILD} · ${document.visibilityState} · ${document.hasFocus() ? 'focused' : 'not focused'}`,
       `Frames: ${q ? `${q.totalVideoFrames.toLocaleString()} decoded, ${q.droppedVideoFrames.toLocaleString()} dropped${q.displayCompositedVideoFrames ? `, ${q.displayCompositedVideoFrames.toLocaleString()} composited` : ''}` : 'no count'} · last one ${lit == null ? 'unread' : `${lit} of 255 bright`}`,
       `Player: ${Math.round(b.width)}×${Math.round(b.height)} at ${Math.round(b.x)},${Math.round(b.y)} · ${getComputedStyle(v).visibility} · ${v.id === 'vLL' ? (inView ? 'in view' : 'out of view') : 'CDN'} · ready ${v.readyState}${v.webkitPresentationMode && v.webkitPresentationMode !== 'inline' ? ` · ${v.webkitPresentationMode}` : ''}${over.length ? ` · under ${over.map(n => n.id || n.className || n.tagName).join(', ')}` : ''}`,
     ];
@@ -3886,23 +3892,26 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !$
 
 // The Home Screen app can sit suspended for days, still running the version it started with. Coming back
 // to it checks for a newer page, which loads the next time you're on the home screen with nothing open.
+// Newer means its code differs from what's running here. (Going by the server's tag missed one: a launch from the phone's
+// cache runs the old code, and the first look takes the new tag for this page's own, 2026-11-05.)
 const Update = {
-  tag: null, at: 0, ready: false,
+  at: 0, ready: false,
   async check() {
-    if (Date.now() - this.at < 6e4) return;
+    if (this.ready || Date.now() - this.at < 6e4) return this.apply();
     this.at = Date.now();
     try {
-      const r = await fetch(location.pathname, { method: 'HEAD', cache: 'no-cache' });
-      const tag = r.headers.get('etag') || r.headers.get('last-modified');
-      if (!r.ok || !tag) return;
-      if (this.tag && tag !== this.tag) this.ready = true;
-      this.tag ||= tag;
+      const r = await fetch(location.pathname, { cache: 'no-cache' });   // asks the server, which mostly says the copy here is current
+      if (!r.ok) return;
+      const code = [...new DOMParser().parseFromString(await r.text(), 'text/html').scripts].find(s => s.textContent.includes('const BUILD'));
+      if (code && buildOf(code.textContent) !== BUILD) this.ready = true;
       this.apply();
     } catch {}
   },
   apply() { if (this.ready && !$('home').hidden && $('sheet').hidden && !$('q').value) location.reload(); },
 };
 document.addEventListener('visibilitychange', () => { if (!document.hidden) Update.check(); });
+// Watching for hours in front never comes back to the app, so it looks now and then too, and again on the way home, where it can load.
+setInterval(() => { if (!document.hidden) Update.check(); }, 15 * 60e3);
 
 // ── routing ─────────────────────────────────────────
 let depth = 0;
@@ -3921,7 +3930,7 @@ function route(gesture) {
     if (g) { Home.before ??= Home.view; Home.setView('browse'); }
     else { Home.setView(Home.before ?? Home.view); Home.before = null; }
     Home.load();
-    Update.apply();
+    Update.apply(); Update.check();
   }
 }
 function go(url, gesture) {
@@ -3942,7 +3951,7 @@ Me.save(Me.acct);
 Me.check();
 Me.sync();
 setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);

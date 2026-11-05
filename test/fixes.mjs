@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3168,6 +3168,69 @@ if (want('unseen')) {
       const s = await snd(page);
       ok('a CDN feed starting by itself with another page in the seat never loads', !s.feed && copies === 0 && await page.evaluate(() => !document.getElementById('vCDN').getAttribute('src')), JSON.stringify({ copies, s }));
       await done();
+    })(),
+  ]);
+}
+
+if (want('update')) {
+  // A newer page is one whose code differs from what's running, whatever the server's tags say (2026-11-05: the phone ran a build from
+  // before the seat all afternoon). It loads on the home screen, never under a stream, and every relay call says which page and build it's from.
+  const html = await (await fetch(base)).text();
+  const newer = html.replace("'use strict';", "'use strict'; // a newer build");
+  const page0 = async serveNew => {
+    const c = await browser.newContext({ userAgent: IPHONE, viewport: { width: 951, height: 669 } });
+    let fresh = false;
+    await c.route(u => !u.href.startsWith(base), route => route.abort().catch(never));   // nothing here needs Twitch
+    await c.route(u => u.href.startsWith(base), route => route.fulfill({ status: 200, headers: { 'content-type': 'text/html' }, body: fresh ? newer : html }));
+    const page = await c.newPage();
+    page.errors = []; page.on('pageerror', e => page.errors.push(e.message));
+    await page.goto(base);
+    await page.waitForFunction(() => window.wraith?.Update);
+    await page.evaluate(() => { window.__same = 1; });
+    return { c, page, serve: on => { fresh = on; }, check: () => page.evaluate(() => { wraith.Update.at = 0; return wraith.Update.check(); }) };
+  };
+  await Promise.all([
+    (async () => {
+      const { c, page, serve, check } = await page0();
+      await check();
+      ok('the same code on the server is no update', await page.evaluate(() => !wraith.Update.ready && window.__same === 1));
+      serve(true);
+      const reload = page.waitForEvent('load', { timeout: 10000 }).then(() => true, () => false);
+      await check();
+      ok('different code on the server loads it, on the home screen', await reload && await page.evaluate(() => !window.__same).catch(() => false));
+      ok('and the page running it is the newer build', await page.evaluate(() => [...document.scripts].some(s => s.textContent.includes('a newer build'))).catch(() => false));
+      ok('no page errors (update)', page.errors.length === 0, page.errors.join(' | '));
+      await c.close();
+    })(),
+    (async () => {
+      const { c, page, serve, check } = await page0();
+      await page.evaluate(() => history.pushState(null, '', '?c=staged'));
+      await page.evaluate(() => { document.getElementById('home').hidden = true; document.getElementById('watch').hidden = false; });
+      serve(true);
+      await check(); await sleep(1500);
+      ok('an update waits while something is open', await page.evaluate(() => wraith.Update.ready && window.__same === 1));
+      const reload = page.waitForEvent('load', { timeout: 10000 }).then(() => true, () => false);
+      await page.evaluate(() => { document.getElementById('watch').hidden = true; history.replaceState(null, '', location.pathname); dispatchEvent(new PopStateEvent('popstate')); });
+      ok('and loads on the way home', await reload);
+      await c.close();
+    })(),
+    (async () => {
+      const c = await browser.newContext({ userAgent: IPHONE });
+      const calls = [];
+      await c.route(u => !u.href.startsWith(base), route => route.abort().catch(never));
+      await c.route(/script\.google/, route => { calls.push(new URL(route.request().url()).searchParams); return route.fulfill({ status: 200, headers, body: '200\n#EXTM3U\n' }); });
+      const page = await c.newPage();
+      await page.goto(base);
+      await page.waitForFunction(() => window.wraith?.Update);
+      const built = await page.evaluate(() => wraith.BUILD);
+      await page.evaluate(() => wraith.Pages.ask());
+      await page.evaluate(() => fetch('https://script.google.com/x').catch(() => {}));   // nothing
+      await page.evaluate(() => wraith.relayGet('https://usher.ttvnw.net/api/channel/hls/x.m3u8'));
+      await sleep(500);
+      const named = calls.filter(q => q.get('u'));
+      ok('every relay call names its page and build', named.length > 0 && named.every(q => (q.get('pg') || q.get('who')) && q.get('b') === built && q.get('k')), JSON.stringify(named.map(q => Object.fromEntries(q))));
+      ok('pings name the page too', calls.some(q => q.get('ping') && (q.get('pg') || q.get('who'))));
+      await c.close();
     })(),
   ]);
 }
