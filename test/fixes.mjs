@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3222,6 +3222,38 @@ if (want('player')) {
       await page.evaluate(() => wraith.relayGet('https://x.playlist.ttvnw.net/a.m3u8'));
       const n2 = await page.evaluate(() => wraith.Quota.n);
       ok('the relay count is what it fetched', n1 - n0 === 2 && n2 === n1, JSON.stringify([n0, n1, n2]));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('budget')) {
+  // What the relay's 20,000 fetches a day go on (2026-11-05 review).
+  await Promise.all([
+    (async () => {
+      // away, the sound asks for its playlist only as what's listed runs low, not every 2 s, and goes on playing
+      const calls = [];
+      const { page, done } = await stage(route => { const q = new URL(route.request().url()).searchParams; calls.push({ k: q.get('k'), t: Date.now() }); return answer(route); });
+      await levels(page, 15000);
+      await vis(page, true); await sounding(page);
+      const t0 = Date.now(), a0 = await page.evaluate(() => document.getElementById('aBG').currentTime);
+      await sleep(20000);
+      const sound = calls.filter(c => c.k === 'a' && c.t >= t0).length, picture = calls.filter(c => c.k === 'v' && c.t >= t0).length;
+      const s = await snd(page), a1 = await page.evaluate(() => document.getElementById('aBG').currentTime);
+      ok('away, the sound reloads its playlist about every 3.5 s, not every 2', sound >= 3 && sound <= 7, `${sound} in 20 s`);
+      ok('and the picture’s player asks for nothing meanwhile', picture === 0, `${picture}`);
+      ok('and the sound plays on through it', s.on && !s.paused && a1 - a0 > 17, `${(a1 - a0).toFixed(1)} s heard`);
+      await done();
+    })(),
+    (async () => {
+      // away with nothing to hear: the picture's player stops at once rather than polling on for 5 s
+      const calls = [];
+      const { page, done } = await stage(route => { calls.push(Date.now()); return answer(route); });
+      await levels(page, 15000);
+      await page.evaluate(() => document.getElementById('bMute').click());
+      await vis(page, true);
+      const t0 = Date.now(); await sleep(6000);
+      ok('away with the sound off, nothing polls the relay', calls.filter(t => t > t0 + 500).length === 0, `${calls.filter(t => t > t0).length} calls`);
       await done();
     })(),
   ]);
