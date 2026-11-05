@@ -1,7 +1,7 @@
-// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real streams: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
-import { serve, launch, sleep, checks, IPHONE } from './lib.mjs';
+import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE } from './lib.mjs';
 const srv = await serve(), { base } = srv;
 const browser = await launch();
 const which = process.argv[2] || 'all', want = s => which === 'all' || which === s;
@@ -25,14 +25,10 @@ async function open({ iphone = false, init, initArg, w = 900, h = 1000, touch = 
   // stages ad breaks by kind of session, and counts what goes through the relay
   const ads = { on: NONE, masters: [], relay: 0, slow: null, ms: 0 };
   const kindOf = new Map();
-  await page.route(/script\.google/, async route => {
-    const u = new URL(route.request().url()).searchParams.get('u');
-    if (!u) return route.continue();
-    ads.relay++;
-    const res = await route.fetch().catch(() => null);
-    if (!res) return route.abort().catch(() => {});
-    let b = await res.text();
-    if (u.includes('usher.ttvnw.net')) {
+  await makeStream(page, async (route, u, body) => {
+    if (u) ads.relay++;
+    let b = body;
+    if (u?.includes('usher.ttvnw.net')) {
       const kind = JSON.parse(new URL(u).searchParams.get('token') || '{}').player_type || '?';
       if (!kindOf.has(u)) ads.masters.push(kind);   // a slow fetch's twin is the same session
       kindOf.set(u, kind);
@@ -41,7 +37,7 @@ async function open({ iphone = false, init, initArg, w = 900, h = 1000, touch = 
       const cut = b.indexOf('\n#WRAITH-MEDIA:');   // the first media playlist comes along with the master
       if (cut >= 0) { const rest = b.slice(cut + 15), eol = rest.indexOf('\n'), url = rest.slice(0, eol).split(' ')[1]; kindOf.set(url, kind); if (ads.on.has(kind)) b = b.replace(/(#EXTINF:[\d.]+),live/g, '$1,Amazon|1'); }
     } else if (ads.on.has(kindOf.get(u)) && b.includes('#EXTINF')) b = b.replace(/(#EXTINF:[\d.]+),live/g, '$1,Amazon|1');
-    await route.fulfill({ response: res, body: b }).catch(() => {});
+    await route.fulfill({ status: 200, headers, body: b }).catch(() => {});
   });
   return { c, page, ads, done: async () => { ok('no page errors', page.errors.length === 0, page.errors.join(' | ')); await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close(); } };
 }
@@ -60,7 +56,6 @@ const MASTER = '200\n#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x
 const MEDIA = '200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/1.ts\n#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/2.ts\n';
 // the audio_only feed: a live playlist of silence, two seconds a segment
 const AUDIO = () => { const n = Math.floor(Date.now() / 2000); return `200\n#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:${n}\n` + [0, 1, 2, 3, 4, 5].map(i => `#EXTINF:2.000,live\nhttps://x.hls.ttvnw.net/${n + i}.aac\n`).join(''); };
-const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 0x40, 0x01, 0xbf, 0xfc, 0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]).flat());
 // the CDN's copy of a stream, as a finished playlist: Chrome's native HLS stalls on a growing one, and a seek can break it
 const DVR = '#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PLAYLIST-TYPE:VOD\n' + Array.from({ length: 300 }, (_, i) => `#EXTINF:2.000,\n${i}.aac\n`).join('') + '#EXT-X-ENDLIST\n';
 const headers = { 'access-control-allow-origin': '*' }, never = () => {};

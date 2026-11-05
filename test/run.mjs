@@ -1,7 +1,7 @@
 // usage: node run.mjs [section ...]
 // Sections side by side, with each one's time and whatever failed. Run the ones a change touches, then push: Chrome can't show what only
 // iOS does, the phone is the real test, and a push is live in under a minute. With no sections, every one in fixes.mjs (about 2 minutes),
-// which is for a change that reaches across the player. Real-stream sections also spend the relay's daily calls, which the phone shares.
+// which is for a change that reaches across the player. None of them touch the relay or a real stream: they watch one made here (see lib.mjs).
 //   the look of a screen      layout duo
 //   the player                pause cover misc recover relay screen
 //   the CDN feed, videos      cdn vod replay
@@ -9,15 +9,17 @@
 //   chat                      chat irc scroll emotes keyboard
 //   lists and account         lists browse account
 //   buttons end to end        ui          (about 90 s)
-//   time to first frame       start       (about 20 s)
-// Only when that code changes: playback.mjs quality, vods.mjs, harness.mjs (a 6 minute soak of latency and stalls).
+//   time to first frame       start       (about 20 s, on real streams and the real relay)
+// Only when that code changes, with WRAITH_REAL_RELAY=1 as they spend the phone's daily fetches: playback.mjs quality, vods.mjs, harness.mjs (a 6 minute soak of latency and stalls).
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { makeClips } from './lib.mjs';
 
 const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo'.split(' ');
 const queue = process.argv.slice(2).length ? process.argv.slice(2) : [...ALL];
 const SIDE_BY_SIDE = 6;
 const t0 = Date.now(), results = [];
+makeClips();
 
 let streams;
 const channels = () => streams ??= fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko', 'Content-Type': 'application/json' }, body: JSON.stringify({ query: 'query { streams(first: 2) { edges { node { broadcaster { login } } } } }' }) })
@@ -28,7 +30,7 @@ const one = async section => {
   const started = Date.now(), args = await command(section);
   await new Promise(done => {
     let out = '';
-    const p = spawn(process.execPath, args, { cwd: fileURLToPath(new URL('.', import.meta.url)) });
+    const p = spawn(process.execPath, args, { cwd: fileURLToPath(new URL('.', import.meta.url)), env: section === 'start' ? { ...process.env, WRAITH_REAL_RELAY: '1' } : process.env });
     p.stdout.on('data', d => { out += d; });
     p.stderr.on('data', d => { out += d; });
     p.on('close', code => {

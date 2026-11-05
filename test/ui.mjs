@@ -1,6 +1,6 @@
 // usage: node ui.mjs home|watch|replay|signin|irc|offline [live channel]. Screenshots land in the current folder.
-// UI scenarios in headless Chrome. Twitch's sign-in endpoints are mocked; everything else is real.
-import { serve, launch, sleep, checks, IPHONE } from './lib.mjs';
+// UI scenarios in headless Chrome. Twitch's sign-in endpoints are mocked, and the stream is one made here; everything else is real.
+import { serve, launch, sleep, checks, IPHONE, makeStream } from './lib.mjs';
 const srv = await serve(), { base } = srv;
 const browser = await launch();
 const which = process.argv[2] || 'all', CH = process.argv[3] || await biggestLive();
@@ -16,6 +16,7 @@ async function ctx(w = 390, h = 844, touch = true, init) {
   const page = await c.newPage();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
+  await makeStream(page);
   return { c, page };
 }
 
