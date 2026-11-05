@@ -8,21 +8,61 @@ var ALLOW = /^https:\/\/(([a-z0-9-]+\.)*ttvnw\.net\/|[a-z0-9]+\.cloudfront\.net\
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
+  if (p.stats) return reply_(200, stats_());
   var seated = !p.who || seat_(p.who, p.take);
-  if (p.ping) return reply_(seated ? 200 : 409, 'pong');
-  if (!seated) return reply_(409, 'another page is playing');
+  if (p.ping) return note_(p, reply_(seated ? 200 : 409, 'pong'));
+  if (!seated) return note_(p, reply_(409, 'another page is playing'), 409);
   if (!p.u || !ALLOW.test(p.u)) return reply_(400, 'only Twitch playlist URLs');
-  if (spent_()) return reply_(599, 'Service invoked too many times for one day: urlfetch.');
+  if (spent_()) return note_(p, reply_(599, 'Service invoked too many times for one day: urlfetch.'), 599);
   try {
     var r = UrlFetchApp.fetch(p.u, { muteHttpExceptions: true, followRedirects: true });
     var code = r.getResponseCode(), body = r.getContentText();
     // With &first=<rendition> ("top" = source), a master playlist comes back with that rendition's
     // media playlist appended, which saves the page a round trip before the first frame.
     if (code === 200 && p.first) body += first_(body, p.first);
-    return reply_(code, body);
+    return note_(p, reply_(code, body), code, true);
   } catch (err) {
     if (/too many times/i.test(String(err))) spent_(true);
-    return reply_(599, String(err));
+    return note_(p, reply_(599, String(err)), 599, true);
+  }
+}
+
+// Who's been calling, by page: each page's calls this minute and last, what kinds, which build, how many 409s. ?stats=1 shows it,
+// so two players on one phone can be told apart from one player reloading twice as often (2026-11-05: one call a second for an hour).
+function note_(p, out, code, fetched) {
+  try {
+    var cache = CacheService.getScriptCache(), key = 'w:' + String(p.who || '-').slice(0, 12);
+    var got = cache.getAll(['whos', key]), ids = JSON.parse(got.whos || '[]');
+    var s = JSON.parse(got[key] || 'null') || { t0: Date.now(), n: 0, f: 0, kinds: {} };
+    var now = Date.now(), min = Math.floor(now / 60000);
+    if (s.min !== min) { s.prev = s.min === min - 1 ? s.cur : 0; s.cur = 0; s.min = min; }
+    s.n++; s.cur++; s.t1 = now;
+    if (fetched) s.f++;
+    if (p.ping) s.pings = (s.pings || 0) + 1;
+    if (p.take) s.takes = (s.takes || 0) + 1;
+    if (code === 409) s.refused = (s.refused || 0) + 1;
+    if (code && code !== 200 && code !== 409) s.last = code;
+    var kind = p.k || (p.ping ? 'ping' : /usher\./.test(p.u || '') ? 'master' : /cloudfront/.test(p.u || '') ? 'cdn' : 'media');
+    s.kinds[kind] = (s.kinds[kind] || 0) + 1;
+    if (p.b) s.b = String(p.b).slice(0, 12);
+    var put = {}; put[key] = JSON.stringify(s);
+    if (ids.indexOf(key) < 0) { ids.push(key); put.whos = JSON.stringify(ids.slice(-40)); }
+    cache.putAll(put, 21600);
+  } catch (err) {}
+  return out;
+}
+function stats_() {
+  try {
+    var cache = CacheService.getScriptCache(), ids = JSON.parse(cache.get('whos') || '[]'), all = cache.getAll(ids), now = Date.now(), min = Math.floor(now / 60000);
+    return JSON.stringify(ids.map(function (k) {
+      var s = JSON.parse(all[k] || 'null');
+      if (!s) return null;
+      return { who: k.slice(2), build: s.b || '', calls: s.n, fetches: s.f, thisMin: s.min === min ? s.cur : 0, lastMin: s.min === min ? s.prev : s.min === min - 1 ? s.cur : 0,
+        kinds: s.kinds, pings: s.pings || 0, takes: s.takes || 0, refused: s.refused || 0, lastOdd: s.last || 0,
+        first: new Date(s.t0).toISOString(), lastSeen: Math.round((now - s.t1) / 1000) + ' s ago' };
+    }).filter(Boolean).sort(function (a, b) { return parseInt(a.lastSeen, 10) - parseInt(b.lastSeen, 10); }), null, 1);
+  } catch (err) {
+    return String(err);
   }
 }
 
