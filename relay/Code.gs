@@ -45,6 +45,14 @@ function note_(p, out, code, fetched) {
     var kind = p.k || (p.ping ? 'ping' : /usher\./.test(p.u || '') ? 'master' : /cloudfront/.test(p.u || '') ? 'cdn' : 'media');
     s.kinds[kind] = (s.kinds[kind] || 0) + 1;
     if (p.b) s.b = String(p.b).slice(0, 12);
+    if (p.n) s.ns = (s.ns || []).concat(+p.n).slice(-6);   // each page numbers its calls: two pages under one name show as two runs
+    if (p.u) {   // which playlists, by the end of their address: two players under one name poll two
+      var tail = String(p.u).split('?')[0].slice(-10), us = s.us || {};
+      us[tail] = (us[tail] || 0) + 1;
+      var tails = Object.keys(us);
+      if (tails.length > 6) delete us[tails[0]];
+      s.us = us;
+    }
     var put = {}; put[key] = JSON.stringify(s);
     if (ids.indexOf(key) < 0) { ids.push(key); put.whos = JSON.stringify(ids.slice(-40)); }
     cache.putAll(put, 21600);
@@ -58,7 +66,7 @@ function stats_() {
       var s = JSON.parse(all[k] || 'null');
       if (!s) return null;
       return { who: k.slice(2), build: s.b || '', calls: s.n, fetches: s.f, thisMin: s.min === min ? s.cur : 0, lastMin: s.min === min ? s.prev : s.min === min - 1 ? s.cur : 0,
-        kinds: s.kinds, pings: s.pings || 0, takes: s.takes || 0, refused: s.refused || 0, lastOdd: s.last || 0,
+        kinds: s.kinds, pings: s.pings || 0, takes: s.takes || 0, refused: s.refused || 0, lastOdd: s.last || 0, calledAs: s.ns || [], playlists: s.us || {},
         first: new Date(s.t0).toISOString(), lastSeen: Math.round((now - s.t1) / 1000) + ' s ago' };
     }).filter(Boolean).sort(function (a, b) { return parseInt(a.lastSeen, 10) - parseInt(b.lastSeen, 10); }), null, 1);
   } catch (err) {
