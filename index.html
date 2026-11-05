@@ -388,8 +388,8 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
 }
 html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --sal: 0px; --sar: 0px; }
 @media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
-/* fullscreen with nothing to hand to iOS's player yet: the player fills the screen (see UI.fill) */
-#watch.full .stage { position: fixed; inset: 0; z-index: 5; max-height: none; aspect-ratio: auto; }
+/* fullscreen on an iPhone: the player fills the screen, edge to edge as iOS's own player has it, with the controls clear of iOS's strip (see UI.fill) */
+#watch.full .stage { position: fixed; inset: 0; z-index: 5; width: auto; height: auto; max-height: none; margin: 0; aspect-ratio: auto; overflow: hidden; border-radius: 0; background: #000; }
 #watch.full .hud { padding: var(--sat) 0 var(--sab); }
 #watch.full #bChat { display: none; }
 /* An offline channel has no picture to give the screen to: its page is its row, a line saying so, and its videos. */
@@ -2082,7 +2082,7 @@ const Pill = {
     } catch (e) { Away.add('pill: no stand-in (' + e.name + ')'); }
   },
 };
-window.addEventListener('resize', () => { if (Pill.hiding) Pill.sync(); });
+new ResizeObserver(() => { if (Pill.hiding) Pill.sync(); }).observe(stage);   // a bigger picture (fullscreen, the phone turning) needs a bigger factor
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const ms = { setActionHandler: (a, f) => Remote.set(a, f) };
   const hold = () => { BG.held = true; BG.wanted = BG.carry = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
@@ -3532,7 +3532,10 @@ const UI = {
   unmute(on) { $('unmute').hidden = !on; },
   // For when there's no fullscreen to be had yet: the Home Screen app has no browser bar to hide, so the player just
   // fills the screen. The status bar stays, and on an iPhone Duo that's a pill over the picture.
-  fill(on) { $('watch').classList.toggle('full', on); setIcon($('bFull'), on ? 'unfull' : 'full'); },
+  fill(on) {
+    if (on !== $('watch').classList.contains('full')) Away.add(on ? 'fullscreen in the page' : 'fullscreen in the page closed');
+    $('watch').classList.toggle('full', on); setIcon($('bFull'), on ? 'unfull' : 'full');
+  },
   playIcon() { const v = P.active(); setIcon($('bPlay'), v && !v.paused ? 'pause' : 'play'); },
   feed() {
     $('bLat').classList.toggle('cdn', P.feed === 'cdn');
@@ -3632,9 +3635,11 @@ $('bFull').onclick = () => {
   if (!v) return;   // no picture yet
   if (stage.requestFullscreen) stage.requestFullscreen().catch(() => UI.fill(true));
   else if (stage.webkitRequestFullscreen) stage.webkitRequestFullscreen();
-  else {   // an iPhone can't make part of a page fullscreen, only hand the video to iOS's own player
-    try { v.webkitEnterFullscreen(); } catch { UI.fill(true); }
-  }
+  // An iPhone can't make part of a page fullscreen, only hand the video to iOS's own player. A stream fills the screen in the page instead:
+  // touching iOS's player's controls brought the Now Playing pill back (Jerry, 2026-11-05), and on the Duo it looks no different, keeping
+  // iOS's strip just the same. A past video still goes to iOS's player, for its scrubbing.
+  else if (P.feed === 'vod') { try { v.webkitEnterFullscreen(); } catch { UI.fill(true); } }
+  else UI.fill(true);
 };
 for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => setIcon($('bFull'), document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full'));
 document.addEventListener('keydown', e => {
