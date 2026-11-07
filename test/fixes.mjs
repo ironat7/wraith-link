@@ -1,4 +1,4 @@
-// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE } from './lib.mjs';
@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3605,6 +3605,193 @@ if (want('update')) {
       ok('every relay call names its page and build', named.length > 0 && named.every(q => (q.get('pg') || q.get('who')) && q.get('b') === built && q.get('k')), JSON.stringify(named.map(q => Object.fromEntries(q))));
       ok('pings name the page too', calls.some(q => q.get('ping') && (q.get('pg') || q.get('who'))));
       await c.close();
+    })(),
+  ]);
+}
+
+if (want('battery')) {
+  // Nothing of Wraith's runs down the battery out of sight or with nobody there (Jerry, 2026-11-07: "wraith will never under any
+  // circumstances stealth drain battery right? make sure of it").
+  const lockStub = () => {
+    window.__held = 0;
+    Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: async () => {
+      window.__held++;
+      const s = { release: async () => { if (!s.gone) { s.gone = true; window.__held--; } }, addEventListener() {} };
+      return s;
+    } } });
+  };
+  const away = page => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]'));
+  // what the page's own code asks of the network: fetches and sockets, counted from the start
+  const netWatch = () => {
+    window.__net = [];
+    const f = window.fetch.bind(window);
+    window.fetch = (u, o) => { window.__net.push(String(u?.url || u).slice(0, 90)); return f(u, o); };
+    const W = window.WebSocket;
+    window.WebSocket = class extends W { constructor(u, p) { super(u, p); window.__net.push('socket ' + u); } };
+  };
+  const hiddenFromStart = () => {
+    window.__hidden = true;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__hidden });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => window.__hidden ? 'hidden' : 'visible' });
+  };
+  await Promise.all([
+    (async () => {
+      // the pill's stand-in: its AudioContext, which on iOS put all of the app's sound into 128-sample chunks from the first tap on, is
+      // closed as soon as its track is made, and the stand-in is muted except while it's hiding the pill
+      const { page, done } = await stage(answer, { init: () => {
+        window.__acs = [];
+        const Real = window.AudioContext;
+        window.AudioContext = class extends Real { constructor(...a) { super(...a); window.__acs.push(this); } };
+      } });
+      await levels(page, 15000); await sleep(800);
+      const look = () => page.evaluate(() => { const d = document.querySelector('video.decoy') || wraith.Pill.decoy; return { made: !!d, on: !!d?.isConnected, muted: d?.muted, acs: window.__acs.map(c => c.state) }; });
+      let s = await look();
+      ok('the pill’s stand-in has its AudioContext closed straight away', s.made && s.acs.length >= 1 && s.acs.every(x => x === 'closed'), JSON.stringify(s));
+      ok('and while it hides the pill it isn’t muted, as WebKit passes over a muted one', s.on && s.muted === false, JSON.stringify(s));
+      await vis(page, true); await sounding(page);
+      s = await look();
+      ok('away, it’s muted, so it doesn’t count as a stream’s sound playing', !s.on && s.muted === true, JSON.stringify(s));
+      await vis(page, false); await sleep(500);
+      ok('back in front, it hides the pill again', (await look()).muted === false);
+      await page.evaluate(() => wraith.Pill.set(false)); await sleep(300);
+      ok('and with the pill turned on in the sheet, it’s muted too', (await look()).muted === true);
+      await done();
+    })(),
+    (async () => {
+      // the screen lock goes with a picture that's getting somewhere: one stuck a minute (no network, a copy that's stopped) lets go
+      const { page, done } = await stage(answer, { init: lockStub });
+      const held = () => page.evaluate(() => window.__held);
+      await levels(page, 15000);
+      await page.mouse.click(5, 600); await sleep(200);
+      await page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing'))); await sleep(400);
+      ok('a picture that’s just started holds the screen on', await held() === 1, String(await held()));
+      await page.evaluate(() => { wraith.P.ranAt = Date.now() - 61e3; }); await sleep(1400);
+      ok('one that hasn’t moved for a minute lets it go', await held() === 0, String(await held()));
+      ok('and the settings sheet says why', /hasn’t moved for a minute/.test(await page.evaluate(() => wraith.Awake.say())), await page.evaluate(() => wraith.Awake.say()));
+      await page.evaluate(() => wraith.P.active().dispatchEvent(new Event('playing'))); await sleep(400);
+      ok('moving again, it holds it again', await held() === 1, String(await held()));
+      await done();
+    })(),
+    (async () => {
+      // a muted picture nobody has touched or come back to for half an hour pauses; one with sound plays on, as you'd hear it
+      const { page, done } = await stage(answer, { init: lockStub });
+      await levels(page, 15000);
+      const state = () => page.evaluate(() => ({ paused: wraith.P.active().paused, user: wraith.P.userPaused, big: !document.getElementById('bigPlay').hidden }));
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(2200);
+      let s = await state();
+      ok('with the sound on and nobody touching it, a picture plays on', !s.user && !s.big, JSON.stringify(s));
+      await page.evaluate(() => { document.getElementById('bMute').click(); wraith.Pages.seenAt = Date.now() - 31 * 60e3; });   // the tap, then half an hour on
+      await page.waitForFunction(() => wraith.P.userPaused, null, { timeout: 5000 }).catch(never);
+      s = await state();
+      ok('muted and untouched for half an hour, it pauses, with the big button to play it again', s.paused && s.user && s.big, JSON.stringify(s));
+      ok('the settings sheet says why', (await away(page)).some(x => x.endsWith('paused: muted, and untouched for 30 min')));
+      await sleep(1200);
+      ok('and its chat stops too', await page.evaluate(() => !wraith.Chat.ws && !wraith.Chat.timer));
+      await page.evaluate(() => document.getElementById('bigPlay').click()); await sleep(2200);
+      s = await state();
+      ok('and that tap plays it, and counts as someone there', !s.user && !s.big, JSON.stringify(s));
+      ok('with chat back', await page.evaluate(() => !!wraith.Chat.ws && !!wraith.Chat.timer));
+      await done();
+    })(),
+    (async () => {
+      // a channel waiting to go live with nobody about for half an hour (or a page iOS keeps going where you can't see it, calling itself
+      // visible): it asks Twitch nothing and draws no chat, and a tap brings both back
+      const gqls = [];
+      const { page, done } = await stage(answer, { offline: true, gql: () => { gqls.push(Date.now()); } });
+      await page.waitForFunction(() => wraith.P.user && !wraith.P.user.stream && wraith.Chat.ws, null, { timeout: 10000 }).catch(never);
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(1400);
+      ok('with nobody about, its chat stops', await page.evaluate(() => !wraith.Chat.ws && !wraith.Chat.timer));
+      const t0 = Date.now();
+      await page.evaluate(() => wraith.P.lookLive()); await sleep(500);
+      ok('and the look for it going live asks nothing', gqls.filter(t => t > t0).length === 0, String(gqls.filter(t => t > t0).length));
+      const t1 = Date.now();
+      await page.mouse.click(5, 600); await sleep(800);
+      ok('a tap looks at once, and brings chat back', gqls.some(t => t > t1) && await page.evaluate(() => !!wraith.Chat.ws && !!wraith.Chat.timer), `${gqls.filter(t => t > t1).length}`);
+      await done();
+    })(),
+    (async () => {
+      // out of sight with nothing to hear, the page asks nobody anything: not the relay about the seat, not Twitch about the channel
+      const calls = [], gqls = [];
+      const { page, done } = await stage(route => { calls.push(Date.now()); return answer(route); },
+        { init: () => Object.defineProperty(navigator, 'webdriver', { get: () => false }), gql: () => { gqls.push(Date.now()); } });
+      await levels(page, 15000);
+      ok('(the page sits in the seat, as on the phone)', await page.evaluate(() => wraith.Pages.seated));
+      await page.evaluate(() => document.getElementById('bMute').click());
+      await vis(page, true);
+      const t0 = Date.now();
+      await page.evaluate(() => { wraith.Pages.ticks = 29; });   // the next second is the seat's ping's turn
+      await sleep(1600);
+      await page.evaluate(() => wraith.P.refresh());   // and what the once-a-minute look at the channel does
+      await sleep(600);
+      ok('out of sight with the sound off, nothing asks the relay', calls.filter(t => t > t0 + 300).length === 0, `${calls.filter(t => t > t0 + 300).length} calls`);
+      ok('nor Twitch about the channel', gqls.filter(t => t > t0 + 300).length === 0, `${gqls.filter(t => t > t0 + 300).length} asks`);
+      const t1 = Date.now();
+      await vis(page, false); await sleep(1500);
+      ok('coming back asks both at once', calls.some(t => t > t1) && gqls.some(t => t > t1), `${calls.filter(t => t > t1).length} ${gqls.filter(t => t > t1).length}`);
+      await done();
+    })(),
+    ...['?c=staged', ''].map(path => (async () => {
+      // a page iOS loads out of sight (it reloads ones it drops while the app's away) asks nothing of anyone till it's looked at
+      const { page, done } = await stage(answer, { path, init: `(${hiddenFromStart})(); (${netWatch})();` });
+      await sleep(2500);
+      const early = await page.evaluate(() => window.__net);
+      ok(`a ${path ? 'channel' : 'home screen'} loaded out of sight asks nothing of Twitch, chat, the relay or the server`, early.length === 0, early.join(' | '));
+      await page.evaluate(() => { window.__hidden = false; });
+      if (path) await levels(page, 6000); else await sleep(2500);
+      const s = await page.evaluate(() => ({ net: window.__net.length, hls: !!wraith.P.hls }));
+      ok(`and once it is, it starts${path ? '' : ' on its lists'}`, s.net > 0 && (path ? s.hls : true), JSON.stringify(s));
+      await done();
+    })()),
+    (async () => {
+      // out of sight, chat's timers stop with its socket, as the page keeps running for the sound
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await page.evaluate(() => { wraith.Chat.napAfter = 300; });
+      await vis(page, true); await sleep(900);
+      ok('away, chat’s timers stop along with its socket', await page.evaluate(() => !wraith.Chat.timer && !wraith.Chat.pinger && !wraith.Chat.ws));
+      await vis(page, false); await sleep(300);
+      ok('and start again coming back', await page.evaluate(() => !!wraith.Chat.timer && !!wraith.Chat.pinger));
+      await done();
+    })(),
+    (async () => {
+      // the settings sheet's look at a frame, which has iOS keep the picture's player going, isn't taken with the app away
+      const { page, done } = await stage(answer, { init: () => {
+        window.__draws = 0;
+        const d = CanvasRenderingContext2D.prototype.drawImage;
+        CanvasRenderingContext2D.prototype.drawImage = function (...a) { window.__draws++; return d.apply(this, a); };
+      } });
+      await levels(page, 15000);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(1600);
+      ok('(the settings sheet looks at a frame now and then)', await page.evaluate(() => window.__draws) >= 1, String(await page.evaluate(() => window.__draws)));
+      await vis(page, true); await sleep(600);
+      const at = await page.evaluate(() => window.__draws);
+      await sleep(6000);
+      ok('with the app away, it doesn’t, sheet open or not', await page.evaluate(() => window.__draws) === at, `${at} → ${await page.evaluate(() => window.__draws)}`);
+      await done();
+    })(),
+    (async () => {
+      // the sign-in code screen: no asking Twitch with the app away, and a code that runs out with nobody about isn't replaced
+      const { page, done } = await stage(answer);
+      let codes = 0;
+      const polls = [];
+      await page.route('https://id.twitch.tv/**', route => {
+        const u = route.request().url();
+        if (u.includes('/device')) { codes++; return route.fulfill({ status: 200, headers, body: JSON.stringify({ device_code: 'D' + codes, user_code: 'CODE' + codes, interval: 1, expires_in: 3 }) }).catch(never); }
+        if (u.includes('/token')) { polls.push(Date.now()); return route.fulfill({ status: 400, headers, body: JSON.stringify({ status: 400, message: 'authorization_pending' }) }).catch(never); }
+        return route.abort().catch(never);
+      });
+      await levels(page, 15000);
+      await page.evaluate(() => wraith.SignIn.start()); await sleep(2300);
+      ok('(the code screen asks Twitch every second or so whether it’s been approved)', polls.length >= 1, String(polls.length));
+      await vis(page, true);
+      const t0 = Date.now(); await sleep(2500);
+      ok('but not with the app away', polls.filter(t => t > t0 + 300).length === 0, `${polls.filter(t => t > t0 + 300).length}`);
+      await vis(page, false); await sleep(800);
+      ok('back, with its code run out meanwhile, it gets a new one', codes === 2, String(codes));
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(4500);
+      const shown = await page.evaluate(() => document.getElementById('sheetBody').textContent);
+      ok('one that runs out with nobody about for half an hour isn’t replaced, and says so', codes === 2 && /That code ran out/.test(shown), `${codes} ${shown.slice(0, 80)}`);
+      await done();
     })(),
   ]);
 }

@@ -769,7 +769,7 @@ const Quota = {
   save() { clearTimeout(this.t); this.t = 0; if (!this.pending) return; const n = this.n; this.pending = 0; store.set('relayDay', { day: new Date().toDateString(), n }); },
 };
 document.addEventListener('visibilitychange', () => { if (document.hidden) Quota.save(); });
-fetch(RELAY + '?ping=1').catch(() => {});   // Apps Script wakes faster when warm
+if (!document.hidden) fetch(RELAY + '?ping=1').catch(() => {});   // Apps Script wakes faster when warm; a page loaded out of sight has no hurry
 
 const attr = (line, k) => (line.match(new RegExp(`[:,]${k}="?([^",]*)`)) || [])[1] || '';
 const audioIn = master => master?.match(/VIDEO="audio_only"[^\n]*\n(\S+)/)?.[1] || null;
@@ -1059,6 +1059,8 @@ const nothingOpen = () => ({
   started: false, relayGone: false,  // whether a picture has played since this was opened; whether the relay's out for the day
   asked403: false, liveId: null,     // whether a refusal has been asked about with a fresh token; the broadcast the live player is on
   openedAt: 0, quietStart: false,    // when this was opened; a stream that started by itself with nobody touching the screen lately, so muted
+  ranAt: 0, ranT: -1,                // when the picture last moved or started playing, and where it was then
+  refreshDue: false,                 // a look at the channel skipped with nobody waiting on it (out of sight with no sound, nobody about), for later
   errs: {},                          // player errors this stream, for the stats panel
 });
 
@@ -1077,6 +1079,8 @@ const P = {
     this.login = login; this.openedAt = Date.now();
     if (gesture) unlock();
     UI.watch(login, cached);
+    // a page iOS loaded out of sight asks nothing of anyone till it's looked at (Pages.seen), and then about the stream as it is by then
+    if (!Pages.shown) { await Pages.seen(); if (gen !== this.gen) return; this.openedAt = Date.now(); }
     Chat.open(login);
     this.tokenP = getToken(login).catch(e => e);
     try {
@@ -1092,11 +1096,7 @@ const P = {
       }
       this.start = Date.parse(u.stream.createdAt) / 1000;
       this.base = await cdnBase(u);
-      const loaded = Date.now();
-      await Pages.seen();
       if (gen !== this.gen) return;
-      // looked at long after iOS reloaded it out of sight: the stream, and its token (good for 20 minutes), may have moved on
-      if (Date.now() - loaded > 60e3) return this.open(login, false);
       if (!(await Pages.confirm()) || gen !== this.gen) return;
       if (this.pref === 'cdn' && cdnLive) this.playCdn(); else this.playLive();
       this.timer = setInterval(() => this.refresh(), 60e3);
@@ -1111,6 +1111,7 @@ const P = {
     if (gesture) unlock();
     UI.watch(null);
     Chat.clear();
+    if (!Pages.shown) { await Pages.seen(); if (gen !== this.gen) return; }   // as for a stream
     try {
       const d = await gql(`query($id: ID!) { video(id: $id) { id title lengthSeconds createdAt status seekPreviewsURL resourceRestriction { type } game { displayName } owner { id login displayName profileImageURL(width: 150) } } }`, { id });
       if (gen !== this.gen) return;
@@ -1140,8 +1141,6 @@ const P = {
       const pos = store.get('pos.' + v.id, 0);
       if (pos > 15 && pos < v.lengthSeconds - 30) this.vodAt = pos;
       UI.spin(true);
-      await Pages.seen();
-      if (gen !== this.gen) return revoke(this.vodSrcs);
       this.nextVodSource();
     } catch (e) {
       if (gen === this.gen) UI.msg(null, 'Couldn’t load the video', e.message, () => this.openVod(id));
@@ -1301,7 +1300,7 @@ const P = {
     clearTimeout(this.retryT);
     this.retryT = setTimeout(async () => {
       if (gen !== this.gen || this.feed !== 'cdn' || this.pref !== 'live') return;
-      if (BG.on || (document.hidden && !BG.may())) return this.retryLive();
+      if (BG.on || (document.hidden && !BG.may()) || Pages.idle()) return this.retryLive();
       if (!window.Hls?.isSupported()) { hlsAgain(); return this.retryLive(); }   // nothing to go back to yet: the picture stays put
       const tok = await tokenFor(this.login);
       const master = tok && !tok.authorization?.isForbidden ? await relayText(usherUrl(this.login, tok)) : null;
@@ -1513,6 +1512,25 @@ const P = {
 
   active() { return this.feed === 'live' ? vL : this.feed ? vC : null; },
 
+  // Whether the picture is getting anywhere, for the screen lock: looked at once a second, and each time it plays. Only with a frame to
+  // show: a start over, or a jump to the live edge with nothing loaded, moves the clock without getting anywhere, and on a dead network
+  // the starts over would go on for as long as it's dead.
+  ran() {
+    const v = this.active();
+    if (v && v.currentTime !== this.ranT && v.readyState >= 2) { this.ranT = v.currentTime; this.ranAt = Date.now(); }
+  },
+  stuck() { return Date.now() - this.ranAt > 60e3; },
+  // A muted picture going on screen with nobody having touched it or come back to the app for half an hour: likely nobody's there, or it's
+  // a page iOS keeps out of sight while calling it visible (which is how a page nobody could see started Asmongold, 2026-11-05). Left
+  // going, it would hold the screen on, and its player the network, for as long as the phone lasts.
+  unwatched() { const v = this.active(); return !!v && !v.paused && v.muted && !document.hidden && Date.now() - Pages.seenAt > IDLE; },
+  nobodyHere() {
+    Away.add('paused: muted, and untouched for 30 min');
+    togglePlay();
+    UI.big(true);
+    UI.toast('Paused: it was muted, and nobody had touched the screen for 30 minutes');
+  },
+
   latency() {
     if (this.feed === 'live') {
       if (vL.readyState < 3 && Date.now() < this.quietUntil) return null;   // on its way to the live edge, with the last figure out of date
@@ -1673,6 +1691,9 @@ const P = {
   },
 
   async refresh() {
+    // Out of sight with no sound, going or paused from the lock screen (whose play has to find the stream as it is now), or with nobody
+    // about (Pages.idle), nobody's waiting on what Twitch would say: coming back asks
+    if ((document.hidden && !BG.on && !BG.may()) || Pages.idle()) { this.refreshDue = true; return; }
     const gen = this.gen;
     try {
       const [u] = await getUsers([this.login]);
@@ -1713,7 +1734,7 @@ const P = {
   // started something elsewhere since. A page iOS keeps where you can't see it can call itself in front.
   // Nor does iOS always know a page isn't in front: so with nobody touching the screen for a while, it starts muted, with the button to unmute.
   async lookLive(gen = this.gen) {
-    if (gen !== this.gen || this.feed || !this.user || this.user.stream || !Pages.inFront()) return;
+    if (gen !== this.gen || this.feed || !this.user || this.user.stream || !Pages.inFront() || Pages.idle()) return;
     try {
       const [u] = await getUsers([this.login]);
       if (gen !== this.gen || !u?.stream || !Pages.inFront()) return;
@@ -1776,6 +1797,7 @@ const P = {
 // few minutes: a player starting over (the stream restarting, a start still under way as you left) brings it back, and its own retries keep
 // it going. A page iOS froze and woke up hours later, still thinking it was playing, stays quiet (2026-11-05).
 const KEEP = 5 * 60e3;
+const IDLE = 30 * 60e3;   // nobody has touched the screen or come back to the app for this long: likely nobody's there
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
@@ -1955,12 +1977,13 @@ const Pages = {
   seated: ios && !navigator.webdriver, ticks: 0,   // test runs share the real relay, and leave the seat to the phone
   takeAt: document.hidden ? 0 : Date.now(),        // when you last did something here
   touchedAt: 0, askedAt: 0,                         // when you last touched the screen; when this page last asked about the seat by itself
+  seenAt: document.hidden ? 0 : Date.now(),         // when you were last known to be here: a tap, or coming back to the app
   taking() { return Date.now() - this.takeAt < 60e3; },
   // On screen and the one iOS is sending your taps to. A page iOS keeps running behind another can still call itself visible. (A computer's
   // window can be in view without the focus, and there's no such page to tell apart.)
   inFront() { return !document.hidden && (!ios || document.hasFocus()); },
   // A page that doesn't sit names itself all the same. Nor does one nobody has looked at yet, which iOS reloaded out of sight: the seat is
-  // still the page it replaced's, and a 409 would close it before you're back (a past broadcast loads its playlists before it's seen).
+  // still the page it replaced's, and a 409 would close it before you're back.
   seat() { return this.seated && this.shown ? `&who=${this.id}${this.taking() ? '&take=1' : ''}` : `&pg=${this.id}`; },
   answered(code) {
     if (code === 409) this.heard('play');
@@ -1979,12 +2002,29 @@ const Pages = {
       return code !== 409;
     } catch { return true; }   // better to play than not, if the relay can't say
   },
-  // iOS reloads a page it has dropped while the app's away (four times in 23 minutes on 2026-11-04). Out of sight that page starts no
-  // player until it's looked at: it would have no sound to give, and the memory and relay calls are likely what got it dropped.
+  // iOS reloads a page it has dropped while the app's away (four times in 23 minutes on 2026-11-04). Out of sight that page asks nothing of
+  // anyone until it's looked at, which may be never: it would have no sound to give, and the memory and relay calls are likely what got it
+  // dropped. The channel, its chat, your account, the lists and any newer version all wait.
   seen() { return this.shown ? Promise.resolve() : new Promise(go => this.waiting.push(go)); },
+  whenSeen(go) { if (this.shown) go(); else this.seen().then(go); },
+  // Nobody has touched the screen or come back to the app for half an hour, and there's nothing to hear: likely nobody's there, or it's a
+  // page iOS keeps going where you can't see it while calling it visible. Such a page asks nothing of anyone and draws no chat till you're
+  // back; a muted picture pauses (P.nobodyHere). Sound you can hear carries on, as you'd know it was there.
+  idle() {
+    if (Date.now() - this.seenAt < IDLE) return false;
+    const v = P.active();
+    return !(BG.going() || (v && !v.paused && !v.muted && !document.hidden));
+  },
   see() {
-    this.shown = true; this.takeAt = Date.now();
+    const was = this.idle();
+    this.shown = true; this.takeAt = this.seenAt = Date.now();
     for (const go of this.waiting.splice(0)) go();
+    if (was) {   // what waited for you
+      Chat.wake();
+      if (!$('home').hidden) Home.load();
+      if (P.refreshDue) { P.refreshDue = false; P.refresh(); }
+      P.lookLive();
+    }
     // You're here. With nothing of this page's going through the relay to say so (a channel waiting to go live, the CDN's feed, a picture
     // paused a while), a ping does: otherwise the seat stays with a page iOS dropped, and this one is turned away once it starts playing.
     if (this.seated && (P.login || P.vod) && !relayBusy() && Date.now() - this.askedAt > 20e3) { this.askedAt = Date.now(); this.ask(); }
@@ -2016,6 +2056,7 @@ document.addEventListener('visibilitychange', () => {
   if ($('watch').hidden) return;
   if (!document.hidden) {
     BG.carry = false;
+    if (P.refreshDue) { P.refreshDue = false; P.refresh(); }   // the look at the channel that waited for you
     if (BG.on) return BG.stop();
     if (P.feed === 'live' && P.hls && !vL.paused) P.resume();   // its loading stopped as the app left, and the picture's still going
     P.wake();
@@ -2075,23 +2116,35 @@ const Pill = {
       const r = stage.getBoundingClientRect();
       stage.style.setProperty('--k', Math.max(2, Math.ceil(Math.sqrt(r.width * r.height / 1e5) * 4) / 4));   // under 120,000 px² laid out
       if (!this.decoy.isConnected) document.body.append(this.decoy);
+      this.decoy.muted = false;   // WebKit passes over a muted one
       Remote.off();
-    } else { this.decoy?.remove(); Remote.on(); }
+    } else { if (this.decoy) { this.decoy.muted = true; this.decoy.remove(); } Remote.on(); }
     stage.classList.toggle('pillfree', hide);
     $('watch').classList.toggle('pillshown', ios && !this.on);   // it has room kept for it beside the picture (see the Duo's strip)
     if (hide !== this.hiding) Away.add(hide ? 'pill hidden' : 'pill back');
     this.hiding = hide;
   },
-  // A MediaStream with sound, as WebKit needs for it to count, whose sound then stops: a live audio track keeps iOS's audio
-  // running in short buffers, which costs battery. A canvas track with no frames keeps the stream itself going.
+  // A MediaStream with a sound track, as WebKit needs for it to count (its player lists the track, which is all hasAudio asks), and a
+  // canvas track with no frames, which keeps the stream active. Neither may cost a thing. WebKit never takes this player as far as
+  // loadedmetadata (it waits for a first frame that never comes), so an earlier build's stopping of the sound there never happened, and
+  // the AudioContext behind the track ran from the first tap for as long as the page lived. While one runs, WebKit has iOS play all of the
+  // app's sound, the stream's too, in front and away, in chunks of 128 samples rather than a video's 4096 (MediaSessionManagerCocoa
+  // updateSessionState, webAudioCount), and it renders silence the whole time. Now it's suspended before it can start and closed straight
+  // after, which ends its part with iOS. The track outlives it, live with nothing in it (closing doesn't end it, and a stream keeps its
+  // tracks, ended or not), so the stand-in still counts. And an unmuted stand-in with a sound track counts as a stream's sound playing,
+  // which takes those chunks down to 20 ms: it's muted except while it's hiding the pill (Jerry, 2026-11-07: "wraith will never under any
+  // circumstances stealth drain battery right? make sure of it").
   make() {
     const d = this.decoy = document.createElement('video');
     d.className = 'decoy'; d.playsInline = true; d.setAttribute('playsinline', ''); d.disableRemotePlayback = true;
+    d.muted = true;
     try {
-      const ac = new (window.AudioContext || window.webkitAudioContext)(), dest = ac.createMediaStreamDestination(), cv = document.createElement('canvas');
+      const ac = this.ac = new (window.AudioContext || window.webkitAudioContext)();
+      try { ac.suspend().catch(() => {}); } catch {}   // at once: WebKit starts one by itself a moment after it's made, and inside a tap it may
+      const dest = ac.createMediaStreamDestination(), cv = document.createElement('canvas');
       cv.width = 4; cv.height = 3;
       d.srcObject = new MediaStream([...dest.stream.getAudioTracks(), ...cv.captureStream(0).getVideoTracks()]);
-      d.addEventListener('loadedmetadata', () => { for (const t of dest.stream.getAudioTracks()) t.stop(); ac.close().catch(() => {}); }, { once: true });
+      try { ac.close().catch(() => {}); } catch {}
     } catch (e) { Away.add('pill: no stand-in (' + e.name + ')'); }
   },
 };
@@ -2141,9 +2194,12 @@ const Sound = {
 // (WakeLock::request). A picture can start later than that, or with no tap at all, so any tap asks, and with nothing playing lets go at once.
 // Jerry, 2026-11-05: "It's not keeping the screen awake", with the sound on, and the page couldn't say which of the two had let go. The
 // settings sheet now says how the screen is being kept on, and an answer from iOS that never comes no longer stops the asking.
+// Only while the picture is going, though: one that hasn't moved for a minute (no network, a copy that's stopped, a stream frozen at the
+// source) lets the screen sleep by iOS's own clock, as iOS does for a stuck picture with sound. A muted one that nobody has touched for half
+// an hour pauses (P.nobodyHere), which lets go of it too.
 const Awake = {
   lock: null, asking: 0, granted: false, refused: '', since: 0, lost: 0,
-  wanted() { const v = P.active(); return !!v && !v.paused && !document.hidden; },
+  wanted() { const v = P.active(); return !!v && !v.paused && !document.hidden && !P.stuck(); },
   async ask() {
     if (this.lock || !navigator.wakeLock) return;
     if (this.asking && Date.now() - this.asking < 5e3) return;   // WebKit asks iOS before it answers
@@ -2170,11 +2226,12 @@ const Awake = {
     const l = this.lock; this.lock = null; l?.release().catch(() => {});
   },
   say() {   // for the settings sheet
-    const v = P.active(), own = v && !v.paused && !v.muted ? ', and iOS keeps it on for a picture with sound' : '';
+    const v = P.active(), going = v && !v.paused && !document.hidden, own = going && !v.muted && !P.stuck() ? ', and iOS keeps it on for a picture with sound' : '';
     if (!navigator.wakeLock) return `Screen: this phone has no screen lock${own}`;
     if (this.lock) return `Screen: kept on by the lock since ${new Date(this.since).toTimeString().slice(0, 5)}${this.lost ? ` (iOS took it back ${this.lost}×)` : ''}${own}`;
     if (this.asking) return `Screen: lock asked for ${Math.round((Date.now() - this.asking) / 1e3)} s ago, no answer${own}`;
-    return `Screen: no lock${this.refused ? ` (refused: ${this.refused}, a tap gets it)` : this.wanted() ? '' : ' (nothing playing)'}${own}`;
+    const idle = !going ? ' (nothing playing)' : P.stuck() ? ' (the picture hasn’t moved for a minute)' : '';
+    return `Screen: no lock${this.refused ? ` (refused: ${this.refused}, a tap gets it)` : idle}${own}`;
   },
 };
 document.addEventListener('visibilitychange', () => Awake.sync());
@@ -2184,6 +2241,8 @@ for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
   Pages.touchedAt = Date.now();
   Pages.see();
 }, { capture: true, passive: true });
+// typing is you being there too, sending with the keyboard's own key included, which no tap goes with
+document.addEventListener('keydown', () => Pages.see(), { capture: true, passive: true });
 
 // A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
 window.addEventListener('online', () => {
@@ -2216,6 +2275,7 @@ for (const v of [vL, vC]) {
       if (v.muted && !Sound.muted && !P.quietStart && !BG.on && $('unmute').hidden) v.muted = false;
       if (!v.paused) P.userPaused = false;   // only you can have started a paused picture, with iOS's own controls
       if (P.feed === 'cdn') P.asks = 0;
+      P.ranAt = Date.now();
       UI.spin(false); UI.big(false);
     }
     UI.playIcon(); Awake.sync();
@@ -2272,10 +2332,14 @@ setInterval(() => {
     Away.add('iOS didn’t say');
     document.dispatchEvent(new Event('visibilitychange'));
   }
-  if (P.feed) { P.tick(); UI.banner(); }
+  if (P.feed) { P.tick(); UI.banner(); P.ran(); if (P.unwatched()) P.nobodyHere(); }
   if (P.feed && Awake.granted) Awake.sync();
   P.checkFull();
-  if (Pages.seated && (P.login || P.vod) && !relayBusy() && ++Pages.ticks % 30 === 0) Pages.ask();   // nothing else of this page's asks the relay
+  // nothing else of this page's asks the relay. Out of sight that's only for sound that's going: with none, the page is doing nothing
+  // to ask about, and coming back asks at once (Pages.see)
+  const idle = Pages.idle();
+  if (Pages.seated && (P.login || P.vod) && !relayBusy() && (!document.hidden || BG.going()) && !idle && ++Pages.ticks % 30 === 0) Pages.ask();
+  if (idle && Chat.ws) Chat.doze();
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
@@ -2329,9 +2393,8 @@ const Chat = {
     this.connect();
     this.history(60);
     this.sampleT = setTimeout(() => this.sample(), 4e3);
-    this.timer = setInterval(() => this.flush(), 200);
+    this.clocks(true);
     this.nap();
-    this.pinger = setInterval(() => this.ping(), 25e3);
     this.loadGlobal();
     Talk.show();
   },
@@ -2364,7 +2427,7 @@ const Chat = {
       if (this.ws !== ws) return;
       this.ws = null; this.behind = true;
       const login = this.login;
-      setTimeout(() => { if (login && this.login === login && !this.ws && !document.hidden) this.connect(); }, Math.min(15e3, 1000 * 2 ** this.retry++));
+      setTimeout(() => { if (login && this.login === login && !this.ws && !document.hidden && !Pages.idle()) this.connect(); }, Math.min(15e3, 1000 * 2 ** this.retry++));
     };
   },
 
@@ -2380,15 +2443,24 @@ const Chat = {
   // and coming back opens it and fills in what was missed.
   nap() {
     clearTimeout(this.napT);
-    if (document.hidden) this.napT = setTimeout(() => {
-      if (!document.hidden) return;
-      if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
-      for (const q of this.queue) this.seen.delete(q.m.tags.id);   // never drawn, so the history fetched on the way back fills them in
-      this.behind = true; this.queue = [];
-    }, this.napAfter);
+    if (document.hidden) this.napT = setTimeout(() => { if (document.hidden) this.doze(); }, this.napAfter);
   },
-  wake() {   // back from the background, or the network changed
-    if (this.login && !document.hidden && (!this.ws || Date.now() - this.rx > 15e3)) this.reconnect();
+  // So too with nobody about for half an hour (Pages.idle): a page iOS keeps where you can't see it would otherwise draw chat for good.
+  doze() {
+    if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+    for (const q of this.queue) this.seen.delete(q.m.tags.id);   // never drawn, so the history fetched on the way back fills them in
+    this.behind = true; this.queue = [];
+    this.clocks(false);   // and its timers stop: away with the sound on, the page keeps running, and they'd wake it for nothing
+  },
+  wake() {   // back from the background or from nobody being about, or the network changed
+    if (!this.login || document.hidden || Pages.idle()) return;
+    if (!this.timer) this.clocks(true);
+    if (!this.ws || Date.now() - this.rx > 15e3) this.reconnect();
+  },
+  // Drawing what's due, five times a second, and asking a quiet socket whether it's alive.
+  clocks(on) {
+    clearInterval(this.timer); clearInterval(this.pinger); this.timer = this.pinger = 0;
+    if (on) { this.timer = setInterval(() => this.flush(), 200); this.pinger = setInterval(() => this.ping(), 25e3); }
   },
   reconnect() {
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
@@ -2730,7 +2802,7 @@ const Chat = {
   },
 
   close() {
-    clearInterval(this.timer); clearInterval(this.pinger); clearTimeout(this.sampleT); clearTimeout(this.napT); clearTimeout(this.againT);
+    this.clocks(false); clearTimeout(this.sampleT); clearTimeout(this.napT); clearTimeout(this.againT);
     if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
     this.login = null; this.uid = null; this.queue = []; this.mine = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
     this.seen = new Set(); this.names = new Map(); this.said = []; this.sampled = false;
@@ -3057,6 +3129,11 @@ const SignIn = {
       const b = el('button', 'btn pri wide', 'Try again'); b.type = 'button'; b.onclick = () => this.start(); body.append(b);
       return;
     }
+    if (f.over) {
+      body.append(el('p', 'sgn', 'That code ran out.'));
+      const b = el('button', 'btn pri wide', 'Get a new code'); b.type = 'button'; b.onclick = () => this.start(); body.append(b);
+      return;
+    }
     const code = el('button', 'code', f.code); code.type = 'button'; code.setAttribute('aria-label', 'Copy the code');
     code.onclick = () => { navigator.clipboard?.writeText(f.code).then(() => UI.toast('Code copied')).catch(() => {}); };
     const go = el('a', 'btn pri wide', 'Approve on Twitch');
@@ -3070,8 +3147,9 @@ const SignIn = {
     if (f?.device) this.timer = setTimeout(() => this.poll(f), f.every);
   },
   async poll(f) {
-    if (f !== this.flow || $('sheet').hidden || f.polling) return;   // coming back from approving it asks at the same moment as the timer, and a code only works once
-    if (Date.now() > f.until) return this.start();
+    // coming back from approving it asks at the same moment as the timer, and a code only works once. Out of sight it waits, as coming back asks
+    if (f !== this.flow || $('sheet').hidden || f.polling || document.hidden) return;
+    if (Date.now() > f.until) return this.again();
     clearTimeout(this.timer);
     f.polling = true;
     let spent = false;
@@ -3090,11 +3168,18 @@ const SignIn = {
         if (P.subOnly && P.login) P.open(P.login);   // your account may be in
         return;
       }
-      if (/invalid device code|expired/i.test(j.message || '')) return this.start();
+      if (/invalid device code|expired/i.test(j.message || '')) return this.again();
     } catch (e) {
       if (spent) { this.flow = { error: e.message }; if (!$('sheet').hidden) Sheet.render(); return; }
     } finally { f.polling = false; }
     this.wait();
+  },
+  // A code that ran out gets a new one if someone's about to use it. A sheet left open with nobody there would ask Twitch every few
+  // seconds for good, a new code every half hour.
+  again() {
+    if (Date.now() - Pages.seenAt < IDLE) return this.start();
+    this.flow = { over: true };
+    if (!$('sheet').hidden) Sheet.render();
   },
   cancel() { clearTimeout(this.timer); this.flow = null; },
 };
@@ -3761,7 +3846,8 @@ const Sheet = {
   },
   stats() {
     const s = $('sheetBody').querySelector('.stats:last-child');
-    if (!s || !this.fn || !P.feed) return;
+    // nobody reads it out of sight or with nobody about, and its look at a frame (look) would keep the picture's player going while away
+    if (!s || !this.fn || !P.feed || document.hidden || Pages.idle()) return;
     const v = P.active(), l = P.latency(), lines = [];
     const lvl = P.hls?.levels?.[P.hls.currentLevel];
     lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : { live: 'low-latency feed', cdn: 'CDN feed', vod: 'past broadcast' }[P.feed]}`);
@@ -4106,7 +4192,7 @@ document.querySelector('#home').addEventListener('click', e => {
 const refreshHome = () => { if (Home.view === 'browse') Browse.load(true); Home.load(true); };
 $('refresh').onclick = () => { if (Me.acct) Me.loadFollows(); refreshHome(); };
 $('brand').onclick = e => { e.preventDefault(); scrollTo(0, 0); refreshHome(); };
-setInterval(() => { if (!document.hidden && !$('home').hidden) Home.load(); }, 60e3);
+setInterval(() => { if (!document.hidden && !$('home').hidden && !Pages.idle()) Home.load(); }, 60e3);   // and once you're back (Pages.see)
 $('search').addEventListener('submit', e => { e.preventDefault(); Search.submit(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('home').hidden) Home.load(); });
 
@@ -4131,7 +4217,7 @@ const Update = {
 };
 document.addEventListener('visibilitychange', () => { if (!document.hidden) Update.check(); });
 // Watching for hours in front never comes back to the app, so it looks now and then too, and again on the way home, where it can load.
-setInterval(() => { if (!document.hidden) Update.check(); }, 15 * 60e3);
+setInterval(() => { if (!document.hidden && !Pages.idle()) Update.check(); }, 15 * 60e3);
 
 // ── routing ─────────────────────────────────────────
 // How many steps in from where the app opened, kept with each step: a page iOS reloads starts at 0 otherwise, and Back then skipped the
@@ -4151,8 +4237,8 @@ function route(gesture) {
     Browse.game = g || null;
     if (g) { Home.before ??= Home.view; Home.setView('browse'); }
     else { Home.setView(Home.before ?? Home.view); Home.before = null; }
-    Home.load();
-    Update.apply(); Update.check();
+    Update.apply();
+    Pages.whenSeen(() => { Home.load(); Update.check(); });
   }
 }
 function go(url, gesture) {
@@ -4168,11 +4254,9 @@ window.addEventListener('popstate', () => { depth = history.state?.depth || 0; r
 
 Sound.setLevel(Sound.level);
 Sound.set(Sound.muted);
-Update.check();
 Me.save(Me.acct);
-Me.check();
-Me.sync();
-setInterval(() => { if (Me.acct && !document.hidden && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
+Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
+setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
 window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');

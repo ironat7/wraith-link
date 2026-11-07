@@ -5,20 +5,20 @@
 //   the look of a screen      layout duo pill
 //   the player                pause cover misc recover relay screen player budget
 //   the CDN feed, videos      cdn vod replay
-//   leaving and coming back   sound away pages unseen return
+//   leaving and coming back   sound away pages unseen return battery
 //   chat                      chat irc scroll emotes keyboard chatq
 //   lists and account         lists browse account lists2 update
 //   buttons end to end        ui          (about 90 s)
 //   time to first frame       start       (about 20 s, on real streams and the real relay)
 // Staged through and through, with nothing reaching Twitch from here (Jerry doesn't want automated work on his home IP): relay vod cdn
-// away screen lists duo unseen update chatq return player budget pill lists2. The rest use Twitch's own lists, chat and CDN copies.
+// away screen lists duo unseen update chatq return player budget pill lists2 battery. The rest use Twitch's own lists, chat and CDN copies.
 // More than 6 or so side by side on this PC and the timing checks trip on the load (the relay's are the first): run a half at a time.
 // Only when that code changes, with WRAITH_REAL_RELAY=1 as they spend the phone's daily fetches: playback.mjs quality, vods.mjs, harness.mjs (a 6 minute soak of latency and stalls).
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeClips } from './lib.mjs';
 
-const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2'.split(' ');
+const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery'.split(' ');
 const queue = process.argv.slice(2).length ? process.argv.slice(2) : [...ALL];
 const SIDE_BY_SIDE = 6;
 const t0 = Date.now(), results = [];
