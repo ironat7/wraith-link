@@ -2278,6 +2278,58 @@ if (want('screen')) {
       await done();
     })(),
     (async () => {
+      // Jerry, 2026-11-07: "the screen keeps sleeping", "had this problem since forever". On a Home Screen app the lock is all that keeps
+      // the screen on for a stream, sound or not, and a page iOS reloaded while you were away plays on with nobody touching it, which WebKit
+      // gives no lock: it says to tap once, each time you're back. A tap asks at once, even with an ask that had none still on its way.
+      // And the Away log's "left" says whether the lock was held, as the screen going to sleep is one way the app leaves.
+      const webkit = () => {
+        let tap = -1e9, granted = false;
+        window.__held = window.__asks = 0;
+        for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => { tap = performance.now(); }, true);
+        Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: () => {
+          window.__asks++;
+          const tapped = performance.now() - tap < 5000;
+          return new Promise((yes, no) => setTimeout(() => {   // WebKit asks iOS before it answers, and an ask with no tap behind it waits longest
+            if (!tapped && !granted) return no(new DOMException('Permission was denied', 'NotAllowedError'));
+            granted = true; window.__held++;
+            const s = { release: async () => { if (s.gone) return; s.gone = true; window.__held--; s.heard?.(); }, addEventListener(t, f) { s.heard = f; } };
+            yes(s);
+          }, tapped ? 50 : 1500));
+        } } });
+      };
+      const { page, done } = await stage(answer, { init: webkit });
+      const toast = () => page.evaluate(() => { const t = document.getElementById('toast'); return t.hidden ? '' : t.textContent; });
+      const unToast = () => page.evaluate(() => { document.getElementById('toast').hidden = true; });
+      const left = async () => (await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]'))).filter(x => / left/.test(x)).at(-1) || '';
+      const going = () => page.evaluate(() => { const v = wraith.P.active(); v.play().catch(() => {}); v.dispatchEvent(new Event('playing')); });
+      const HINT = 'Tap the screen once to keep it from sleeping';
+      await levels(page, 15000);
+      await going();
+      await page.waitForFunction(() => wraith.Awake.refused, null, { timeout: 5000 }).catch(never);
+      ok('a picture going on a page that’s had no tap says to tap once to keep the screen on', await toast() === HINT, await toast());
+      await vis(page, true); await sleep(200);
+      let l = await left();
+      ok('leaving, the Away log says the picture was going with no lock, and why', /left with the picture going, no screen lock \(refused: Permission was denied\), not touched since the page loaded$/.test(l), l);
+      await unToast();
+      await vis(page, false); await going();
+      await page.waitForFunction(h => !document.getElementById('toast').hidden && document.getElementById('toast').textContent === h, HINT, { timeout: 5000 }).catch(never);
+      ok('back in the app with still no tap, it says so again', await toast() === HINT, await toast());
+      await unToast(); await sleep(1600);   // that ask's answer is in
+      await going(); await sleep(100);
+      ok('a picture going asks for the lock', await page.evaluate(() => !!wraith.Awake.asking && !wraith.Awake.lock));
+      await page.mouse.click(5, 600); await sleep(300);
+      ok('a tap asks at once, without waiting on the ask that had none, and gets it', await page.evaluate(() => !!wraith.Awake.lock && window.__held === 1), await page.evaluate(() => `${window.__asks} asks, ${window.__held} held`));
+      await sleep(1700);
+      ok('the earlier ask’s answer is let go of, with nothing said about it', await page.evaluate(() => !!wraith.Awake.lock && window.__held === 1) && await toast() === '', await page.evaluate(() => `${window.__held} held`));
+      const say = await page.evaluate(() => wraith.Awake.say());
+      ok('the settings sheet says the lock is what keeps the screen on, not the sound', /^Screen: kept on by the lock since \d\d:\d\d$/.test(say), say);
+      await page.evaluate(() => wraith.P.active().pause());   // as iOS does, just before it says the app has left
+      await vis(page, true); await sleep(200);
+      l = await left();
+      ok('and leaving, the Away log says the lock was held, and when the screen was last touched', /left with the picture going, the screen lock held since \d\d:\d\d, last touched \d+ s before$/.test(l), l);
+      await done();
+    })(),
+    (async () => {
       // a phone on its side gives the channel row to the picture, and a message card covers the controls in the picture
       const { page, done } = await stage(answer, { path: '?c=nosuchchannel', w: 844, h: 390, gql: b => b.includes('users(logins') ? { users: [null] } : undefined });
       await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 10000 }).catch(never);

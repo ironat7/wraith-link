@@ -2049,7 +2049,7 @@ const Away = {
   },
 };
 document.addEventListener('visibilitychange', () => {
-  Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}` : 'back');
+  Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}${Awake.leaving()}` : 'back');
   saidHidden = document.hidden;
   Pill.sync();   // the lock screen's details and buttons back before any sound starts, or off again in front
   if (!document.hidden) { Pages.see(); Pages.tell('here'); }
@@ -2189,21 +2189,28 @@ const Sound = {
   },
 };
 
-// The screen stays on while a picture is playing, sound or no sound. iOS does that by itself only for a picture with sound, so this
-// lock is all a muted one has, and WebKit grants it only within 5 s of a tap or to a page it has already granted it to that way
-// (WakeLock::request). A picture can start later than that, or with no tap at all, so any tap asks, and with nothing playing lets go at once.
+// The screen stays on while a picture is playing, sound or no sound, and on a Home Screen app this lock is the only thing that does it for
+// a stream: iOS keeps the screen on by itself only for its own player's picture with sound (a stream's copy on the CDN, a past broadcast),
+// never for one through hls.js (ManagedMediaSource), sound or not (Apple's FB17984089, still so on iOS 26 and 27.1, anton.codes/ios-pwa-
+// video-issues). WebKit grants the lock only within 5 s of a tap or to a page it has already granted it to that way (WakeLock::request), so
+// a page iOS reloaded while you were away, whose stream carries on with nobody touching it, has none to get: it says to tap once, each
+// time you're back. Any tap asks, also with an ask still on its way, which may be refused for having had none.
 // Jerry, 2026-11-05: "It's not keeping the screen awake", with the sound on, and the page couldn't say which of the two had let go. The
-// settings sheet now says how the screen is being kept on, and an answer from iOS that never comes no longer stops the asking.
+// settings sheet now says how the screen is being kept on, and an answer from iOS that never comes no longer stops the asking. Jerry,
+// 2026-11-07: "the screen keeps sleeping", "had this problem since forever": the Away log's "left" now says whether the lock was held, as
+// iOS sleeping the screen is one way the app leaves. iOS keeps the screen on for one page of the app at a time (WebKit's
+// setScreenWakeLockHandler, which picks among the app's pages), so a leftover page it calls visible can take it from this one.
 // Only while the picture is going, though: one that hasn't moved for a minute (no network, a copy that's stopped, a stream frozen at the
 // source) lets the screen sleep by iOS's own clock, as iOS does for a stuck picture with sound. A muted one that nobody has touched for half
 // an hour pauses (P.nobodyHere), which lets go of it too.
 const Awake = {
-  lock: null, asking: 0, granted: false, refused: '', since: 0, lost: 0,
+  lock: null, asking: 0, granted: false, refused: '', since: 0, offAt: 0, lost: 0, hinted: false,
   wanted() { const v = P.active(); return !!v && !v.paused && !document.hidden && !P.stuck(); },
-  async ask() {
+  async ask(tap) {
     if (this.lock || !navigator.wakeLock) return;
-    if (this.asking && Date.now() - this.asking < 5e3) return;   // WebKit asks iOS before it answers
-    if (this.asking) Away.add('screen lock: no answer in 5 s');
+    const waited = this.asking ? Date.now() - this.asking : 0;
+    if (waited && waited < 5e3 && !tap) return;   // WebKit asks iOS before it answers
+    if (waited >= 5e3) Away.add('screen lock: no answer in 5 s');
     const at = this.asking = Date.now();
     try {
       const l = await navigator.wakeLock.request('screen');
@@ -2212,21 +2219,35 @@ const Awake = {
       if (this.refused) { this.refused = ''; Away.add('screen lock granted'); }
       l.addEventListener('release', () => {   // by iOS, if it's still the one held
         if (this.lock !== l) return;
-        this.lock = null;
+        this.lock = null; this.offAt = Date.now();
         if (this.wanted() && ++this.lost <= 3) Away.add('screen lock taken back');
         setTimeout(() => this.sync(), 1000);
       });
     } catch (e) {
-      if (this.wanted() && this.refused !== e.message) Away.add(`screen lock refused: ${this.refused = e.message}`);
+      if (this.wanted() && !this.lock) {   // a tap's ask may have got it meanwhile
+        if (this.refused !== e.message) Away.add(`screen lock refused: ${this.refused = e.message}`);
+        if (ios && !tap && !this.hinted && !document.hidden) { this.hinted = true; UI.toast('Tap the screen once to keep it from sleeping'); }
+      }
     } finally { if (this.asking === at) this.asking = 0; }
     if (this.lock) this.sync();   // the picture may have stopped while that was on its way
   },
-  sync() {
-    if (this.wanted()) return this.ask();
-    const l = this.lock; this.lock = null; l?.release().catch(() => {});
+  sync(tap) {
+    if (this.wanted()) return this.ask(tap);
+    const l = this.lock; this.lock = null;
+    if (l) { this.offAt = Date.now(); l.release().catch(() => {}); }
+  },
+  // For the Away log as the app leaves: whether a picture was going, and whether the lock was held for it (iOS pauses the picture, which
+  // lets go of the lock, just before it says the app has left). A screen that slept with the lock held was iOS's doing.
+  leaving() {
+    const v = P.active();
+    if (!v || (v.paused && performance.now() - P.pausedAt > 2000)) return '';
+    const ago = ms => ms < 120e3 ? `${Math.round(ms / 1e3)} s` : `${Math.round(ms / 60e3)} min`;
+    const how = this.lock || Date.now() - this.offAt < 2500 ? `the screen lock held since ${new Date(this.since).toTimeString().slice(0, 5)}`
+      : `no screen lock${this.refused ? ` (refused: ${this.refused})` : this.asking ? ' (asked, no answer)' : ''}`;
+    return ` with the picture going, ${how}, ${Pages.touchedAt ? `last touched ${ago(Date.now() - Pages.touchedAt)} before` : 'not touched since the page loaded'}`;
   },
   say() {   // for the settings sheet
-    const v = P.active(), going = v && !v.paused && !document.hidden, own = going && !v.muted && !P.stuck() ? ', and iOS keeps it on for a picture with sound' : '';
+    const v = P.active(), going = v && !v.paused && !document.hidden, own = going && v === vC && !v.muted && !P.stuck() ? ', and iOS’s own player keeps it on with the sound' : '';
     if (!navigator.wakeLock) return `Screen: this phone has no screen lock${own}`;
     if (this.lock) return `Screen: kept on by the lock since ${new Date(this.since).toTimeString().slice(0, 5)}${this.lost ? ` (iOS took it back ${this.lost}×)` : ''}${own}`;
     if (this.asking) return `Screen: lock asked for ${Math.round((Date.now() - this.asking) / 1e3)} s ago, no answer${own}`;
@@ -2234,15 +2255,15 @@ const Awake = {
     return `Screen: no lock${this.refused ? ` (refused: ${this.refused}, a tap gets it)` : idle}${own}`;
   },
 };
-document.addEventListener('visibilitychange', () => Awake.sync());
+document.addEventListener('visibilitychange', () => { if (document.hidden) Awake.hinted = false; Awake.sync(); });
 // touchend too: iOS sends no click for a tap on something that doesn't take one, like chat
 for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
-  if (Awake.granted) Awake.sync(); else Awake.ask();   // first: the tap only counts for it a few seconds
+  if (Awake.granted) Awake.sync(true); else Awake.ask(true);   // first: the tap only counts for it a few seconds
   Pages.touchedAt = Date.now();
   Pages.see();
 }, { capture: true, passive: true });
-// typing is you being there too, sending with the keyboard's own key included, which no tap goes with
-document.addEventListener('keydown', () => Pages.see(), { capture: true, passive: true });
+// typing is you being there too, sending with the keyboard's own key included, which no tap goes with, and a key counts for the lock as a tap does
+document.addEventListener('keydown', () => { if (Awake.granted) Awake.sync(true); else Awake.ask(true); Pages.see(); }, { capture: true, passive: true });
 
 // A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
 window.addEventListener('online', () => {
