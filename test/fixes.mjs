@@ -3502,6 +3502,87 @@ if (want('return')) {
       await done();
     })(),
     (async () => {
+      // 3 minutes since the last touch is too long for a stream starting by itself to make a sound: iOS may be calling in front a page that isn't
+      const { page, done, user } = await stage(answer, { offline: true });
+      await offlineCard(page);
+      await page.evaluate(() => { wraith.Pages.touchedAt = Date.now() - 3 * 60e3; });
+      goLive(user);
+      await page.evaluate(() => wraith.P.lookLive());
+      await levels(page, 8000); await sleep(500);
+      const s = await page.evaluate(() => ({ muted: document.getElementById('vLL').muted, button: !document.getElementById('unmute').hidden }));
+      ok('going live 3 minutes after the last touch starts muted', s.muted && s.button, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // something outside the page stops the picture, likely another app taking the sound: only you or iOS start it again (2026-11-08, over YouTube)
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      const going = () => page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.readyState >= 2; }, null, { timeout: 8000 }).catch(never);
+      const state = () => page.evaluate(() => { const v = wraith.P.active(); return { paused: v.paused, taken: wraith.P.taken, big: !document.getElementById('bigPlay').hidden, muted: v.muted }; });
+      // the stream made here may have no frames to show, where a picture iOS stops has what it had loaded
+      const fromOutside = () => page.evaluate(() => { const v = wraith.P.active(); Object.defineProperty(v, 'readyState', { configurable: true, get: () => 4 }); wraith.Pages.touchedAt = Date.now() - 10e3; v.pause(); });
+      const tap = () => page.evaluate(() => document.body.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      await going();
+      await fromOutside(); await sleep(200);
+      ok('a pause from outside the page is told from one of yours', (await state()).taken);
+      await page.evaluate(() => wraith.P.play(wraith.P.active())); await sleep(700);
+      let s = await state();
+      ok('and the page doesn’t start it again by itself: it waits, with the big button', s.paused && s.big, JSON.stringify(s));
+      await tap(); await going();
+      await page.waitForFunction(() => document.getElementById('bigPlay').hidden, null, { timeout: 3000 }).catch(never);
+      s = await state();
+      ok('a tap plays it', !s.paused && !s.taken && !s.big, JSON.stringify(s));
+      await fromOutside(); await sleep(200);
+      await page.evaluate(() => { const v = wraith.P.active(); v.play().catch(() => {}); v.dispatchEvent(new Event('playing')); }); await going();
+      ok('iOS playing it again itself is iOS’s to do', !(await state()).taken);
+      await page.evaluate(() => { wraith.Pages.touchedAt = Date.now(); wraith.P.active().pause(); }); await sleep(200);
+      ok('a pause right after a touch isn’t from outside', !(await state()).taken);
+      await page.evaluate(() => wraith.P.play(wraith.P.active())); await going();
+      await page.evaluate(() => { wraith.Pages.touchedAt = Date.now(); wraith.P.active().pause(); }); await sleep(1300);
+      await page.evaluate(() => { wraith.P.ranAt = Date.now() - 70e3; wraith.Pages.seenAt = Date.now() - 31 * 60e3; wraith.P.play(wraith.P.active()); }); await sleep(500);
+      s = await state();
+      ok('stopped over a minute with nobody about for half an hour, it waits too', s.paused && s.big, JSON.stringify(s));
+      await tap(); await going();
+      ok('and a tap plays that', !(await state()).paused);
+      await page.evaluate(() => { const v = wraith.P.active(); wraith.Pages.seenAt = Date.now() - 3 * 3600e3; wraith.P.ranAt = Date.now(); v.pausing = true; v.pause(); wraith.P.play(v); }); await sleep(700);
+      s = await state();
+      ok('a stream you’re watching hiccuping starts again with its sound, however long since a touch', !s.paused && !s.big && !s.muted, JSON.stringify(s));
+      await sleep(1500);
+      ok('with sound and 3 hours untouched, it carries on', await page.evaluate(() => !wraith.P.active().paused && !document.getElementById('watch').hidden));
+      await done();
+    })(),
+    (async () => {
+      // a picture with sound, 4 hours untouched: a page iOS keeps where you can't see it isn't left going for good
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      await page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 0; }, null, { timeout: 8000 }).catch(never);
+      await page.evaluate(() => { wraith.P.ranAt = Date.now(); wraith.Pages.seenAt = Date.now() - 4 * 3600e3 - 1000; });   // going just now, as the stream made here may not have frames to show
+      await page.waitForFunction(() => wraith.P.userPaused, null, { timeout: 5000 }).catch(never);
+      await sleep(1300);
+      const s = await page.evaluate(() => ({ paused: wraith.P.active()?.paused, big: !document.getElementById('bigPlay').hidden, watch: !document.getElementById('watch').hidden }));
+      ok('a picture with sound untouched for 4 hours pauses, and stays on the channel', s.paused && s.big && s.watch, JSON.stringify(s));
+      ok('the settings sheet says why', (await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]'))).some(x => x.endsWith('paused: untouched for 4 hours')));
+      await done();
+    })(),
+    (async () => {
+      // a page on screen by iOS's word with nothing going and nobody here: it doesn't stay for days (2026-11-08)
+      const { page, done } = await stage(answer, { offline: true });
+      await offlineCard(page);
+      const onChannel = () => page.evaluate(() => !document.getElementById('watch').hidden);
+      await vis(page, true);
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 2 * 3600e3 - 1000; }); await sleep(1500);
+      ok('out of sight, a page stays as it is', await onChannel());
+      await vis(page, false);
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 2 * 3600e3 + 60e3; }); await sleep(1500);
+      ok('a minute short of 2 hours untouched, it stays', await onChannel());
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 2 * 3600e3 - 1000; });
+      await page.waitForFunction(() => !document.getElementById('home').hidden, null, { timeout: 5000 }).catch(never);
+      const s = await page.evaluate(() => ({ search: location.search, login: wraith.P.login, feed: wraith.P.feed }));
+      ok('at 2 hours it goes home and lets go of the channel', !(await onChannel()) && !s.search && !s.login && !s.feed, JSON.stringify(s));
+      ok('the settings sheet says why', (await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]'))).some(x => x.endsWith('closed: nothing going, and untouched for 2 hours')));
+      await done();
+    })(),
+    (async () => {
       // a page reloaded out of sight that nobody has looked at yet stays out of the seat: its calls name it without sitting
       const { page, done } = await stage(answer, { init: seated, offline: true });
       await offlineCard(page);

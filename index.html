@@ -1056,6 +1056,7 @@ const nothingOpen = () => ({
   userPaused: false, pausedAt: 0, resumedAt: 0,   // a pause you chose; when the picture last paused; when its loading last started up again
   pausedAway: false,                 // held only because the stream restarted with nobody looking or listening: coming back plays it
   playBack: false,                   // a start iOS wouldn't take out of sight: coming back plays it
+  taken: false, waitsForYou: false,  // something outside the page stopped the picture; a start held back for lack of anyone here: a tap or coming back plays it
   started: false, relayGone: false,  // whether a picture has played since this was opened; whether the relay's out for the day
   asked403: false, liveId: null,     // whether a refusal has been asked about with a fresh token; the broadcast the live player is on
   openedAt: 0, quietStart: false,    // when this was opened; a stream that started by itself with nobody touching the screen lately, so muted
@@ -1446,6 +1447,7 @@ const P = {
     if (!vC.dataset.url) return;
     revoke([vC.dataset.url]); revoke(this.vodSrcs);
     this.vodSrcs = null;
+    vC.pausing = !vC.paused;   // the page's own doing, unlike a pause from outside (see play)
     vC.pause(); vC.removeAttribute('src'); delete vC.dataset.url; vC.load();
   },
 
@@ -1486,6 +1488,12 @@ const P = {
     // iOS won't start a picture out of sight, and its refusal isn't the autoplay rule's: taken for one, it left the picture muted on your
     // return, and then nothing to carry on the next time you left. Coming back starts it (wake).
     if (ios && document.hidden) { this.playBack = true; return; }
+    // A stopped picture doesn't start itself with nobody here: something outside the page stopped it, likely another app taking the sound, or
+    // it's been stopped a while with nobody touching the screen. On a page iOS keeps going where you can't see it, starting anyway is Wraith's
+    // sound over whatever you're doing (Jerry, 2026-11-08: "It's just playing it in the background over a YouTube video. It just took it over.").
+    // A tap or coming back plays it (Pages.see), and iOS playing again what it paused itself is iOS's to do. A restart with the picture going
+    // a moment ago isn't held: that's a stream you're watching hiccuping, however long it's been since you touched the screen.
+    if (v.paused && (this.taken || (Pages.idle() && this.stuck()))) { this.waitsForYou = true; UI.spin(false); UI.big(true); return; }
     v.muted = Sound.muted || this.quietStart;
     if (this.quietStart && !Sound.muted) UI.unmute(true);
     Sound.icon(v.muted);
@@ -1523,12 +1531,15 @@ const P = {
   // A muted picture going on screen with nobody having touched it or come back to the app for half an hour: likely nobody's there, or it's
   // a page iOS keeps out of sight while calling it visible (which is how a page nobody could see started Asmongold, 2026-11-05). Left
   // going, it would hold the screen on, and its player the network, for as long as the phone lasts.
-  unwatched() { const v = this.active(); return !!v && !v.paused && v.muted && !document.hidden && Date.now() - Pages.seenAt > IDLE; },
+  // With sound it's given far longer, as you may just be watching. But a page iOS keeps where you can't see it may be under no Now Playing
+  // card you could stop it from, so it isn't left going for good either.
+  unwatched() { const v = this.active(); return !!v && !v.paused && !document.hidden && Date.now() - Pages.seenAt > (v.muted ? IDLE : LONG_IDLE); },
   nobodyHere() {
-    Away.add('paused: muted, and untouched for 30 min');
+    const muted = this.active().muted;
+    Away.add(muted ? 'paused: muted, and untouched for 30 min' : 'paused: untouched for 4 hours');
     togglePlay();
     UI.big(true);
-    UI.toast('Paused: it was muted, and nobody had touched the screen for 30 minutes');
+    UI.toast(muted ? 'Paused: it was muted, and nobody had touched the screen for 30 minutes' : 'Paused: nobody had touched the screen for 4 hours');
   },
 
   latency() {
@@ -1732,13 +1743,14 @@ const P = {
   },
   // It doesn't take the seat: opening the channel did that, so it plays if this is still the page you last used, and stops if you've
   // started something elsewhere since. A page iOS keeps where you can't see it can call itself in front.
-  // Nor does iOS always know a page isn't in front: so with nobody touching the screen for a while, it starts muted, with the button to unmute.
+  // Nor does iOS always know a page isn't in front: so unless the screen was touched in the last 2 minutes, it starts muted, with the button to
+  // unmute. A muted picture takes the sound from nothing else that's playing.
   async lookLive(gen = this.gen) {
     if (gen !== this.gen || this.feed || !this.user || this.user.stream || !Pages.inFront() || Pages.idle()) return;
     try {
       const [u] = await getUsers([this.login]);
       if (gen !== this.gen || !u?.stream || !Pages.inFront()) return;
-      const quiet = Date.now() - Pages.touchedAt > 15 * 60e3;
+      const quiet = Date.now() - Pages.touchedAt > 2 * 60e3;
       this.open(this.login, false, u);
       this.quietStart = quiet;
     } catch {}
@@ -1798,6 +1810,7 @@ const P = {
 // it going. A page iOS froze and woke up hours later, still thinking it was playing, stays quiet (2026-11-05).
 const KEEP = 5 * 60e3;
 const IDLE = 30 * 60e3;   // nobody has touched the screen or come back to the app for this long: likely nobody's there
+const LONG_IDLE = 4 * 3600e3, STRANDED = 2 * 3600e3;   // a picture with sound, untouched, pauses after this; a page with nothing going, untouched, closes after this (Pages.stranded)
 const BG = {
   ios, on: false, hls: null, srcs: null,
   held: false,   // paused from the lock screen or Control Center: stays paused on return
@@ -2015,9 +2028,17 @@ const Pages = {
     const v = P.active();
     return !(BG.going() || (v && !v.paused && !v.muted && !document.hidden));
   },
+  // A page calling itself on screen with nothing going and nobody here for 2 hours is one iOS has stranded, as a screen you'd left on would have
+  // slept by now. Left be, it stays for as long as the phone's on, on the code it loaded: one sat on Asmongold's channel for four days, through
+  // every force-quit, and started the stream each day it went live, until the phone was restarted (Jerry, 2026-11-08: "How can something just be
+  // in the background like that, never disappearing? For days, even when I force exited"). So it goes home, which lets go of its players, and
+  // takes any newer version from there.
+  stranded() { return !document.hidden && !$('watch').hidden && this.idle() && Date.now() - Math.max(this.seenAt, P.ranAt) > STRANDED; },
   see() {
     const was = this.idle();
     this.shown = true; this.takeAt = this.seenAt = Date.now();
+    P.taken = false;
+    if (P.waitsForYou) { P.waitsForYou = false; UI.big(false); P.playBack = true; P.wake(); }
     for (const go of this.waiting.splice(0)) go();
     if (was) {   // what waited for you
       Chat.wake();
@@ -2154,7 +2175,8 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
   const hold = () => { BG.held = true; BG.wanted = BG.carry = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
   ms.setActionHandler('play', () => {
     Away.add('button: play');
-    Pages.takeAt = Date.now();   // that's you, as much as a tap is
+    Pages.takeAt = Pages.seenAt = Date.now();   // that's you, as much as a tap is
+    P.taken = false;
     if (document.hidden && !BG.on) { P.userPaused = false; BG.carry = true; BG.heard = Date.now(); BG.start(); if (BG.on) return; }
     if (BG.on) {
       if (!aBG.paused) return hold();   // iOS is showing something else as paused: its button still has to stop what you hear
@@ -2297,12 +2319,19 @@ for (const v of [vL, vC]) {
       if (!v.paused) P.userPaused = false;   // only you can have started a paused picture, with iOS's own controls
       if (P.feed === 'cdn') P.asks = 0;
       P.ranAt = Date.now();
+      P.taken = false;
       UI.spin(false); UI.big(false);
     }
     UI.playIcon(); Awake.sync();
     if (stage.classList.contains('ui')) hud(true);   // restart the auto-hide now that there's picture
   });
-  v.addEventListener('pause', () => { P.pausedAt = performance.now(); UI.playIcon(); Awake.sync(); });
+  v.addEventListener('pause', () => {
+    P.pausedAt = performance.now(); UI.playIcon(); Awake.sync();
+    // not you (a tap, or the page acting on one), and not the page: something outside it, which it doesn't overrule (see play). A picture stopped
+    // that way still has what it had loaded: a browser can say the same of one whose load failed or was replaced, which is no reason to hold back.
+    if (v.pausing) v.pausing = false;
+    else if (v === P.active() && v.paused && !v.ended && !v.error && v.readyState >= 2 && !P.userPaused && !BG.on && !document.hidden && Date.now() - Pages.touchedAt > 1500) P.taken = true;
+  });
   // iOS's fullscreen player pauses the video as you close it, some time around telling the page it closed,
   // so the video is kept going for a moment after, unless it was already paused
   v.addEventListener('webkitendfullscreen', () => {
@@ -2310,7 +2339,7 @@ for (const v of [vL, vC]) {
     const until = performance.now() + 2500;
     const t = setInterval(() => {
       if (performance.now() > until || P.active() !== v || BG.on || document.hidden) return clearInterval(t);
-      if (v.paused) P.play(v);
+      if (v.paused) { P.taken = false; P.play(v); }
     }, 200);
   });
   v.addEventListener('waiting', () => {
@@ -2354,6 +2383,10 @@ setInterval(() => {
     document.dispatchEvent(new Event('visibilitychange'));
   }
   if (P.feed) { P.tick(); UI.banner(); P.ran(); if (P.unwatched()) P.nobodyHere(); }
+  if (Pages.stranded()) {
+    Away.add('closed: nothing going, and untouched for 2 hours');
+    depth = 0; history.replaceState({ depth }, '', location.pathname); route(false);
+  }
   if (P.feed && Awake.granted) Awake.sync();
   P.checkFull();
   // nothing else of this page's asks the relay. Out of sight that's only for sound that's going: with none, the page is doing nothing
