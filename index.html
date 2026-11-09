@@ -27,7 +27,7 @@
   --live: #ff3b4f; --good: #3ddc97; --warn: #fbbf24;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, sans-serif;
   --sat: env(safe-area-inset-top); --sab: env(safe-area-inset-bottom);
-  --sal: max(env(safe-area-inset-left), var(--coll, 0px)); --sar: max(env(safe-area-inset-right), var(--colw, 0px));   /* --colw, --coll: iOS's strip on the right or the left, taken back (see Column) */
+  --sal: env(safe-area-inset-left); --sar: env(safe-area-inset-right);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { background: var(--bg); color: var(--fg); -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -80,13 +80,6 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .brh .nm { font-size: 18px; font-weight: 700; }
 .lng { height: 26px; margin-top: -6px; padding: 0 10px; border-radius: 999px; background: var(--bg-2); color: var(--fg-2); font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
 .cats { display: flex; gap: 10px; margin: 0 -16px; padding: 0 16px 4px; overflow-x: auto; scrollbar-width: none; }
-html[data-col=right] .cats { margin-right: 0; padding-right: 0; }   /* not into iOS's strip, where nothing scrolls */
-html[data-col=left] .cats { margin-left: 0; padding-left: 0; }
-/* With iOS's strip taken back (see Column): iOS counts the strip as covered, and WebKit lays a solid colour over all of it whenever a fixed
-   layer the height of the screen meets that edge where it looks, 4 in from it halfway down (LocalFrameView::fixedContainerEdges), which
-   the watch screen is, black. Something small and fixed of its own there, it finds none and paints nothing over what's in the strip. */
-.colspot { position: fixed; right: 0; top: calc(50% - 40px); width: 32px; height: 80px; z-index: 25; }
-html[data-col=left] .colspot { right: auto; left: 0; }
 .cats::-webkit-scrollbar { display: none; }
 .cat { flex: none; width: 96px; min-width: 0; }
 .cat:active { opacity: .7; }
@@ -208,7 +201,7 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
 #watch.chan .info .gm { margin-top: 2px; }
 #watch.chan .fl:not([hidden]) { display: block; }
 #bChat2 { display: none; }
-@media (orientation: landscape) and (min-width: 640px) { #watch.vodw #bChat2 { display: grid; } }
+@media (orientation: landscape) and (min-width: 560px) { #watch.vodw #bChat2 { display: grid; } }
 .side { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 .tabs { display: none; align-items: center; gap: 6px; padding: 8px max(12px, var(--sar)) 8px max(12px, var(--sal)); border-bottom: 1px solid var(--line); }
 #watch.chan .tabs { display: flex; }
@@ -286,7 +279,7 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
 .st.lv { background: var(--live); color: #fff; }
 
 /* a screen with room for both (a phone on its side, a desktop window): video on the left, the panel docked on the right */
-@media (orientation: landscape) and (min-width: 640px) {
+@media (orientation: landscape) and (min-width: 560px) {
   #watch { flex-direction: row; }
   .main { flex: 1; min-height: 0; justify-content: center; }   /* picture and channel row as one block */
   .stage { flex: none; max-height: calc(100% - 46px); }
@@ -300,8 +293,13 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
    pill and clock), would be a third black. So the picture fills the width beside that strip and stays there, with a strip
    along the bottom: chat or the channel on the left, the box or the channel's tabs on the right, the channel row above
    those. Chat costs the picture nothing here, so there's no hiding it. With the keyboard up it goes back to side by side,
-   which is what fits above it. */
-@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) {
+   which is what fits above it.
+   Since iOS 27.2 a Home Screen app's page stops short of that strip and has no safe area there: 867×669 open, 382×678 closed and upright,
+   594 wide closed on its side, which is why "room for both" starts at 560 wide. Laying the page out at the screen's size reached across
+   the strip in Chrome and on the simulator (coder/xum#7976), and on the phone iOS blacked the strip out again with the page still under
+   it and the controls with it, which the page can't see (Jerry, 2026-11-09: "when it reverts, I just lose all the control"). So the page
+   is the one iOS gives, with the controls on the picture, and what's said below of the strip is for 27.1, which hands it over as a safe area. */
+@media (orientation: landscape) and (min-width: 560px) and (max-aspect-ratio: 1599/1000) {
   #watch { container-type: size; --col: min(300px, 38cqw); }
   #watch:not(.kb) { flex-direction: column; }
   #watch:not(.kb) .main { flex: none; justify-content: flex-start; }
@@ -349,18 +347,13 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
   html[data-strip] #watch:not(.kb, .full) .banner { opacity: 1; }
   html[data-strip] #watch:not(.kb, .full) .toast, html[data-strip] #watch:not(.kb, .full) .unmute { bottom: 12px; }
   html[data-strip] #watch:has(#msgbox:not([hidden])) .hud { display: none; }
-  /* With the strip taken back from iOS 27.2 (see Column) iOS finds nothing in it to tap or scroll, so only the controls go there, which
-     Column passes taps to: the strip along the bottom, and the side panel while typing, stop short of it, whichever side it's on. */
-  html[data-col] #watch.kb .side, html[data-col] #watch:not(.kb, .idle) .side { margin-right: var(--sar); }
-  html[data-col] #watch:not(.kb, .idle) .info, html[data-col] #watch:not(.kb, .idle) .tabs { right: var(--sar); }
-  html[data-col=left] #watch:not(.kb, .idle) .side { margin-left: var(--coll); --sal: 0px; }
 }
 /* The closed screen's island is around its camera, which stays where it is as you turn the phone. With the strip on the left it's at
    the top of the strip, to 134 with Now Playing in it and well short of 96 without (Jerry, 2026-11-05: "this orientation no longer has
    pill either"): the controls run down the rest of the strip in a column, in line with it, as on the open screen. Where Now Playing can
    show (the pill setting on Shown), the shorter room below it takes the same controls in pairs. With the strip on the right it's at the
    foot, level with the strip along the bottom, which stops short of it, and the controls have the top to themselves. */
-@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (max-height: 599px) {
+@media (orientation: landscape) and (min-width: 560px) and (max-aspect-ratio: 1599/1000) and (max-height: 599px) {
   html[data-strip=left] #watch:not(.kb, .full, .pillshown) .hud .bar:last-child { top: 96px; }
   html[data-strip=left] #watch.pillshown:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
   html[data-strip=left] #watch.pillshown:not(.kb, .full) .hud .cb { width: 40px; }
@@ -376,7 +369,7 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
   #watch:not(.kb) #vods .vod { grid-template-columns: 150px minmax(0, 1fr); }
 }
 /* the row has room above the box for its text one line over another, and for as much of the title as fits */
-@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) {
+@media (orientation: landscape) and (min-width: 560px) and (max-aspect-ratio: 1599/1000) {
   #watch:not(.kb) .who { height: auto; }
   #watch:not(.kb) .info .av { width: 40px; height: 40px; }
   #watch:not(.kb) .info .meta { display: block; }
@@ -385,11 +378,11 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
   #watch:not(.kb) .info .gm { margin-top: 2px; }
   #watch:not(.kb, .chan):has(#rpb:not([hidden])) .info .tt { display: none; }
 }
-@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) and (min-height: 600px) {
+@media (orientation: landscape) and (min-width: 560px) and (max-aspect-ratio: 1599/1000) and (min-height: 600px) {
   #watch:not(.kb) .info .tt { -webkit-line-clamp: 2; }
   #watch:not(.kb, .chan):has(#rpb:not([hidden])) .info .tt { display: -webkit-box; }
 }
-@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 143/100) and (min-height: 600px) {
+@media (orientation: landscape) and (min-width: 560px) and (max-aspect-ratio: 143/100) and (min-height: 600px) {
   #watch:not(.kb) .info .tt { -webkit-line-clamp: 4; }
   #watch:not(.kb, .chan):has(#rpb:not([hidden])) .info .tt { -webkit-line-clamp: 2; }
 }
@@ -402,13 +395,11 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
   html[data-strip] #watch.kb .stage { --sal: 0px; --sar: 0px; }
 }
 html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --sal: 0px; --sar: 0px; }
-@media not ((orientation: landscape) and (min-width: 640px)) { #bChat { display: none; } }
+@media not ((orientation: landscape) and (min-width: 560px)) { #bChat { display: none; } }
 /* fullscreen on an iPhone: the player fills the screen, edge to edge as iOS's own player has it, with the controls clear of iOS's strip (see UI.fill) */
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; width: auto; height: auto; max-height: none; margin: 0; aspect-ratio: auto; overflow: hidden; border-radius: 0; background: #000; }
 #watch.full .hud { padding: var(--sat) 0 var(--sab); }
 #watch.full #bChat { display: none; }
-html[data-col] #watch.full .msgbox { padding-right: calc(18px + var(--sar)); }
-html[data-col=left] #watch.full .msgbox { padding-left: calc(18px + var(--sal)); }
 /* An offline channel has no picture to give the screen to: its page is its row, a line saying so, and its videos. */
 @media not ((orientation: landscape) and (min-aspect-ratio: 8/5)) {
   #watch.idle .info { order: -1; border-bottom: 0; }
@@ -422,7 +413,7 @@ html[data-col=left] #watch.full .msgbox { padding-left: calc(18px + var(--sal));
   #watch.idle .side { border-top: 1px solid var(--line); }
   #watch.idle #vods { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 2px 14px; align-content: start; }
 }
-@media (orientation: landscape) and (min-width: 640px) and (max-aspect-ratio: 1599/1000) {
+@media (orientation: landscape) and (min-width: 560px) and (max-aspect-ratio: 1599/1000) {
   #watch.idle:not(.kb) .info { position: static; width: auto; padding: 4px max(12px, var(--sar)) 4px max(4px, var(--sal)); background: var(--bg); }
   #watch.idle:not(.kb) .tabs { position: static; width: auto; height: auto; padding: 6px max(12px, var(--sar)) 6px max(12px, var(--sal)); border-bottom: 1px solid var(--line); }
   #watch.idle:not(.kb) #paneVods, #watch.idle:not(.kb) #paneAbout { margin-right: 0; border-right: 0; }
@@ -466,10 +457,6 @@ html[data-col=left] #watch.full .msgbox { padding-left: calc(18px + var(--sal));
   html[data-strip] #watch:not(.full, .idle) .ac { order: 5; }
   html[data-strip] #watch:not(.full, .idle) .say { order: 6; }
   html[data-strip] #watch:not(.full, .idle) :is(.stage > *, .tabs, .log, .ep, .pane, .rpb, .ac, .say) { --sal: 0px; --sar: 0px; }
-  /* the strip taken back from iOS 27.2 (see Column): the picture runs under it, and what you touch stays out of it, as iOS finds nothing there */
-  html[data-col=right] #watch:not(.full, .idle) :is(.stage > *, .tabs, .log, .ep, .pane, .rpb, .ac, .say) { --sar: var(--colw); }
-  html[data-col=left] #watch:not(.full, .idle) :is(.stage > *, .tabs, .log, .ep, .pane, .rpb, .ac, .say) { --sal: var(--coll); }
-  html[data-col] #watch:not(.full, .idle) .msgbox { padding-right: calc(18px + var(--sar)); padding-left: calc(18px + var(--sal)); }
   /* the row, beside iOS's things: its text one line over another, with as much of the title as fits */
   html[data-strip] #watch:not(.full, .idle) .info { order: -1; min-height: var(--top); gap: 6px; padding-top: 10px; padding-bottom: 10px; border-bottom: 0; }
   html[data-strip] #watch:not(.full, .idle) .info .who { height: auto; gap: 12px; }
@@ -492,15 +479,13 @@ html[data-col=left] #watch.full .msgbox { padding-left: calc(18px + var(--sal));
 @keyframes side { from { transform: translateX(28px); opacity: 0; } }
 @media (orientation: portrait) and (min-width: 600px) { .sheet { align-items: center; } .panel { border-radius: 20px; border-bottom: 1px solid var(--line); } }
 /* on its side, a sheet comes in from the edge, as tall as the screen, and the picture stays in view */
-@media (orientation: landscape) and (min-width: 640px) {
+@media (orientation: landscape) and (min-width: 560px) {
   .sheet { align-items: stretch; justify-content: flex-end; }
   .scrim { background: rgba(0,0,0,.3); }
   .panel { width: calc(min(380px, 50vw) + var(--sar)); max-width: none; max-height: none; padding: calc(var(--sat) + 8px) calc(var(--sar) + 16px) calc(18px + var(--sab)) 16px; border-width: 0 0 0 1px; border-radius: 0; animation-name: side; }
   .grab { display: none; }
   .panel h3:first-child, .panel .card:first-child { margin-top: 8px; }
 }
-html[data-col] .panel { padding-right: calc(16px + var(--sar)); }   /* iOS's strip, taken back, where nothing can be tapped */
-@media (orientation: portrait) { html[data-col=left] .panel { padding-left: calc(16px + var(--sal)); } }
 .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--line-2); margin: 2px auto 8px; }
 .panel h3 { margin: 16px 4px 8px; font-size: 12.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-3); }
 .opts { background: var(--bg-2); border-radius: 13px; overflow: hidden; }
@@ -1043,209 +1028,6 @@ const cdnLive = nativeHls && /AppleWebKit/.test(navigator.userAgent) && !/Chrome
 const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 const aBG = $('aBG');
 aBG.disableRemotePlayback = true;
-
-// Since iOS 27.2 a Home Screen web app on the Duo doesn't get the strip at all: open on its side the page is laid out 867 of the screen's 951
-// wide, closed and upright 382 of 466, with no safe area there (27.1 ran the page across it, calling it one), so nothing of Wraith could
-// go in it. Jerry, 2026-11-09: "Does Apple no longer let us use the full width of the screen?" Laid out at a set size the page does reach
-// across again, but iOS still counts the strip as covered: it finds nothing there for a tap, scrolls nothing for a drag begun there, and
-// lets the page slide sideways by its width (coder/xum#7976, on the Duo's simulator). So Column takes it back in every hold where the
-// phone's on its side or closed and upright; what you touch keeps out of it, but for what Column passes taps to (the controls beside
-// the picture, and the picture); and it goes back to iOS whenever iOS lays the page out any other way.
-// With the strip on the right the page rests across it. On the left it rests short of it, the strip blank, and is slid over by the
-// strip's width, the furthest it goes, and held there.
-const VIEWPORT = document.querySelector('meta[name="viewport"]'), DEVICE_WIDTH = VIEWPORT.content;
-const sideways = n => { for (; n instanceof Element && n !== document.documentElement; n = n.parentElement) { const o = getComputedStyle(n).overflowX; if ((o === 'auto' || o === 'scroll') && n.scrollWidth > n.clientWidth + 1) return true; } return false; };
-// what iOS itself calls a safe area down a side, which is 27.1's way, the page across the strip already (--sal and --sar count Column's too)
-const realSides = el('div');
-realSides.style.cssText = 'position: fixed; left: 0; top: 0; visibility: hidden; pointer-events: none; width: env(safe-area-inset-left, 0px); height: env(safe-area-inset-right, 0px);';
-document.body.append(realSides);
-const Column = {
-  w: 0, side: '', full: 0, id: '', seen: '', refused: '', pinched: false, healing: 0, heal: 0, timers: [], heals: [], flipped: new Set(), drag: null, slid: false, mending: false, said: '', spot: el('div', 'colspot'),
-  // As laid out at device width, with the side the strip's on for each window.orientation. Open: Jerry's hold is -90 (or 0, if iOS calls
-  // that upright), and the other way up is a guess, the strip following the camera. Closed and upright. Closed on its side, never
-  // measured: his hold is 90, the island at the top of the strip on the left, and whatever height iOS gives it is the one used.
-  shapes: [
-    { w: 867, h: 669, full: 951, sides: { '-90': 'right', 0: 'right', 90: 'left', 180: 'left' } },
-    { w: 382, h: 678, full: 466, sides: { 0: 'right' } },
-    { w: 594, h: 466, least: 420, full: 678, sides: { 90: 'left', '-90': 'right' } },
-  ],
-  live() { return ios && navigator.standalone === true; },
-  turn() { const o = window.orientation; if (typeof o === 'number') return o; const a = screen.orientation?.angle || 0; return a === 270 ? -90 : a; },
-  // Cheap to read, and different after any fold or turn: the width iOS shows of the page, the window's size, and the turn. Not the visual
-  // viewport's height (-33554432 on the cover display after a trip to the background) nor the screen's size (466×678 on both displays,
-  // either way up). With the strip taken, measuring means laying the page out twice, so that waits for one of these to change.
-  at() { const v = window.visualViewport; return `${v ? Math.round(v.width * v.scale) : innerWidth}:${innerWidth}×${innerHeight}:${this.turn()}`; },
-  stale() { return !this.w || this.pinched || this.at() !== this.seen; },
-  typing() { return !!document.activeElement?.matches('input, textarea'); },   // nothing's measured under the keyboard unless the sizes themselves changed, or the app came back
-  scale() { return window.visualViewport?.scale ?? 1; },
-  x() { return this.side === 'left' ? this.w : 0; },   // where the page rests sideways
-  say(what) { if (what !== this.said) { this.said = what; Away.add(what); } },
-  // Measures and decides in one go: WebKit lays the page out at device width the moment it's asked for the size, and at the size set
-  // after, and iOS only ever sees the last. So it's safe to run at any time, any number of times, and nothing has to wait its turn.
-  sync() {
-    if (!this.live() || this.healing || document.hidden) return;
-    if (this.scale() > 1.02) { this.pinched = true; return; }   // zoomed in by hand: once that's over
-    this.pinched = false;
-    const de = document.documentElement, turn = this.turn();
-    if (VIEWPORT.content !== DEVICE_WIDTH) VIEWPORT.content = DEVICE_WIDTH;
-    const w = de.clientWidth, h = de.clientHeight;
-    const s = this.shapes.find(s => Math.abs(w - s.w) <= 1 && h <= s.h + 1 && h >= (s.least ?? s.h) - 1);
-    const side = s && (store.get('colside', {})[`${s.full}:${turn}`] || s.sides[turn]);
-    const id = side ? `${s.full}:${turn}:${side}` : '';
-    if (id !== this.id) { this.id = id; this.refused = ''; this.heals = []; this.slid = false; }
-    if (realSides.offsetWidth || realSides.offsetHeight) { this.give(); this.say('iOS’s strip is the page’s already, as a safe area'); }
-    else if (!side) { this.give(); this.say(`iOS’s strip left to it: the page is ${w}×${h} (${turn})`); }
-    else if (id === this.refused) this.give();
-    else {
-      VIEWPORT.content = `width=${s.full}, height=${h}, initial-scale=1, minimum-scale=1, viewport-fit=cover`;
-      this.full = s.full;
-      this.set(s.full - w, side);
-      if (Math.abs(scrollX - this.x()) >= .5) scrollTo(this.x(), scrollY);
-      this.say(`iOS’s strip taken back: ${s.full}×${h}, on the ${side} (${turn})`);
-    }
-    this.seen = this.at();
-  },
-  // A fold, a turn, coming back: anything that might have changed the screen. A fold's `resize` comes while the page still has the
-  // other display's layout, the rest only as the visual viewport's resizes, and the height about three frames later with no event
-  // at all (coder/xum#8042), so every signal is followed up three times, and the last look is always at what's there.
-  look(sure) {
-    if (!this.live() || document.hidden || !(sure || (this.stale() && !this.typing()))) return;
-    this.sync(); this.later();
-  },
-  later() {
-    for (const t of this.timers) clearTimeout(t);
-    this.timers = [150, 600, 1800].map(ms => setTimeout(() => { if (this.check() && this.stale() && !this.typing()) this.sync(); }, ms));
-  },
-  back() { this.refused = ''; this.heals = []; this.healing = 0; this.look(true); },
-  // What iOS made of a take: the page across the screen at its own size, and with the strip on the left, slid over by its width.
-  check() {
-    if (!this.w || this.healing || document.hidden) return true;
-    const scale = this.scale(), got = document.documentElement.clientWidth, x = this.x();
-    if (scale > 1.02) return true;
-    const why = Math.abs(got - this.full) > 1 || scale < .98 ? `iOS laid the page out ${got} wide, at ×${scale.toFixed(2)}`
-      : Math.abs(scrollX - x) > 1 && this.side === 'left' ? `iOS kept the page ${Math.round(scrollX)} across, not ${x}` : '';
-    if (why) this.mend(why, 1);
-    return !why;
-  },
-  // Laying the page out at device width for two frames clears a slide or a size iOS is holding. That many times in ten seconds and it
-  // isn't working: the strip goes back to iOS, until a fold, a turn or coming back.
-  mend(why, most) {
-    const now = performance.now();
-    this.heals = this.heals.filter(t => now - t < 10e3);
-    if (this.heals.length >= most) { this.heals = []; this.refused = this.id; return this.give(why); }
-    this.heals.push(now);
-    const mine = this.healing = ++this.heal;
-    VIEWPORT.content = DEVICE_WIDTH;
-    const over = () => { if (this.healing !== mine) return; this.healing = 0; this.sync(); this.later(); };
-    requestAnimationFrame(() => requestAnimationFrame(over));
-    setTimeout(over, 500);   // no frames out of sight
-  },
-  give(why) {
-    if (VIEWPORT.content !== DEVICE_WIDTH) VIEWPORT.content = DEVICE_WIDTH;
-    this.set(0);
-    if (why) this.say(`iOS’s strip given back: ${why}`);
-  },
-  set(col, side = 'right') {
-    if (!col) side = '';
-    if (col === this.w && side === this.side) return;
-    const de = document.documentElement, on = col ? 'addEventListener' : 'removeEventListener';
-    if (!col !== !this.w) {
-      window[on]('touchstart', this.down, { capture: true, passive: true });
-      window[on]('touchmove', this.move, { capture: true, passive: false });
-      for (const ev of ['touchend', 'touchcancel']) window[on](ev, this.up, { capture: true, passive: false });
-      window[on]('scroll', this.slide, { passive: true });
-    }
-    this.w = col; this.side = side;
-    for (const p of ['--colw', '--coll']) de.style.removeProperty(p);
-    if (col) { de.style.setProperty(side === 'left' ? '--coll' : '--colw', col + 'px'); de.dataset.col = side; document.body.append(this.spot); } else { delete de.dataset.col; this.spot.remove(); }
-    findStrip();
-  },
-  // Nothing tells the page which side the strip is on, only where a touch in it lands: past the edge the page thinks is the far one.
-  // The side is then the other for that shape and turn, from here on.
-  wrong(side) {
-    const [full, turn] = this.id.split(':'), sides = store.get('colside', {});
-    this.flipped.add(`${full}:${turn}`);
-    sides[`${full}:${turn}`] = side; store.set('colside', sides);
-    this.say(`iOS’s strip turned out to be on the ${side} (${turn}), and is taken there from now on`);
-    this.sync(); this.later();
-  },
-  // A touch in the strip: WebKit finds nothing under it and sends no click, so what the finger's on gets one from here, and a drag there
-  // is kept from sliding the page. Elsewhere only a sideways drag over nothing that scrolls sideways is, bar the edges (iOS's back and forward).
-  down: e => {
-    const C = Column, t = e.touches.length === 1 ? e.touches[0] : null, cw = document.documentElement.clientWidth;
-    const other = !t ? '' : C.side === 'right' && t.clientX < -1 ? 'left' : C.side === 'left' && t.clientX > cw + 1 ? 'right' : '';
-    if (other && C.id && !C.flipped.has(C.id.slice(0, C.id.lastIndexOf(':')))) { C.drag = null; return C.wrong(other); }   // once a shape and turn: no going back and forth
-    C.drag = t && { x: t.clientX, y: t.clientY, strip: C.side === 'left' ? t.clientX < C.w + .5 : t.clientX >= cw - C.w - .5, on: e.target, side: null, moved: false };
-  },
-  move: e => {
-    const d = Column.drag, t = e.touches[0];
-    if (!d || !t) return;
-    const dx = t.clientX - d.x, dy = t.clientY - d.y;
-    if (Math.hypot(dx, dy) > 10) d.moved = true;
-    if (d.x < 24 || d.x > document.documentElement.clientWidth - 24) return;
-    if (d.strip) { if (e.cancelable) e.preventDefault(); return; }
-    if (d.side === null && d.moved) d.side = Math.abs(dx) > Math.abs(dy) && !sideways(d.on);
-    if (d.side && e.cancelable) e.preventDefault();
-  },
-  up: e => {
-    const d = Column.drag;
-    if (e.touches.length) return;
-    Column.drag = null;
-    if (!d?.strip || d.moved || e.type === 'touchcancel') return;
-    if (e.cancelable) e.preventDefault();   // WebKit's own click, if any, would land beside the strip
-    Column.tap(d.x, d.y);
-  },
-  tap(x, y) {
-    const sheet = $('sheet'), inside = n => { const r = n.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; };
-    if (!sheet.hidden) { const panel = sheet.querySelector('.panel'); return inside(panel) ? this.under(panel, x, y)?.click() : $('scrim').click(); }
-    const watching = !$('watch').hidden, n = this.under(watching ? $('watch') : $('home'), x, y);
-    if (n) return n.matches('input') ? n.focus() : n.click();
-    if (watching && inside(stage)) stage.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
-  },
-  // the smallest thing to tap that the point is on, which WebKit's own looking can't find in the strip
-  under(root, x, y) {
-    let best = null, least = Infinity;
-    for (const n of root.querySelectorAll('button, a[href], input, [role="button"]')) {
-      if (n.disabled || !n.getClientRects().length) continue;
-      const r = n.getBoundingClientRect(), a = r.width * r.height;
-      if (a >= least || x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
-      const cs = getComputedStyle(n);
-      if (cs.pointerEvents !== 'none' && cs.visibility !== 'hidden') { best = n; least = a; }
-    }
-    return best;
-  },
-  // a slide sideways that got through goes back to where the page rests, and if iOS holds it there, laying the page out anew ends it
-  slide: () => {
-    const C = Column, off = () => C.w && !C.healing && Math.abs(scrollX - C.x()) >= .5 && C.scale() <= 1.02;
-    if (!off()) return;
-    scrollTo(C.x(), scrollY);
-    if (C.mending) return;
-    C.mending = true;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      C.mending = false;
-      if (!off()) return;
-      if (!C.slid) { C.slid = true; C.say('the page slid sideways under iOS’s strip, and iOS held it there'); }
-      C.mend('the page kept sliding sideways under it', 4);
-    }));
-  },
-};
-for (const t of [window, window.visualViewport]) t?.addEventListener('resize', () => Column.look());
-addEventListener('orientationchange', () => Column.look());
-addEventListener('focus', () => Column.look());
-document.addEventListener('focusout', () => setTimeout(() => Column.look(), 300));   // what waited for the keyboard to go
-addEventListener('pageshow', () => Column.back());
-document.addEventListener('visibilitychange', () => { if (!document.hidden) Column.back(); });
-// What comes with no event changes the size of these: one goes by the box fixed things are laid out in, one by the viewport's units.
-// Small, hidden and in a corner, clear of the points along each edge where WebKit looks for a fixed layer to colour the strip by.
-{
-  const folds = new ResizeObserver(() => Column.look(true));
-  for (const size of ['width: 10%; height: 10%', 'width: 10dvw; height: 10dvh']) {
-    const probe = el('div');
-    probe.style.cssText = `position: fixed; left: 0; top: 0; visibility: hidden; pointer-events: none; ${size};`;
-    document.body.append(probe);
-    folds.observe(probe);
-  }
-}
 
 // Inside a tap, start-and-stop every player: Safari then lets any of them start with sound later
 // (an ad break or leaving the app switches players with no tap to hang it on).
@@ -4209,7 +3991,7 @@ const Home = {
     $('vFollow').hidden = view !== 'follow';
     $('vBrowse').hidden = view !== 'browse';
     if (view === 'browse') Browse.load();
-    scrollTo(Column.x(), this.y[Browse.game ? 'game' : view]);
+    scrollTo(0, this.y[Browse.game ? 'game' : view]);
   },
   // force: your follows, now. Only asking (refresh) reloads Browse, which would lose your place in a long list.
   async load(force) {
@@ -4303,7 +4085,7 @@ const Browse = {
     else { $('brTitle').textContent = this.game; $('brSub').textContent = ''; }
     $('brH').firstChild.textContent = this.game ? 'Live channels' : 'Live now ';
     await this.page(true);
-    if (deep && !$('vBrowse').hidden) scrollTo(Column.x(), 0);
+    if (deep && !$('vBrowse').hidden) scrollTo(0, 0);
   },
   async cats() {
     if ($('cats').children.length && Date.now() - this.catAt < 3e5) return;
@@ -4468,7 +4250,7 @@ document.querySelector('#home').addEventListener('click', e => {
 });
 const refreshHome = () => { if (Home.view === 'browse') Browse.load(true); Home.load(true); };
 $('refresh').onclick = () => { if (Me.acct) Me.loadFollows(); refreshHome(); };
-$('brand').onclick = e => { e.preventDefault(); scrollTo(Column.x(), 0); refreshHome(); };
+$('brand').onclick = e => { e.preventDefault(); scrollTo(0, 0); refreshHome(); };
 setInterval(() => { if (!document.hidden && !$('home').hidden && !Pages.idle()) Home.load(); }, 60e3);   // and once you're back (Pages.see)
 $('search').addEventListener('submit', e => { e.preventDefault(); Search.submit(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('home').hidden) Home.load(); });
@@ -4521,7 +4303,7 @@ function route(gesture) {
 function go(url, gesture) {
   if (!$('home').hidden) Home.y[Browse.game ? 'game' : Home.view] = scrollY;
   depth++; history.pushState({ depth }, '', url); route(gesture);
-  if (url.startsWith('?g=')) scrollTo(Column.x(), 0);
+  if (url.startsWith('?g=')) scrollTo(0, 0);
 }
 function back() {
   if (depth > 0) history.back();
@@ -4534,9 +4316,8 @@ Sound.set(Sound.muted);
 Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake, Column };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
-Column.look(true);
 Pages.tell('here');
 route(false);
 })();
