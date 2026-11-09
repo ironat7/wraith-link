@@ -20,6 +20,7 @@ const ALL = new Set(['site', 'popout', 'embed', 'frontpage']), NONE = new Set();
 async function open({ iphone = false, init, initArg, w = 900, h = 1000, touch = false } = {}) {
   const c = await browser.newContext({ viewport: { width: w, height: h }, userAgent: iphone ? IPHONE : undefined, hasTouch: touch, isMobile: touch });
   if (init) await c.addInitScript(init, initArg);
+  await c.addInitScript(() => { const t = setInterval(() => { if (window.wraith?.Sheet) { clearInterval(t); window.wraith.Sheet.details = true; } }, 20); });   // the sheet's details open: they're only filled in then
   const page = await c.newPage();
   page.errors = [];
   page.on('pageerror', e => page.errors.push(e.message));
@@ -2206,7 +2207,9 @@ if (want('screen')) {
       ok('the sheet says what the player says', /Frames: [\d,]+ decoded, [\d,]+ dropped .*Player: \d+×\d+ at /.test(sheet), sheet.slice(-300));
       // out of the way until asked for (2026-11-09: "clean up the settings")
       const det = () => page.evaluate(() => { const s = document.querySelector('#sheetBody .stats:last-child'), b = document.querySelector('#sheetBody .det'); return { shown: !!s.getClientRects().length, last: document.getElementById('sheetBody').lastElementChild === s, button: b?.textContent, open: b?.getAttribute('aria-expanded'), log: [...s.querySelectorAll('.log div')].map(d => d.textContent) }; });
+      await page.evaluate(() => { document.getElementById('scrim').click(); wraith.Sheet.details = false; document.getElementById('bSet').click(); }); await sleep(1200);   // (the stage opens them, for every check that reads them)
       let d = await det();
+      ok('shut, nothing’s worked out for them', await page.evaluate(() => !document.querySelector('#sheetBody .stats:last-child').textContent));
       ok('its details are shut until asked for, under the settings', !d.shown && d.last && d.button === 'Details' && d.open === 'false', JSON.stringify(d));
       await page.evaluate(() => { localStorage.setItem('wraith.away', JSON.stringify(['10:00:00 abcd left', '10:00:05 abcd back'])); document.querySelector('#sheetBody .det').click(); }); await sleep(1200);
       d = await det();
@@ -2711,10 +2714,11 @@ if (want('duo')) {
       await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(500);
       ok(`27.2, ${name}: the picture clear of its controls once they've gone`, +await shown() < .05, await shown());
       await page.screenshot({ path: `fixes-duo-272-${name.replace(/\W+/g, '-')}.png`, timeout: 8000 }).catch(() => {});
-      await page.touchscreen.tap(W / 2, b['#stage'].h / 2); await sleep(350);
+      await page.touchscreen.tap(W / 2, b['#stage'].h / 2);
+      await page.waitForFunction(() => +getComputedStyle(document.querySelector('#stage .hud')).opacity > .95, null, { timeout: 3000 }).catch(never);
       const all = ['bBack', 'bPlay', 'bMute', 'bLat', 'bSet', 'bFull'], c = await box(page, ...all.map(id => '#' + id));
       const reach = await Promise.all(all.map(id => hit(page, id)));
-      ok(`27.2, ${name}: a tap brings them up on the picture, each there to tap`, +await shown() > .95 && all.every((id, i) => { const r = c['#' + id]; return r.seen && r.x >= 0 && r.r <= W && r.y >= 0 && r.b <= b['#stage'].b && reach[i]; }), JSON.stringify({ c, reach }));
+      ok(`27.2, ${name}: a tap brings them up on the picture, each there to tap`, +await shown() > .95 && all.every((id, i) => { const r = c['#' + id]; return r.seen && r.x >= 0 && r.r <= W && r.y >= 0 && r.b <= b['#stage'].b && reach[i]; }), JSON.stringify({ shown: await shown(), ui: await page.evaluate(() => document.getElementById('stage').className), reach, c }));
       await page.screenshot({ path: `fixes-duo-272-${name.replace(/\W+/g, '-')}-controls.png`, timeout: 8000 }).catch(() => {});
       await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
       const sheet = await rect(page, '.panel');
@@ -2725,6 +2729,50 @@ if (want('duo')) {
       ok(`27.2, ${name}, keyboard up: the box above it, with chat and the picture`, b['#say'].b <= above && b['.log'].h >= 70 && b['#stage'].h >= 90 && b['#stage'].r <= W && b['#say'].r <= W, JSON.stringify(b));
       await done();
     })()),
+    // home on the closed screen as iOS 27.2 lays it out: on its side it's 594 wide, short of the 600 the header's one line and the two
+    // across used to wait for
+    (async () => {
+      const live = b => (JSON.parse(b).variables?.l || []).slice(0, 6).map((login, i) => ({ id: String(i + 1), login, displayName: login, profileImageURL: null, broadcastSettings: { title: 'a title for it' }, stream: { id: String(i + 1), createdAt: ago(3600), viewersCount: 100 - i, type: 'live', game: { displayName: 'A Game' }, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null }));
+      const { page, c, done } = await stage(answer, { path: '', w: 594, h: 466, gql: b => b.includes('users(logins') ? { users: live(b) } : undefined });
+      const cdp = await c.newCDPSession(page);
+      await page.waitForSelector('#live a.row', { timeout: 15000 }).catch(never);
+      const home = () => page.evaluate(() => {
+        const r = q => { const b = document.querySelector(q).getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom) }; };
+        return { brand: r('.brand'), word: r('.brand span + span'), seg: r('.seg'), q: r('#q'), refresh: r('#refresh'), acct: r('#acct'), cols: getComputedStyle(document.getElementById('live')).gridTemplateColumns.split(' ').length, rows: document.querySelectorAll('#live a.row').length, wide: document.documentElement.scrollWidth <= innerWidth };
+      });
+      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 21, left: 0 } }); await sleep(200);
+      let h = await home();
+      ok('27.2, home closed on its side: two across, the header on one line, all of it on the page', h.rows === 6 && h.cols === 2 && h.q.y < h.brand.b && h.q.r - h.q.x >= 120 && h.acct.r <= 594 && h.wide, JSON.stringify(h));
+      await page.screenshot({ path: 'fixes-duo-272-home-closed-on-its-side.png', timeout: 8000 }).catch(() => {});
+      await page.setViewportSize({ width: 382, height: 678 });
+      await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 34, left: 0 } }); await sleep(200);
+      h = await home();
+      ok('27.2, home closed and upright: one across, and the header’s buttons clear of each other', h.cols === 1 && h.wide && h.seg.r <= h.refresh.x && h.acct.r <= 382 && h.q.y >= h.brand.b - 8, JSON.stringify(h));
+      await page.screenshot({ path: 'fixes-duo-272-home-closed-upright.png', timeout: 8000 }).catch(() => {});
+      await done();
+    })(),
+    // Upright on the inner screen iOS can leave the page short of the screen after a turn, until something's dragged (Jerry, 2026-11-10:
+    // "you kind of have to drag the chat back down"). Chrome can't stage iOS doing that; what's here is what the page does about it.
+    (async () => {
+      const { page, done } = await on([669, 869, { top: 82, bottom: 116 }]);
+      await levels(page, 15000);
+      const b = await box(page, '#stage', '#sayTx');
+      ok('upright, a bottom inset bigger than any screen’s is kept small', b['#stage'].y === 82 && b['#sayTx'].b >= 869 - 8 - 56 - 1, JSON.stringify(b));
+      await page.evaluate(() => { window.__ys = []; addEventListener('scroll', () => window.__ys.push(scrollY)); dispatchEvent(new Event('resize')); });
+      await sleep(1000);
+      let n = await page.evaluate(() => ({ ys: window.__ys, y: scrollY, min: document.body.style.minHeight, away: localStorage.getItem('wraith.away') }));
+      ok('after a turn the page scrolls itself a point down and back, and nothing of it is left', n.ys.includes(1) && n.y === 0 && n.min === '', JSON.stringify(n.ys));
+      ok('and the record has the size and the safe area', /screen 669×869, safe 82\/0\/116\/0/.test(n.away), String(n.away).slice(-140));
+      await keyboard(page, 500);
+      await page.evaluate(() => { window.__ys.length = 0; dispatchEvent(new Event('resize')); });
+      await sleep(800);
+      n = await page.evaluate(() => ({ ys: window.__ys, kb: document.getElementById('watch').classList.contains('kb') }));
+      ok('not while typing', n.kb && !n.ys.length, JSON.stringify(n));
+      await page.evaluate(() => { document.activeElement.blur(); document.getElementById('bSet').click(); }); await sleep(1300);
+      const view = await page.evaluate(() => [...document.querySelectorAll('#sheetBody .stats div')].map(d => d.textContent).find(x => x.startsWith('View:')));
+      ok('the sheet has every size iOS gives the page', /^View: 669×869, safe 82\/0\/116\/0 · page 669×869 · in sight 669×\d+ at 0,0 · lvh 869 svh 869 dvh 869 · watch 0 to 869 · scrolled 0$/.test(view || ''), view);
+      await done();
+    })(),
     // typing: the box and some chat stay above the keyboard, on a screen short enough that the picture has to give way
     ...[[CLOSEDUP, 342, 'closed, upright'], [UP, 615, 'open, upright'], [[390, 844, { top: 59, bottom: 34 }], 508, 'a phone']].map(([shape, left, name]) => (async () => {
       const { page, done } = await on(shape);
@@ -3863,7 +3911,7 @@ if (want('battery')) {
       await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(2200);
       let s = await state();
       ok('with the sound on and nobody touching it, a picture plays on', !s.user && !s.big, JSON.stringify(s));
-      await page.evaluate(() => { document.getElementById('bMute').click(); wraith.Pages.seenAt = Date.now() - 31 * 60e3; });   // the tap, then half an hour on
+      await page.evaluate(() => { wraith.Chat.dozeAfter = 1; document.getElementById('bMute').click(); wraith.Pages.seenAt = Date.now() - 31 * 60e3; });   // the tap, then half an hour on
       await page.waitForFunction(() => wraith.P.userPaused, null, { timeout: 5000 }).catch(never);
       s = await state();
       ok('muted and untouched for half an hour, it pauses, with the big button to play it again', s.paused && s.user && s.big, JSON.stringify(s));
@@ -3882,7 +3930,7 @@ if (want('battery')) {
       const gqls = [];
       const { page, done } = await stage(answer, { offline: true, gql: () => { gqls.push(Date.now()); } });
       await page.waitForFunction(() => wraith.P.user && !wraith.P.user.stream && wraith.Chat.ws, null, { timeout: 10000 }).catch(never);
-      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(1400);
+      await page.evaluate(() => { wraith.Chat.dozeAfter = 1; wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(1400);
       ok('with nobody about, its chat stops', await page.evaluate(() => !wraith.Chat.ws && !wraith.Chat.timer));
       const t0 = Date.now();
       await page.evaluate(() => wraith.P.lookLive()); await sleep(500);
@@ -3890,6 +3938,14 @@ if (want('battery')) {
       const t1 = Date.now();
       await page.mouse.click(5, 600); await sleep(800);
       ok('a tap looks at once, and brings chat back', gqls.some(t => t > t1) && await page.evaluate(() => !!wraith.Chat.ws && !!wraith.Chat.timer), `${gqls.filter(t => t > t1).length}`);
+      // Dozed over a moment that only looked like nobody about (a player starting over is paused for one), it stayed dozed until the app was
+      // left and come back to: nothing else woke it.
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(1400);
+      const dozed = await page.evaluate(() => !wraith.Chat.ws && !wraith.Chat.timer);
+      await page.evaluate(() => { wraith.Pages.seenAt = Date.now(); }); await sleep(1400);
+      ok('chat that dozed comes back by itself once that’s over, with no tap', dozed && await page.evaluate(() => !!wraith.Chat.ws && !!wraith.Chat.timer), String(dozed));
+      await page.evaluate(() => { wraith.Chat.dozeAfter = 15; wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(2300);
+      ok('and a moment of it doesn’t doze chat at all', await page.evaluate(() => !!wraith.Chat.ws));
       await done();
     })(),
     (async () => {

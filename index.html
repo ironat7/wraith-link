@@ -26,7 +26,7 @@
   --fg: #f4f4f6; --fg-2: #a8a8b2; --fg-3: #6e6e79;
   --live: #ff3b4f; --good: #3ddc97; --warn: #fbbf24;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, sans-serif;
-  --sat: env(safe-area-inset-top); --sab: env(safe-area-inset-bottom);
+  --sat: env(safe-area-inset-top); --sab: min(env(safe-area-inset-bottom), 56px);   /* no screen's is more, and a wrong one after a turn stays small (see Settle) */
   --sal: env(safe-area-inset-left); --sar: env(safe-area-inset-right);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -48,11 +48,11 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 #home { max-width: 1200px; margin: 0 auto; padding: calc(var(--sat) + 8px) max(16px, var(--sar)) calc(var(--sab) + 32px) max(16px, var(--sal)); }
 /* one line where there's the width, the search under it where there isn't */
 .top { display: grid; grid-template: "brand seg refresh acct" "search search search search" / auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px 2px; margin-bottom: 22px; }
-@media (min-width: 600px) { .top { grid-template: "brand seg search refresh acct" / auto auto minmax(0, 1fr) auto auto; gap: 2px; margin-bottom: 14px; } .searchw { margin: 0 6px 0 10px; } }
+@media (min-width: 560px) { .top { grid-template: "brand seg search refresh acct" / auto auto minmax(0, 1fr) auto auto; gap: 2px; margin-bottom: 14px; } .searchw { margin: 0 6px 0 10px; } }
 #refresh { grid-area: refresh; }
 #acct { grid-area: acct; }
 .brand { grid-area: brand; display: flex; align-items: center; gap: 9px; margin-right: 10px; font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
-@media (max-width: 379px) { .brand span + span { display: none; } }
+@media (max-width: 389px) { .brand span + span { display: none; } }
 .brand svg { width: 25px; height: 25px; }
 .sp { flex: 1; }
 .ib { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: var(--fg-2); }
@@ -87,7 +87,6 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .cat .nm { margin-top: 6px; font-size: 12.5px; }
 .cat .gm { margin-top: 1px; font-size: 11.5px; }
 @media (max-height: 539px) { .cat { width: 72px; } .cat img { width: 72px; height: 96px; } .cat .nm { margin-top: 4px; font-size: 11.5px; } .cat .gm { font-size: 11px; } }
-#acct.me { padding: 0; }
 #acct.me svg { display: none; }
 #acct.me img { width: 28px; height: 28px; border-radius: 50%; }
 .sec + .sec { margin-top: 28px; }
@@ -112,7 +111,7 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
   .rows { grid-template-columns: repeat(auto-fill, minmax(265px, 1fr)); gap: 20px 14px; }
   .row { grid-template-columns: 1fr; gap: 8px; }
 }
-@media (min-width: 600px) and (max-height: 539px) { .rows { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; } }
+@media (min-width: 560px) and (max-height: 539px) { .rows { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 14px; } }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chip { display: inline-flex; align-items: center; height: 38px; padding-left: 5px; border-radius: 999px; background: var(--bg-2); border: 1px solid var(--line); font-size: 14px; max-width: 100%; }
 .chip a { display: flex; align-items: center; gap: 8px; height: 100%; min-width: 0; }
@@ -678,12 +677,12 @@ $('logo').innerHTML = '<svg viewBox="0 0 64 64" aria-hidden="true"><path fill="c
 
 // ── small helpers ───────────────────────────────────
 function el(tag, cls, text) { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
-function pic(src, cls) { const i = el('img', cls); i.alt = ''; i.decoding = 'async'; if (src) i.src = src; return i; }
-const count = n => n >= 1e6 ? +(n / 1e6).toFixed(1) + 'M' : n >= 1e5 ? Math.round(n / 1e3) + 'K' : n >= 1e3 ? +(n / 1e3).toFixed(1) + 'K' : String(n);
+function pic(src, cls, lazy) { const i = el('img', cls); i.alt = ''; i.decoding = 'async'; if (lazy) i.loading = 'lazy'; if (src) i.src = src; return i; }   // lazy before the address: WebKit goes for the picture as the address is set
+const count = n => n >= 999500 ? +(n / 1e6).toFixed(1) + 'M' : n >= 1e5 ? Math.round(n / 1e3) + 'K' : n >= 1e3 ? +(n / 1e3).toFixed(1) + 'K' : String(n);
 const dur = s => { s = Math.max(0, Math.floor(s)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : `${m}m`; };
 const clock = s => { s = Math.max(0, Math.ceil(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const uptime = iso => dur((Date.now() - Date.parse(iso)) / 1000);
-const day = iso => new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const day = iso => { const d = new Date(iso); return d.toLocaleDateString(undefined, Date.now() - d > 3e10 ? { month: 'short', year: 'numeric' } : { month: 'short', day: 'numeric' }); };   // nearly a year back, the year says more than the day
 const ago = iso => { const s = (Date.now() - Date.parse(iso)) / 1000; return s < 3600 ? `${Math.max(1, Math.floor(s / 60))}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : s < 604800 ? `${Math.floor(s / 86400)}d ago` : day(iso); };
 const when = iso => { const d = new Date(iso); return d.toLocaleString(undefined, d - Date.now() < 6048e5 ? { weekday: 'short', hour: 'numeric', minute: '2-digit' } : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
 const emoteUrl = id => `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`;
@@ -1283,6 +1282,9 @@ const P = {
   // Start the low-latency feed over, giving up on it after a few tries in a row with nothing to show.
   restart() {
     const gen = this.gen;
+    // With no network a try fails at once, and three of them gave up on the feed within seconds: on a computer for good, with a message
+    // nothing took down when the network came back. They don't count, and cost the relay nothing.
+    if (!navigator.onLine) this.retries = Math.min(this.retries, 2);
     if (this.retries++ < 3) {
       if (!this.cover) UI.spin(true);
       // while away the sound has its own player, and coming back starts this one over anyway
@@ -1545,7 +1547,8 @@ const P = {
   // going, it would hold the screen on, and its player the network, for as long as the phone lasts.
   // With sound it's given far longer, as you may just be watching. But a page iOS keeps where you can't see it may be under no Now Playing
   // card you could stop it from, so it isn't left going for good either.
-  unwatched() { const v = this.active(); return !!v && !v.paused && !document.hidden && Date.now() - Pages.seenAt > (v.muted ? IDLE : LONG_IDLE); },
+  // (An iPhone's page out of sight is paused or resting already. A computer's tab behind another plays on, asking the relay as it goes.)
+  unwatched() { const v = this.active(); return !!v && !v.paused && (!ios || !document.hidden) && Date.now() - Pages.seenAt > (v.muted ? IDLE : LONG_IDLE); },
   nobodyHere() {
     const muted = this.active().muted;
     Away.add(muted ? 'paused: muted, and untouched for 30 min' : 'paused: untouched for 4 hours');
@@ -1682,7 +1685,7 @@ const P = {
   watch(v, now) {
     const moving = v.currentTime !== this.pos, live = this.feed === 'live';
     this.pos = v.currentTime;
-    if (moving && live && now - this.began > 8e3) this.retries = this.fixes = 0;   // it really is playing: the last restart worked
+    if (moving && live && now - this.began > 8e3) { this.retries = this.fixes = 0; this.asked403 = false; }   // it really is playing: the last restart worked, and a fresh token did
     if (!(live ? this.hls?.levels.length : !v.error) || BG.on || document.hidden || v.paused || this.ad || !navigator.onLine || moving) { this.moved = now; return; }
     // Twitch answering with nothing new is the broadcaster stalled, which starting over can't help: it would only replay the last seconds
     if (live && (this.hls.latestLevelDetails?.misses || 0) >= 3) { this.moved = now; return; }
@@ -1720,7 +1723,9 @@ const P = {
     const gen = this.gen;
     try {
       const [u] = await getUsers([this.login]);
-      if (gen !== this.gen || !u) return;
+      // (or found over meanwhile by the player's own asking: an answer that has them live again would be written in as the channel, and
+      // the look for it going live, which goes by that, would never start it)
+      if (gen !== this.gen || !u || !this.user?.stream) return;
       // A new stream: pick it up, as paused or not as this one was. Out of front with no sound going, it waits for you, and plays once you're back.
       if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id && this.feed === 'live' && this.liveId === String(u.stream.id)) {
         // a restart already brought the new broadcast in: what's known about it catches up, with nothing torn down
@@ -1742,6 +1747,13 @@ const P = {
       this.gone = 0;
       if (!u.stream) return this.ended(u);
       this.user = u; UI.info(u);
+      // Opened in a stream's first minute, as every one that starts by itself is, the CDN's copy was a path worked out, with the last
+      // broadcast's host: Twitch lists the recording a little later, with the path itself.
+      const v = u.videos?.edges?.[0]?.node, path = v?.status === 'RECORDING' ? cdnPath(v.seekPreviewsURL) : null;
+      if (path && path !== this.base && path.includes(`_${u.stream.id}_`)) {
+        this.base = path;
+        if (this.feed === 'cdn' && vC.error && !BG.on) { $('msgbox').hidden = true; this.asks = 0; this.rend = null; this.playCdn({ reload: true }); }
+      }
     } catch {}
   },
 
@@ -1879,13 +1891,17 @@ const BG = {
       h.attachMedia(aBG);
     } else {
       // the audio copy runs on the same clock: pick up where the picture is, or was about to be if it hadn't loaded yet
-      const at = vC.currentTime || P.vodAt;
+      // (every load, not the first alone: one that fails mid-play loads again from the start, and a past broadcast then went on from 0:00 and
+      // saved that as your place. this.at follows the sound, see its timeupdate)
+      this.at = vC.currentTime || P.vodAt;
       const srcs = this.srcs = P.feed === 'cdn' ? [`${P.base}/audio_only/index-dvr.m3u8`] : [...P.vodAudio];
-      aBG.addEventListener('loadedmetadata', () => {
-        if (this.srcs !== srcs) return;
-        const to = at || (P.feed === 'cdn' ? P.cdnSpot(aBG) : 0);
+      const place = () => {
+        if (this.srcs !== srcs) return aBG.removeEventListener('loadedmetadata', place);
+        const to = this.at || (P.feed === 'cdn' ? P.cdnSpot(aBG) : 0);
         if (to > 0) aBG.currentTime = to;
-      }, { once: true });
+        if (P.feed === 'cdn') this.at = 0;   // a stream's copy loaded again goes to where the stream is by then
+      };
+      aBG.addEventListener('loadedmetadata', place);
       this.next();
     }
     const p = aBG.play(); if (p) p.catch(e => { if (e.name === 'NotAllowedError') Away.add('iOS refused the sound'); });
@@ -2310,10 +2326,35 @@ window.addEventListener('online', () => {
 // For the record on the settings sheet: what the screen and iOS's own player did, and whether the picture counts as in view. iOS lets go
 // of a video's layer when it doesn't (WebKit 311380@main), going by an observer like this one.
 let screenAt = 0, inView = null;
+const safeBox = el('div');
+safeBox.style.cssText = 'position: fixed; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);';
+document.body.append(safeBox);
+const safeNow = () => { const c = getComputedStyle(safeBox); return [c.paddingTop, c.paddingRight, c.paddingBottom, c.paddingLeft].map(x => Math.round(parseFloat(x)) || 0); };
+const screenNow = () => `${innerWidth}×${innerHeight}, safe ${safeNow().join('/')}`;
+// iOS can leave a Home Screen app's page short of the screen after a turn, the gap under chat's box, until a finger drags something
+// (Jerry, 2026-11-10, upright on the Duo's inner screen: "you kind of have to drag the chat back down"; in his screenshot the watch screen
+// ends 82 short of a 951 screen, the height of iOS's strip). Chrome doesn't do it and the page can't see the screen, so which of iOS's
+// numbers is off isn't known: its size, where it sits, or the bottom inset. What the page can do is the nearest thing to that drag, a
+// scroll of its own a point down and back once the screen has settled, and keep the numbers (here and on the sheet's View line).
+const Settle = {
+  n: 0, since: 0,
+  go() {
+    const w = $('watch'), b = document.body, now = performance.now();
+    if (!ios || w.hidden || w.classList.contains('kb') || scrollY || document.hidden) return;
+    if (now - this.since > 10e3) { this.since = now; this.n = 0; }
+    if (++this.n > 3) return;   // a screen that answers each one with a change of size isn't going to settle for it
+    const was = screenNow();
+    b.style.minHeight = 'calc(100dvh + 2px)';
+    scrollTo(0, 1);
+    setTimeout(() => { scrollTo(0, 0); b.style.minHeight = ''; }, 80);
+    setTimeout(() => { const is = screenNow(); if (is !== was && P.feed) Away.add(`screen after a nudge ${is}`); }, 700);
+  },
+};
 window.addEventListener('resize', () => {
   clearTimeout(screenAt);
-  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${innerWidth}×${innerHeight}`); }, 500);
+  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${screenNow()}`); Settle.go(); }, 500);
 });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { clearTimeout(screenAt); screenAt = setTimeout(() => Settle.go(), 500); } });
 new IntersectionObserver(es => {
   inView = es[es.length - 1].isIntersecting;
   if (P.feed && !inView && !$('watch').hidden) Away.add('picture out of view');
@@ -2380,9 +2421,9 @@ vC.addEventListener('timeupdate', () => {
 aBG.addEventListener('timeupdate', () => {
   if (!BG.on) return;
   if (!aBG.paused && BG.wanted) BG.heard = Date.now();
-  if (P.feed === 'vod') savePlace(aBG.currentTime);
+  if (P.feed === 'vod') { savePlace(aBG.currentTime); if (aBG.currentTime > 1) BG.at = aBG.currentTime; }
 });
-let lastTick = Date.now();
+let lastTick = Date.now(), idleFor = 0;
 setInterval(() => {
   // iOS froze the page a while, which it only does with nothing playing. The record says how long: a page you can't see that logs one is
   // one iOS kept. A sound that hasn't been heard for a while doesn't come back by itself, however it went quiet.
@@ -2405,7 +2446,11 @@ setInterval(() => {
   // to ask about, and coming back asks at once (Pages.see)
   const idle = Pages.idle();
   if (Pages.seated && (P.login || P.vod) && !relayBusy() && (!document.hidden || BG.going()) && !idle && ++Pages.ticks % 30 === 0) Pages.ask();
-  if (idle && Chat.ws) Chat.doze();
+  // Untouched for half an hour, "nobody about" hangs on the picture playing this second, and a player starting over is paused for a moment:
+  // chat dozed then stayed dozed, as nothing woke it short of leaving and coming back. So it takes a while of it to doze, and waking is
+  // looked at here too.
+  idleFor = idle ? idleFor + 1 : 0;
+  if (idleFor >= Chat.dozeAfter && Chat.ws) Chat.doze(); else if (!idle && !Chat.timer) Chat.wake();
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
@@ -2420,7 +2465,7 @@ function nameColor(hex, name) {
 }
 
 function parseIrc(line) {
-  const m = { tags: {}, prefix: '', cmd: '', params: [], text: null };
+  const m = { tags: {}, prefix: '', cmd: '', text: null };
   if (line[0] === '@') {
     const sp = line.indexOf(' ');
     for (const kv of line.slice(1, sp).split(';')) {
@@ -2432,7 +2477,7 @@ function parseIrc(line) {
   if (line[0] === ':') { const sp = line.indexOf(' '); m.prefix = line.slice(1, sp); line = line.slice(sp + 1); }
   const ti = line.indexOf(' :');
   if (ti >= 0) { m.text = line.slice(ti + 2); line = line.slice(0, ti); }
-  [m.cmd, ...m.params] = line.split(' ');
+  m.cmd = line.split(' ', 1)[0];
   return m;
 }
 const loginOf = m => m.tags.login || m.prefix.split('!')[0];   // a subscription or announcement comes from tmi.twitch.tv, with who it's about in a tag
@@ -2449,6 +2494,7 @@ const Chat = {
   top: 0,                                 // where chat was last scrolled to, to tell you scrolling up from lines growing
   resumeAfter: 30e3,                      // scrolled up and left there this long, it goes back to following
   napAfter: 30e3,                         // out of sight this long, the socket closes
+  dozeAfter: 15,                          // or with nobody about for this many seconds running (see the tick)
   held: false,                            // a finger on it
 
   open(login) {
@@ -2493,7 +2539,11 @@ const Chat = {
       if (this.ws !== ws) return;
       this.ws = null; this.behind = true;
       const login = this.login;
-      setTimeout(() => { if (login && this.login === login && !this.ws && !document.hidden && !Pages.idle()) this.connect(); }, Math.min(15e3, 1000 * 2 ** this.retry++));
+      setTimeout(() => {
+        if (!login || this.login !== login || this.ws) return;
+        if (document.hidden || Pages.idle()) return this.doze();   // left dozed, which coming back or the tick's look wakes
+        this.connect();
+      }, Math.min(15e3, 1000 * 2 ** this.retry++));
     };
   },
 
@@ -2560,8 +2610,10 @@ const Chat = {
     }
     // Out of sight only the newest screenful will be drawn, so that's all that needs keeping. On screen everything waiting for the picture
     // is still to come: on the CDN's feed, 20 s behind, a busy chat has thousands waiting, and dropping the oldest dropped every line due.
-    const cap = document.hidden || !this.box.offsetParent ? 800 : 6000;
-    if (this.queue.length > cap) this.queue.splice(0, this.queue.length - cap);
+    if (this.queue.length > 800) {   // asked only then: whether chat's laid out is a question that lays the page out, on every line otherwise
+      const cap = document.hidden || !this.box.offsetParent ? 800 : 6000;
+      if (this.queue.length > cap) this.queue.splice(0, this.queue.length - cap);
+    }
   },
 
   fresh(m) {   // not seen before, and not from someone you've blocked
@@ -2665,6 +2717,7 @@ const Chat = {
       while (i < drawn.length && +drawn[i].dataset.ts <= q.ts) i++;
       this.box.insertBefore(this.render(q.m), drawn[i] || null);
     }
+    if (this.stick) { this.box.scrollTop = this.box.scrollHeight; this.top = this.box.scrollTop; }   // lines put in above the newest would leave it short of the end
   },
 
   append(nodes) {
@@ -2703,7 +2756,7 @@ const Chat = {
     if (t['rm-deleted'] === '1') d.classList.add('gone');
     if (m.cmd === 'USERNOTICE') {
       d.classList.add('sys');
-      d.append(t['system-msg'] || '');
+      d.append(t['system-msg'] || (t['msg-id'] === 'announcement' ? `Announcement · ${t['display-name'] || login}` : ''));   // an announcement comes with no line of Twitch's saying whose
       if (m.text) { const tx = el('span', 'tx'); this.text(tx, m.text, t.emotes); d.append(tx); }
       return d;
     }
@@ -2954,9 +3007,9 @@ const Me = {
   at: {}, notes: {},                   // when each list was last fetched; why one last failed, for the account sheet
   doubt: 0, checking: null,            // when Twitch first said no to this token; the check under way
 
-  post(url, params) { return fetch(url, { method: 'POST', body: new URLSearchParams(params) }); },
+  post(url, params) { return fetch(url, { method: 'POST', body: new URLSearchParams(params), signal: AbortSignal.timeout(15e3) }); },   // like gqlPost: one a dead connection holds would hold sending, the hourly check or the sign-in's wait for good
 
-  validate(token) { return fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + token } }); },
+  validate(token) { return fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: 'OAuth ' + token }, signal: AbortSignal.timeout(15e3) }); },
 
   async accept(j) {   // a first sign-in
     const r = await this.validate(j.access_token);
@@ -3032,7 +3085,7 @@ const Me = {
     return r.json();
   },
   helix(path, init = {}) {
-    return fetch('https://api.twitch.tv/helix' + path, { ...init, headers: { 'Client-Id': TV_CID, Authorization: 'Bearer ' + this.acct?.token, 'Content-Type': 'application/json' } });
+    return fetch('https://api.twitch.tv/helix' + path, { signal: AbortSignal.timeout(15e3), ...init, headers: { 'Client-Id': TV_CID, Authorization: 'Bearer ' + this.acct?.token, 'Content-Type': 'application/json' } });
   },
   async helixAll(path, field) {   // every page of a list
     const out = [];
@@ -3175,15 +3228,16 @@ const SignIn = {
   flow: null,
   async start() {
     this.flow = null;
-    Sheet.show(body => this.draw(body));
+    const fn = body => this.draw(body), gone = () => $('sheet').hidden || Sheet.fn !== fn;   // shut, or another sheet by now: a code left waiting would be asked after under it
+    Sheet.show(fn);
     try {
       const r = await Me.post('https://id.twitch.tv/oauth2/device', { client_id: TV_CID, scopes: SCOPES });
       const j = await r.json();
       if (!r.ok) throw new Error(j.message || `Twitch answered ${r.status}`);
+      if (gone()) return;
       this.flow = { device: j.device_code, code: j.user_code, every: (j.interval || 5) * 1000, until: Date.now() + (j.expires_in || 1800) * 1000 };
       this.wait();
-    } catch (e) { this.flow = { error: e.message }; }
-    if ($('sheet').hidden) return;
+    } catch (e) { if (gone()) return; this.flow = { error: e.message }; }
     Sheet.render();
   },
   draw(body) {
@@ -3422,9 +3476,9 @@ const Picker = {
       const g = el('div', 'epg');
       for (const e of items.slice(0, 400)) {
         shown.add(e.name);
-        const b = el('button'), i = pic(e.url);
+        const b = el('button'), i = pic(e.url, null, true);
         b.type = 'button'; b.dataset.w = e.name; b.title = e.name;
-        i.alt = e.name; i.loading = 'lazy';
+        i.alt = e.name;
         b.append(i); g.append(b);
       }
       box.append(g);
@@ -3515,7 +3569,7 @@ const Vods = {
       for (const v of vids) {
         const a = el('a', 'vod'); a.href = v.status === 'RECORDING' ? `?c=${login}` : `?v=${v.id}`;
         const now = v.status === 'RECORDING' && P.user?.login === login ? P.user.stream?.previewImageURL : null;   // Twitch has no VOD thumbnail yet
-        const th = el('div', 'thumb'); th.append(pic(now || v.previewThumbnailURL));
+        const th = el('div', 'thumb'); th.append(pic(now || v.previewThumbnailURL, null, true));
         th.append(el('span', 'vc r', v.status === 'RECORDING' ? 'live' : dur(v.lengthSeconds)));
         const seen = v.status === 'RECORDING' ? 0 : store.get('pos.' + v.id, 0) / v.lengthSeconds;
         if (seen > 0.01) { const bar = el('i', 'pr'); bar.style.width = Math.min(100, seen * 100) + '%'; th.append(bar); }
@@ -3599,7 +3653,7 @@ $('bChan').onclick = () => Tabs.toggle();
 $('bChanX').onclick = () => Tabs.show('chat');
 
 // ── watch screen ────────────────────────────────────
-let hudTimer = 0, toastTimer = 0;
+let hudTimer = 0;
 const UI = {
   watch(login, u) {
     if (Pages.taking()) Pages.tell('play');   // one you started stops the other pages; one that starts over by itself, or iOS woke, doesn't
@@ -3710,7 +3764,7 @@ const UI = {
   // fills the screen. The status bar stays, and on an iPhone Duo that's a pill over the picture.
   fill(on) {
     if (on !== $('watch').classList.contains('full')) Away.add(on ? 'fullscreen in the page' : 'fullscreen in the page closed');
-    $('watch').classList.toggle('full', on); setIcon($('bFull'), on ? 'unfull' : 'full');
+    $('watch').classList.toggle('full', on); setIcon($('bFull'), on || document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full');
   },
   playIcon() { const v = P.active(); setIcon($('bPlay'), v && !v.paused ? 'pause' : 'play'); },
   feed() {
@@ -3831,6 +3885,8 @@ document.addEventListener('keydown', e => {
 const Sheet = {
   fn: null,
   show(fn) {
+    // a computer's fullscreen is the picture alone, and the sheet isn't in it: it would open unseen under it, and hold the controls up
+    if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
     this.fn = fn;
     this.render();
     $('sheet').hidden = false;
@@ -3840,7 +3896,7 @@ const Sheet = {
   },
   open() { this.show(body => this.playback(body)); },
   account() { this.show(body => this.accountItems(body)); },
-  close() { $('sheet').hidden = true; clearInterval(this.timer); SignIn.cancel(); if (!$('watch').hidden) hud(true); },
+  close() { $('sheet').hidden = true; clearInterval(this.timer); SignIn.cancel(); if (!$('watch').hidden && stage.classList.contains('ui')) hud(true); },   // the controls it was opened from stay a while; a chatter's card doesn't bring them up
   render() {
     const body = $('sheetBody');
     body.textContent = '';
@@ -3887,7 +3943,7 @@ const Sheet = {
     const more = el('button', 'det' + (this.details ? ' on' : ''), 'Details'), stats = el('div', 'stats');
     more.type = 'button'; more.setAttribute('aria-expanded', String(!!this.details));
     more.insertAdjacentHTML('beforeend', icon('back'));
-    more.onclick = () => { this.details = !this.details; more.classList.toggle('on', this.details); more.setAttribute('aria-expanded', String(this.details)); stats.hidden = !this.details; };
+    more.onclick = () => { this.details = !this.details; more.classList.toggle('on', this.details); more.setAttribute('aria-expanded', String(this.details)); stats.hidden = !this.details; this.stats(); };
     stats.hidden = !this.details;
     body.append(more, stats);
     this.stats();
@@ -3918,8 +3974,8 @@ const Sheet = {
   },
   stats() {
     const s = $('sheetBody').querySelector('.stats:last-child');
-    // nobody reads it out of sight or with nobody about, and its look at a frame (look) would keep the picture's player going while away
-    if (!s || !this.fn || !P.feed || document.hidden || Pages.idle()) return;
+    // nobody reads it shut, out of sight or with nobody about, and its look at a frame (look) would keep the picture's player going while away
+    if (!s || s.hidden || !this.fn || !P.feed || document.hidden || Pages.idle()) return;
     const v = P.active(), l = P.latency(), lines = [];
     const lvl = P.hls?.levels?.[P.hls.currentLevel];
     lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : { live: 'low-latency feed', cdn: 'CDN feed', vod: 'past broadcast' }[P.feed]}`);
@@ -3932,12 +3988,19 @@ const Sheet = {
     if (Quota.n) lines.push(`Relay today: ${Quota.n.toLocaleString()} of 20,000`);
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
-    if (ios) lines.push(Awake.say());
+    if (ios) lines.push(Awake.say(), this.view());
     s.textContent = '';
     for (const x of lines) s.append(el('div', null, x));
     // what each page did about leaving, coming back and the screen, newest last, a line each
     const away = store.get('away', []).slice(-16);
     if (away.length) { const log = el('div', 'log'); log.append(el('div', null, 'Away: '), ...away.map(x => el('div', null, x))); s.append(log); }
+  },
+  // Every size iOS gives the page, for a screenshot of a screen laid out wrong (see Settle): the window, the page, the part in sight,
+  // the safe area (top/right/bottom/left), the three viewport heights, and where the watch screen ends.
+  view() {
+    const d = document.documentElement, w = $('watch').getBoundingClientRect(), box = this.vhBox ??= document.body.appendChild(Object.assign(el('div'), { style: 'position: fixed; visibility: hidden; pointer-events: none; width: 0;' }));
+    const tall = u => { box.style.height = '100' + u; return box.offsetHeight; };
+    return `View: ${screenNow()} · page ${d.clientWidth}×${d.clientHeight} · in sight ${vv ? `${Math.round(vv.width)}×${Math.round(vv.height)} at ${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)}` : '?'} · lvh ${tall('lvh')} svh ${tall('svh')} dvh ${tall('dvh')} · watch ${Math.round(w.top)} to ${Math.round(w.bottom)} · scrolled ${Math.round(scrollY)}`;
   },
   // What the player says about the picture, so a screenshot with the sound going and no picture says which part let go. Reading a frame
   // has iOS count the player as needed while away, so that's only done with this sheet open.
@@ -4064,7 +4127,7 @@ const Home = {
     $('secOff').hidden = !off.length;
     for (const u of off) {
       const a = el('a'); a.href = `?c=${u.login}`;
-      a.append(pic(u.profileImageURL), el('span', null, u.displayName));
+      a.append(pic(u.profileImageURL, null, true), el('span', null, u.displayName));
       if (last(u)) a.append(el('small', null, ago(u.lastBroadcast.startedAt)));
       offBox.append(a);
     }
@@ -4084,9 +4147,9 @@ const Home = {
 };
 
 // Browse: what's on across Twitch, by category. The language chip is a Twitch tag; most browsing is in one language.
-const STREAM = 'viewersCount type createdAt title previewImageURL(width: 440, height: 248) game { displayName } broadcaster { login displayName profileImageURL(width: 150) }';
+const STREAM = 'viewersCount type createdAt title previewImageURL(width: 440, height: 248) game { displayName } broadcaster { login displayName profileImageURL(width: 70) }';
 const Browse = {
-  game: null, cursor: null, end: false, busy: false, at: 0, key: null, gameInfo: null, run: 0, listed: new Set(),
+  game: null, cursor: null, end: false, busy: false, at: 0, key: null, run: 0, listed: new Set(),
   lang() { return store.get('lang', 'English'); },
   async load(force) {
     const key = `${this.game || ''}|${this.lang()}`, deep = $('brList').children.length > 30;
@@ -4119,16 +4182,16 @@ const Browse = {
     if (this.busy || this.end) return;
     this.busy = true;
     let loaded = false;
-    const run = this.run, box = $('brList'), lang = this.lang();
+    const run = this.run, game = this.game, box = $('brList'), lang = this.lang();   // the game as asked: Back clears it without a new run
     const after = this.cursor ? `, after: ${JSON.stringify(this.cursor)}` : '';
     const opts = `{ sort: VIEWER_COUNT${lang === 'all' ? '' : `, freeformTags: [${JSON.stringify(lang)}]`} }`;
     const field = `streams(first: 30${after}, options: ${opts}) { edges { cursor node { ${STREAM} } } pageInfo { hasNextPage } }`;
     try {
-      const d = this.game ? await gql(`query($g: String!) { game(name: $g) { displayName viewersCount ${field} } }`, { g: this.game }, TV_CID) : await gql(`query { ${field} }`, null, TV_CID);
+      const d = game ? await gql(`query($g: String!) { game(name: $g) { displayName viewersCount ${field} } }`, { g: game }, TV_CID) : await gql(`query { ${field} }`, null, TV_CID);
       if (run !== this.run) return;
       this.at = Date.now();
-      const res = this.game ? d.game?.streams : d.streams;
-      if (this.game && d.game) { $('brTitle').textContent = d.game.displayName; $('brSub').textContent = `${count(d.game.viewersCount)} watching`; }
+      const res = game ? d.game?.streams : d.streams;
+      if (game && d.game) { $('brTitle').textContent = d.game.displayName; $('brSub').textContent = `${count(d.game.viewersCount)} watching`; }
       const edges = res?.edges || [];
       if (first) { box.textContent = ''; this.listed = new Set(); }
       // Twitch pages by place in a list that keeps re-sorting by viewers, so a channel that slipped a few places comes round again
@@ -4161,6 +4224,7 @@ const Search = {
   input() {
     const term = $('q').value.trim();
     clearTimeout(this.timer);
+    this.n++;   // the answer on its way is for what was typed before
     this.answered = null;
     if (term.length < 2 || /[/.]/.test(term)) return this.hide();
     this.draw(this.mine(term.toLowerCase()).slice(0, 6), []);
@@ -4330,7 +4394,7 @@ Sound.set(Sound.muted);
 Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);
