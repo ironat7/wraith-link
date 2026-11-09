@@ -82,10 +82,6 @@ svg { width: 22px; height: 22px; flex: none; display: block; }
 .cats { display: flex; gap: 10px; margin: 0 -16px; padding: 0 16px 4px; overflow-x: auto; scrollbar-width: none; }
 .cats::-webkit-scrollbar { display: none; }
 html[data-col] .cats { margin-right: 0; padding-right: 0; }   /* not into iOS's strip, where nothing scrolls */
-/* With iOS's strip taken (see Column): WebKit lays a solid colour over all of it when a fixed layer the height of the screen meets that
-   edge where it looks, halfway down (LocalFrameView::fixedContainerEdges), which the watch screen is, black. Something small, clear
-   and fixed of its own there, with nothing in it, and it finds no layer to colour the strip by. */
-.colspot { position: fixed; right: 0; top: calc(50% - 40px); width: 32px; height: 80px; z-index: 25; }
 .cat { flex: none; width: 96px; min-width: 0; }
 .cat:active { opacity: .7; }
 .cat img { width: 96px; height: 128px; border-radius: 8px; background: var(--bg-2); object-fit: cover; }
@@ -497,6 +493,14 @@ html[data-col] #watch.full .msgbox { padding-right: calc(18px + var(--sar)); }
   .panel h3:first-child, .panel .card:first-child { margin-top: 8px; }
 }
 html[data-col] .panel { padding-right: calc(16px + var(--sar)); }   /* iOS's strip, taken, where nothing can be tapped */
+/* With iOS's strip taken (see Column), WebKit lays a solid colour over all of it while a fixed layer meets that edge, the watch screen
+   for one, and keeps the colour it first found there (LocalFrameView::fixedContainerEdges). On a page with nothing fixed or sticky it
+   doesn't look at all. So while the strip's taken nothing on the watch screen is fixed: the page doesn't scroll there, and absolute
+   comes to the same place. */
+.wkprobe { position: fixed; left: 0; top: 0; visibility: hidden; pointer-events: none; }
+html[data-col]:has(#watch:not([hidden])) :is(#watch, #watch.full .stage, .sheet, .toast.gt, video.decoy, .wkprobe) { position: absolute; }
+html[data-col]:has(#watch:not([hidden])) #watch { z-index: 0; }   /* what's in it still stacks within it, as when it was fixed */
+html[data-col], html[data-col] body { overscroll-behavior: none; }   /* and a drag on it doesn't pull the page about */
 .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--line-2); margin: 2px auto 8px; }
 .panel h3 { margin: 16px 4px 8px; font-size: 12.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-3); }
 .opts { background: var(--bg-2); border-radius: 13px; overflow: hidden; }
@@ -1020,7 +1024,7 @@ function recoverHls(hls, media) {
 // The iPhone Duo keeps a strip down one side of its screen for iOS's island, clock and Wi-Fi, unlike a phone on its side,
 // which keeps a margin down both around its notch. The CSS puts what's left of it to use, and needs telling which side it's on.
 const stripSides = el('div');
-stripSides.style.cssText = 'position: fixed; visibility: hidden; pointer-events: none; width: var(--sal); height: var(--sar);';
+stripSides.style.cssText = 'position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; width: var(--sal); height: var(--sar);';   // not fixed: see Column
 document.body.append(stripSides);
 function findStrip() {
   const l = stripSides.offsetWidth, r = stripSides.offsetHeight, whole = document.fullscreenElement || document.webkitFullscreenElement;
@@ -1046,22 +1050,23 @@ aBG.disableRemotePlayback = true;
 // there, Column does that, for the picture to run under the strip below iOS's things. Nothing to tap goes in the strip: iOS finds
 // nothing there for a tap, scrolls nothing for a drag begun there, and lets the page slide sideways by its width. And if iOS covers the
 // strip again, which the page can't see, all that's lost is that end of the picture.
-// What covers it is WebKit's own (WKWebView.mm): a view in the system's background colour over the strip, placed by how far the page
-// stops short of the screen's edge (_webContentDistanceFromRightEdge), and placed again when the page scrolls or zooms or the strip
-// changes, not reliably when the page grows across it. A fold lays the page out at device width and back, after which it stayed: his
-// "closing and reopening breaks it again", and "it kind of works, but it's still very buggy and reverts". So every take is followed by
-// a nudge sideways and back (poke), which has WebKit place it again. A second cover, in the colour of any fixed layer at that edge
-// (LocalFrameView::fixedContainerEdges, sampled halfway down it), is kept off by a small clear fixed layer of Wraith's there (.colspot);
-// WebKit looks for that layer again when a fixed layer comes or goes, so the nudge puts the spot in anew as well. And as nothing says
-// whether either cover is up, lifting a finger off the screen does it again: a strip gone black comes back at a touch.
+// What covers it is WebKit's own, and there are two (WKWebView.mm). One is in the colour of a fixed layer that meets the strip's edge:
+// WebKit hit-tests the middle of each edge for one (LocalFrameView::fixedContainerEdges), a layer the size of the screen keeps
+// whatever colour that edge already had, and the watch screen is such a layer, black when the phone was last on its side. A small
+// clear fixed layer put where it looks (e27d7dd) didn't keep it off on the phone: his screenshots, 2026-11-09, have the strip pure
+// black over a page that's #0b0b0c. WebKit skips all of it on a page with nothing fixed or sticky, and looks again when a fixed layer
+// comes or goes, so while the strip is taken the watch screen has nothing fixed (see the stylesheet), and poke stirs it into looking.
+// The other is in the system's background colour, placed by how far the page stops short of the screen's edge
+// (_webContentDistanceFromRightEdge) and placed again when the page scrolls or zooms or the strip changes, so poke also nudges the page
+// sideways and back. And as nothing says whether either cover is up, lifting a finger off the watch screen pokes again.
 const VIEWPORT = document.querySelector('meta[name="viewport"]'), DEVICE_WIDTH = VIEWPORT.content;
 const sideways = n => { for (; n instanceof Element && n !== document.documentElement; n = n.parentElement) { const o = getComputedStyle(n).overflowX; if ((o === 'auto' || o === 'scroll') && n.scrollWidth > n.clientWidth + 1) return true; } return false; };
 // what iOS itself calls a safe area down a side, which is 27.1's way, the page across the strip already (--sar counts Column's too)
 const realSides = el('div');
-realSides.style.cssText = 'position: fixed; left: 0; top: 0; visibility: hidden; pointer-events: none; width: env(safe-area-inset-left, 0px); height: env(safe-area-inset-right, 0px);';
+realSides.style.cssText = 'position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; width: env(safe-area-inset-left, 0px); height: env(safe-area-inset-right, 0px);';
 document.body.append(realSides);
 const Column = {
-  w: 0, seen: '', fits: false, refused: false, pinched: false, healing: 0, heal: 0, poking: 0, poked: 0, timers: [], heals: [], drag: null, slid: false, mending: false, said: '', spot: el('div', 'colspot'),
+  w: 0, seen: '', fits: false, refused: false, pinched: false, healing: 0, heal: 0, poking: 0, poked: 0, tell: false, timers: [], heals: [], drag: null, slid: false, mending: false, said: '',
   shape: { w: 382, h: 678, full: 466, turn: 0 },   // as laid out at device width
   live() { return ios && navigator.standalone === true; },
   turn() { const o = window.orientation; if (typeof o === 'number') return o; const a = screen.orientation?.angle || 0; return a === 270 ? -90 : a; },
@@ -1091,7 +1096,7 @@ const Column = {
       this.set(s.full - w);
       if (Math.abs(scrollX) >= .5 && !this.poking) scrollTo(0, scrollY);
       this.say(`iOS’s strip taken for the picture: ${s.full}×${h}`);
-      if (!had) requestAnimationFrame(() => requestAnimationFrame(() => this.poke()));
+      if (!had) { this.tell = true; requestAnimationFrame(() => requestAnimationFrame(() => this.poke())); }
     }
     this.seen = this.at();
   },
@@ -1107,15 +1112,26 @@ const Column = {
     this.timers = [150, 600, 1800].map(ms => setTimeout(() => { if (this.check() && this.stale() && !this.typing()) this.sync(); this.poke(); }, ms));
   },
   back() { this.refused = false; this.heals = []; this.healing = 0; this.look(true); },
-  // Has WebKit look at its covers over the strip again, which it does when the page scrolls and when a fixed layer comes or goes: with
-  // the page across the strip and the spot at its edge, both go.
+  // Has WebKit look at its covers over the strip again, which it does when the page scrolls and when a fixed layer comes or goes. The
+  // first after a take leaves a line on the sheet with what iOS says of the page, for when the strip is black all the same.
   poke() {
     if (!this.w || this.healing || this.poking || document.hidden || this.typing() || this.scale() > 1.02 || Math.abs(scrollX) >= .5) return;
-    const mine = this.poking = ++this.heal;
+    const mine = this.poking = ++this.heal, stir = el('div');
     this.poked = performance.now();
-    document.body.append(this.spot);
+    stir.style.cssText = 'position: fixed; left: 0; top: 0; width: 1px; height: 1px; visibility: hidden; pointer-events: none;';
+    document.body.append(stir); stir.offsetWidth; stir.remove();
     scrollTo(1, scrollY);
-    const over = () => { if (this.poking !== mine) return; this.poking = 0; if (this.w && Math.abs(scrollX) >= .5) scrollTo(0, scrollY); };
+    const went = scrollX;
+    const over = () => {
+      if (this.poking !== mine) return;
+      this.poking = 0;
+      if (this.tell) {
+        this.tell = false;
+        const v = window.visualViewport, n = [...document.querySelectorAll('body, body *')].filter(e => /fixed|sticky/.test(getComputedStyle(e).position) && e.getClientRects().length).length;
+        Away.add(`strip check: page ${innerWidth}×${innerHeight}, seen ${Math.round(v?.width)}×${Math.round(v?.height)} at ${Math.round(v?.offsetLeft)},${Math.round(v?.offsetTop)} ×${this.scale().toFixed(2)}, across ${document.documentElement.scrollWidth}, nudge ${went}→${scrollX}, fixed ${n}`);
+      }
+      if (this.w && Math.abs(scrollX) >= .5) scrollTo(0, scrollY);
+    };
     requestAnimationFrame(() => requestAnimationFrame(over));
     setTimeout(over, 300);   // no frames out of sight
   },
@@ -1155,7 +1171,7 @@ const Column = {
       window[on]('scroll', this.slide, { passive: true });
     }
     this.w = col; this.poking = 0;
-    if (col) { de.style.setProperty('--colw', col + 'px'); de.dataset.col = ''; document.body.append(this.spot); } else { de.style.removeProperty('--colw'); delete de.dataset.col; this.spot.remove(); }
+    if (col) { de.style.setProperty('--colw', col + 'px'); de.dataset.col = ''; } else { de.style.removeProperty('--colw'); delete de.dataset.col; }
     findStrip();
   },
   // A touch in the strip: WebKit finds nothing under it and sends no click, so what the finger's on gets one from here, and a drag there
@@ -1224,12 +1240,12 @@ document.addEventListener('focusout', () => setTimeout(() => Column.look(), 300)
 addEventListener('pageshow', () => Column.back());
 document.addEventListener('visibilitychange', () => { if (!document.hidden) Column.back(); });
 // What comes with no event changes the size of these: one goes by the box fixed things are laid out in, one by the viewport's units.
-// Small, hidden and in a corner, clear of the points along each edge where WebKit looks for a fixed layer to colour the strip by.
+// Fixed only while the strip is iOS's: taken, nothing is.
 {
   const folds = new ResizeObserver(() => Column.look(true));
   for (const size of ['width: 10%; height: 10%', 'width: 10dvw; height: 10dvh']) {
-    const probe = el('div');
-    probe.style.cssText = `position: fixed; left: 0; top: 0; visibility: hidden; pointer-events: none; ${size};`;
+    const probe = el('div', 'wkprobe');
+    probe.style.cssText = size;
     document.body.append(probe);
     folds.observe(probe);
   }

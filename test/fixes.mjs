@@ -3101,20 +3101,11 @@ if (want('column')) {
   const taken = page => page.evaluate(() => {
     wraith.Column.set(84);
     const cover = document.createElement('div');
-    cover.style.cssText = 'position: fixed; top: 0; right: 0; bottom: 0; width: 84px; z-index: 99';
+    cover.style.cssText = 'position: absolute; top: 0; right: 0; bottom: 0; width: 84px; z-index: 99';
     document.body.append(cover);
   });
-  // where WebKit looks for a fixed layer at the right edge to colour iOS's strip by (halfway down it), and what it would find
-  const spot = page => page.evaluate(() => {
-    const n = document.querySelector('.colspot');
-    if (!n) return null;
-    const probe = document.createElement('div');   // the rect fixed things are laid out in, which is where WebKit looks
-    probe.style.cssText = 'position: fixed; inset: 0; visibility: hidden; pointer-events: none';
-    document.body.append(probe);
-    const f = probe.getBoundingClientRect(), x = f.right - 4, y = (f.top + f.bottom) / 2, r = n.getBoundingClientRect();
-    probe.remove();
-    return { inBody: n.parentElement === document.body, on: x >= r.left && x <= r.right && y >= r.top && y <= r.bottom, small: r.width < 100 && r.height < 200, fixed: getComputedStyle(n).position === 'fixed', clear: !n.firstChild && getComputedStyle(n).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(n).pointerEvents !== 'none' }; });
-  const spotOk = s => s?.inBody && s.on && s.small && s.fixed && s.clear;
+  // WebKit colours the strip by a fixed layer at its edge, and looks for none on a page with nothing fixed or sticky: what there is of either
+  const fixedOnes = page => page.evaluate(() => [...document.querySelectorAll('body, body *')].filter(n => /fixed|sticky/.test(getComputedStyle(n).position) && n.getClientRects().length).map(n => n.id || n.className || n.tagName));
   // what there is to tap that reaches into the strip
   const strays = page => page.evaluate(() => {
     const cw = document.documentElement.clientWidth, out = [];
@@ -3156,8 +3147,8 @@ if (want('column')) {
       const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingRight));
       ok('closed, upright, the strip taken: the picture the width of the screen, just below iOS’s things', b['#stage'].w === 466 && b['#stage'].h === 262 && b['#stage'].y >= 165 && b['#stage'].y <= 176, JSON.stringify(b['#stage']));
       ok('and the box, chat and the channel’s row out of the strip', b['#sayGo'].seen && b['#sayGo'].r <= 382 && pad >= 84 && b['#iName'].r <= 382, `${pad} ${JSON.stringify(b)}`);
-      const sp = await spot(page);
-      ok('where WebKit looks for a fixed layer to colour the strip by, it finds a small clear one of Wraith’s', spotOk(sp), JSON.stringify(sp));
+      let fx = await fixedOnes(page);
+      ok('nothing on the watch screen is fixed or sticky, for WebKit to colour the strip by', !fx.length, fx.join());
       await page.screenshot({ path: 'fixes-column-closed-upright.png', timeout: 8000 }).catch(() => {});
       await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(250);
       b = await box(page, ...CONTROLS);
@@ -3169,11 +3160,17 @@ if (want('column')) {
       await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
       const opt = await rect(page, '.panel .opt'), top = (await rect(page, '.panel')).y;
       ok('a sheet keeps out of the strip', opt?.seen && opt.r <= 382, JSON.stringify(opt));
+      fx = await fixedOnes(page);
+      ok('nor with a sheet open, which still covers the screen', !fx.length && await page.evaluate(() => { const r = document.getElementById('sheet').getBoundingClientRect(); return r.x === 0 && r.y === 0 && r.width === 466 && r.height === 678 && document.elementFromPoint(100, 60)?.closest('#sheet'); }), fx.join());
       await page.touchscreen.tap(424, Math.max(1, top - 8)); await sleep(400);
       ok('and a tap in the strip off it closes it, as one anywhere off it does', await page.evaluate(() => document.getElementById('sheet').hidden), String(top));
       await page.evaluate(() => { wraith.UI.fill(true); document.getElementById('stage').classList.add('ui'); }); await sleep(300);
       b = await box(page, '#stage', '#bFull', '#bBack', '#bPlay');
-      ok('fullscreen runs the picture under it, the controls clear of it', b['#stage'].w === 466 && b['#stage'].h === 678 && ['#bFull', '#bBack', '#bPlay'].every(q => b[q].seen && b[q].r <= 382), JSON.stringify(b));
+      fx = await fixedOnes(page);
+      ok('fullscreen runs the picture under it, the controls clear of it, still with nothing fixed', b['#stage'].x === 0 && b['#stage'].y === 0 && b['#stage'].w === 466 && b['#stage'].h === 678 && ['#bFull', '#bBack', '#bPlay'].every(q => b[q].seen && b[q].r <= 382) && !fx.length, `${fx} ${JSON.stringify(b)}`);
+      await page.evaluate(() => { wraith.UI.fill(false); wraith.Column.set(0); }); await sleep(300);
+      fx = await fixedOnes(page);
+      ok('and given back, the watch screen is fixed as it was', fx.includes('watch') && await page.evaluate(() => getComputedStyle(document.getElementById('watch')).zIndex) === 'auto', fx.join());
       await done();
     })(),
     // taking it and giving it back, as a Home Screen app
@@ -3188,7 +3185,10 @@ if (want('column')) {
       s = await state(page);
       ok('closed and upright: the page laid out across iOS’s strip, and the sheet says so', TAKEN(s) && /strip taken for the picture: 466×678/.test(s.away), JSON.stringify(s));
       ok('with a nudge sideways and back after it, for WebKit to move its cover off the strip', /^1,0(,1,0)*$/.test(s.xs), s.xs);
-      ok('and the spot where WebKit looks', spotOk(await spot(page)), JSON.stringify(await spot(page)));
+      const fx = await fixedOnes(page), b = await box(page, '#watch', '#stage', '#sayGo');
+      ok('nothing fixed on it, the watch screen and the picture the screen’s width, the box beside the strip', !fx.length && b['#watch'].w === 466 && b['#watch'].h === 678 && b['#stage'].w === 466 && b['#sayGo'].r <= 382, `${fx} ${JSON.stringify(b)}`);
+      const told = await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]').filter(l => /strip check/.test(l)).pop());
+      ok('and a line on the sheet with what the page is told of itself', /strip check: page 382×678, seen 382×678 at 0,0 ×1\.00, across 466, nudge 1→1, fixed 0$/.test(told), told);
       await page.evaluate(() => { const wide = document.createElement('div'); wide.id = 'wide'; wide.style.cssText = 'position: absolute; top: 0; left: 0; width: 1400px; height: 1px'; document.body.append(wide); window.__most = 0; addEventListener('scroll', () => { window.__most = Math.max(window.__most, scrollX); }, true); });
       await sleep(700);   // past the last nudge
       await page.evaluate(() => scrollTo(40, 0)); await sleep(300);
@@ -3197,15 +3197,15 @@ if (want('column')) {
       await page.evaluate(() => { window.__most = 0; });
       await drag(c, page, [300, 250], [130, 256]); await sleep(400);
       ok('and a sideways drag on the picture doesn’t slide it, bar the nudge as the finger lifts', await page.evaluate(() => window.__most) <= 1 && (await state(page)).x === 0, String(await page.evaluate(() => window.__most)));
-      await page.evaluate(() => { window.__xs = []; window.__spots = 0; new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.className === 'colspot') window.__spots++; }).observe(document.body, { childList: true }); });
+      await page.evaluate(() => { window.__xs = []; window.__spots = 0; new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.style?.position === 'fixed') window.__spots++; }).observe(document.body, { childList: true }); });
       await sleep(2600); await page.touchscreen.tap(200, 500); await sleep(500);
       s = await state(page);
-      ok('any touch has WebKit look at its covers again: the nudge, and the spot put in anew', s.xs === '1,0' && s.x === 0 && await page.evaluate(() => window.__spots) === 1 && spotOk(await spot(page)), `${s.xs} ${await page.evaluate(() => window.__spots)}`);
+      ok('any touch has WebKit look at its covers again: the nudge, and a fixed layer come and gone', s.xs === '1,0' && s.x === 0 && await page.evaluate(() => window.__spots) === 1 && !(await fixedOnes(page)).length, `${s.xs} ${await page.evaluate(() => window.__spots)}`);
       await page.evaluate(() => document.getElementById('wide').remove());
       await to(867, 669, -90);
       s = await state(page);
       ok('opened: back to the page iOS gives, and the sheet has its size', LEFT(s) && s.w === 867 && s.strip === null && /left to it: the page is \d+×\d+ \(-90\)/.test(s.away), JSON.stringify(s));
-      ok('and the spot goes with it', await spot(page) === null);
+      ok('with the watch screen fixed again', (await fixedOnes(page)).includes('watch'));
       await to(594, 466, 90);
       ok('closed on its side is iOS’s too', LEFT(await state(page)), JSON.stringify(await state(page)));
       await to(466, 678, 0, { right: 84, bottom: 55 });
