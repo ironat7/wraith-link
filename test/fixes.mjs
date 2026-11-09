@@ -1,4 +1,4 @@
-// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo column unseen update chatq return player budget pill lists2 battery.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE } from './lib.mjs';
@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'column', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3049,6 +3049,179 @@ if (want('duo')) {
       await page.waitForSelector('#vods a.vod', { state: 'attached', timeout: 8000 }).catch(never); await sleep(100);
       const t = await rect(page, '#vods .thumb');
       ok('and a video’s picture uses the strip’s height', t.h >= 76 && t.b <= 466, JSON.stringify(t));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('column')) {
+  // iOS 27.2 keeps the Duo's strip from a Home Screen web app: laid out at device width the page gets 867 of 951 open, 382 of 466 closed and
+  // upright, with no safe area there (2026-11-09: "Does Apple no longer let us use the full width of the screen?"). Wraith lays the page out
+  // at the screen's size instead, which Chrome does as iOS does, the strip off past the edge rather than under iOS's clock. iOS finding
+  // nothing in the strip to tap is staged with a cover over it that takes Chrome's own taps there.
+  const rect = (page, sel) => page.evaluate(q => { const n = document.querySelector(q); if (!n) return null; const b = n.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), seen: !!n.getClientRects().length }; }, sel);
+  const box = async (page, ...sels) => Object.fromEntries(await Promise.all(sels.map(async q => [q, await rect(page, q)])));
+  const CONTROLS = ['#bPlay', '#bMute', '#bLat', '#bSet', '#bFull'];
+  const LINE = (id, who) => `@id=${id};tmi-sent-ts=${Date.now()};user-id=${who};display-name=u${who} :u${who}!u${who}@u${who}.tmi.twitch.tv PRIVMSG #staged :hello there`;
+  // the strip taken back, as Column has it once iOS has laid the page out across it, and every click on a button counted
+  const taken = page => page.evaluate(() => {
+    wraith.Column.set(84);
+    const cover = document.createElement('div');
+    cover.style.cssText = 'position: fixed; top: 0; right: 0; bottom: 0; width: 84px; z-index: 99';
+    document.body.append(cover);
+    window.__clicks = {};
+    document.addEventListener('click', e => { const id = e.target.closest?.('button')?.id; if (id) window.__clicks[id] = (window.__clicks[id] || 0) + 1; }, true);
+  });
+  const clicks = page => page.evaluate(() => ({ ...window.__clicks }));
+  // where WebKit looks for a fixed layer at the right edge to paint iOS's strip in (4 in, halfway down), and what it would find
+  const spot = page => page.evaluate(() => {
+    const n = document.querySelector('.colspot');
+    if (!n) return null;
+    const probe = document.createElement('div');   // the rect fixed things are laid out in, which is where WebKit looks
+    probe.style.cssText = 'position: fixed; inset: 0; visibility: hidden; pointer-events: none';
+    document.body.append(probe);
+    const f = probe.getBoundingClientRect(), x = f.right - 4, y = (f.top + f.bottom) / 2, r = n.getBoundingClientRect();
+    probe.remove();
+    return { inBody: n.parentElement === document.body, on: x >= r.left && x <= r.right && y >= r.top && y <= r.bottom, small: r.width < 100 && r.height < 200, fixed: getComputedStyle(n).position === 'fixed', clear: !n.firstChild && getComputedStyle(n).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(n).pointerEvents !== 'none' }; });
+  const spotOk = s => s?.inBody && s.on && s.small && s.fixed && s.clear;
+  const ui = page => page.evaluate(() => document.getElementById('stage').classList.contains('ui'));
+  const mid = r => [r.x + r.w / 2, r.y + r.h / 2];
+  const drag = async (c, page, [x0, y0], [x1, y1]) => {
+    const cdp = await c.newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+    for (let i = 1; i <= 6; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 6, y: y0 + (y1 - y0) * i / 6 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+  };
+  const STANDALONE = () => { Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true }); window.__turn = -90; Object.defineProperty(window, 'orientation', { configurable: true, get: () => window.__turn }); };
+  await Promise.all([
+    // open on its side: the picture beside the strip and the controls down it, as on 27.1, with what you touch along the bottom out of it
+    (async () => {
+      const { page, done } = await stage(answer, { w: 951, h: 669, me: true });
+      await levels(page, 15000);
+      await taken(page); await sleep(300);
+      let b = await box(page, '#stage', '.side', '.info', '#sayGo', ...CONTROLS);
+      const strip = await page.evaluate(() => document.documentElement.dataset.strip);
+      ok('open, the strip taken back: the picture beside it, as on 27.1', strip === 'right' && b['#stage'].x === 0 && b['#stage'].w === 867, JSON.stringify({ strip, st: b['#stage'] }));
+      ok('the controls down it, below iOS’s things', CONTROLS.every(q => b[q]?.seen && b[q].x >= 867 && b[q].r <= 951 && b[q].y >= 190), JSON.stringify(CONTROLS.map(q => b[q])));
+      ok('and what’s along the bottom stops short of it', b['.side'].r <= 867 && b['#sayGo'].seen && b['#sayGo'].r <= 867 && b['.info'].r <= 867, JSON.stringify(b));
+      const sp = await spot(page);
+      ok('where WebKit looks for a fixed layer to paint the strip black, it finds a small clear one of Wraith’s instead', spotOk(sp), JSON.stringify(sp));
+      await page.evaluate(() => Object.defineProperty(window.visualViewport, 'height', { configurable: true, get: () => 300 }));
+      await page.focus('#sayTx');
+      await page.evaluate(() => window.visualViewport.dispatchEvent(new Event('resize'))); await sleep(250);
+      b = await box(page, '.side', '#sayGo');
+      const kb = await page.evaluate(() => document.getElementById('watch').classList.contains('kb'));
+      ok('typing, the side panel stops short of it too', kb && b['.side'].r <= 867 && b['#sayGo'].r <= 867, JSON.stringify({ kb, b }));
+      await page.evaluate(() => { document.getElementById('sayTx').blur(); delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event('resize')); }); await sleep(300);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
+      const opt = await rect(page, '.panel .opt');
+      ok('a sheet’s insides stay out of it', opt?.seen && opt.r <= 867, JSON.stringify(opt));
+      await page.evaluate(() => document.getElementById('scrim').click()); await sleep(300);
+      await page.evaluate(() => { wraith.UI.fill(true); document.getElementById('stage').classList.add('ui'); }); await sleep(300);
+      b = await box(page, '#stage', '#bFull', '#bBack', '#bPlay');
+      ok('fullscreen runs the picture under it, the controls clear of it', b['#stage'].w === 951 && ['#bFull', '#bBack', '#bPlay'].every(q => b[q].seen && b[q].r <= 867), JSON.stringify(b));
+      await done();
+    })(),
+    // its taps: iOS finds nothing in the strip, so the control or the picture under the finger gets its tap from Column, once
+    (async () => {
+      const { c, page, done } = await stage(answer, { w: 951, h: 669, me: true, touch: true, init: () => { delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen; } });
+      await levels(page, 15000);
+      await taken(page); await sleep(300);
+      const b = await box(page, ...CONTROLS);
+      await page.touchscreen.tap(...mid(b['#bSet'])); await sleep(400);
+      let k = await clicks(page), open = await page.evaluate(() => !document.getElementById('sheet').hidden);
+      ok('a tap on a control in the strip works, once', k.bSet === 1 && open, JSON.stringify({ k, open }));
+      await page.touchscreen.tap(910, 420); await sleep(300);
+      k = await clicks(page); open = await page.evaluate(() => !document.getElementById('sheet').hidden);
+      ok('with a sheet over the strip, a tap there reaches nothing under it', open && Object.keys(k).length === 1 && k.bSet === 1, JSON.stringify({ k, open }));
+      await page.evaluate(() => document.getElementById('scrim').click()); await sleep(300);
+      let was = await ui(page);
+      await page.touchscreen.tap(903, 150); await sleep(400);
+      k = await clicks(page);
+      ok('one in the strip above the controls does nothing', Object.keys(k).length === 1 && await ui(page) === was, JSON.stringify(k));
+      await drag(c, page, mid(b['#bMute']), [b['#bMute'].x + 30, b['#bMute'].y + 90]); await sleep(400);
+      ok('a drag from a control there is no tap', !(await clicks(page)).bMute);
+      was = await ui(page);
+      await page.touchscreen.tap(400, 250); await sleep(400);
+      ok('a tap on the picture beside it is the page’s own as ever', await ui(page) !== was && Object.keys(await clicks(page)).length === 1);
+      await page.touchscreen.tap(...mid(b['#bFull'])); await sleep(400);
+      const full = await page.evaluate(() => document.getElementById('watch').classList.contains('full'));
+      k = await clicks(page);
+      ok('the strip’s fullscreen button too', full && k.bFull === 1, JSON.stringify({ full, k }));
+      was = await ui(page);
+      await page.touchscreen.tap(910, 330); await sleep(450);
+      ok('filling the screen, a tap on the picture under the strip brings its controls up or down', await ui(page) !== was);
+      await page.touchscreen.tap(910, 330); await sleep(90); await page.touchscreen.tap(910, 330); await sleep(450);
+      ok('and a double tap there leaves fullscreen, as anywhere on the picture', await page.evaluate(() => !document.getElementById('watch').classList.contains('full')));
+      await done();
+    })(),
+    // closed and upright: the picture runs under the strip below iOS's things, and what you touch keeps out of it
+    (async () => {
+      const { page, done } = await stage(answer, { w: 466, h: 678, me: true, touch: true });
+      await levels(page, 15000);
+      await page.evaluate(l => wraith.Chat.line(l), LINE('c1', 1)); await sleep(300);
+      await taken(page); await sleep(300);
+      let b = await box(page, '#stage', '.info', '#iName', '#sayGo', '.log');
+      const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingRight));
+      ok('closed, upright, the strip taken back: the picture the width of the screen, just below iOS’s things', b['#stage'].w === 466 && b['#stage'].y >= 165 && b['#stage'].y <= 176, JSON.stringify(b['#stage']));
+      ok('and the box, chat and the channel’s row out of the strip', b['#sayGo'].seen && b['#sayGo'].r <= 382 && pad >= 84 && b['#iName'].r <= 382, `${pad} ${JSON.stringify(b)}`);
+      const sp = await spot(page);
+      ok('closed, where WebKit looks to paint the strip, the small clear spot too', spotOk(sp), JSON.stringify(sp));
+      await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(250);
+      b = await box(page, ...CONTROLS);
+      ok('the picture’s controls too', CONTROLS.every(q => !b[q].seen || b[q].r <= 382) && b['#bFull'].seen, JSON.stringify(b));
+      const was = await ui(page);
+      await page.touchscreen.tap(424, 300); await sleep(450);
+      ok('a tap on the picture in the strip brings its controls up or down', await ui(page) !== was);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
+      const opt = await rect(page, '.panel .opt'), top = (await rect(page, '.panel')).y;
+      ok('a sheet keeps out of the strip', opt?.seen && opt.r <= 382, JSON.stringify(opt));
+      await page.touchscreen.tap(424, Math.max(1, top - 8)); await sleep(400);
+      ok('and a tap in the strip off it closes it, as one anywhere off it does', await page.evaluate(() => document.getElementById('sheet').hidden), String(top));
+      await done();
+    })(),
+    // taking it back and giving it back, as a Home Screen app (Chrome lays a page with a set size out as iOS does)
+    (async () => {
+      const { c, page, done } = await stage(answer, { w: 867, h: 669, me: true, touch: true, init: STANDALONE });
+      const cdp = await c.newCDPSession(page);
+      const state = () => page.evaluate(() => ({ meta: document.querySelector('meta[name="viewport"]').content, col: document.documentElement.dataset.col ?? null, w: document.documentElement.clientWidth, strip: document.documentElement.dataset.strip ?? null, x: scrollX, away: JSON.parse(localStorage.getItem('wraith.away') || '[]').slice(-3).join(' | ') }));
+      const to = async (w, h, turn, insets = {}) => { await page.evaluate(t => { window.__turn = t; }, turn); await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 0, left: 0, ...insets } }); await page.setViewportSize({ width: w, height: h }); await sleep(1500); };
+      await levels(page, 15000); await sleep(1200);
+      let s = await state();
+      ok('iOS 27.2, open: the page laid out across iOS’s strip, and the sheet says so', s.meta.startsWith('width=951, height=669') && s.col === '' && s.w === 951 && s.strip === 'right' && /strip taken back: 951×669/.test(s.away), JSON.stringify(s));
+      ok('with the spot where WebKit looks', spotOk(await spot(page)), JSON.stringify(await spot(page)));
+      await page.evaluate(() => { const wide = document.createElement('div'); wide.id = 'wide'; wide.style.cssText = 'position: absolute; top: 0; left: 0; width: 1400px; height: 1px'; document.body.append(wide); window.__most = 0; addEventListener('scroll', () => { window.__most = Math.max(window.__most, scrollX); }, true); });
+      await page.evaluate(() => scrollTo(40, 0)); await sleep(300);
+      s = await state();
+      ok('a page slid sideways goes back', s.x === 0 && await page.evaluate(() => window.__most) >= 40, JSON.stringify(s));
+      await page.evaluate(() => { window.__most = 0; });
+      await drag(c, page, [500, 250], [330, 256]); await sleep(400);
+      ok('and a sideways drag on the picture doesn’t slide it at all', await page.evaluate(() => window.__most) === 0 && (await state()).x === 0, String(await page.evaluate(() => window.__most)));
+      await page.evaluate(() => document.getElementById('wide').remove());
+      await to(382, 678, 0);
+      s = await state();
+      ok('folded, upright: taken back there too', s.meta.startsWith('width=466, height=678') && s.col === '' && s.w === 466, JSON.stringify(s));
+      await to(951, 669, -90, { right: 84, bottom: 34 });
+      s = await state();
+      ok('where iOS gives the page the strip as a safe area (27.1), there’s nothing to take', s.meta === 'width=device-width, initial-scale=1, viewport-fit=cover' && s.col === null && s.w === 951 && s.strip === 'right', JSON.stringify(s));
+      ok('and the spot goes with it', await spot(page) === null);
+      await to(867, 669, 90);
+      s = await state();
+      ok('with the strip on the left, it’s left to iOS', s.meta.startsWith('width=device-width') && s.col === null && /on the left \(90\)/.test(s.away), JSON.stringify(s));
+      await page.evaluate(() => { Object.defineProperty(window.visualViewport, 'scale', { configurable: true, get: () => 0.91 }); window.__turn = -90; dispatchEvent(new Event('resize')); }); await sleep(1500);
+      s = await state();
+      ok('a page iOS lays out shrunk is given back, and the sheet says why', s.meta.startsWith('width=device-width') && s.col === null && /given back: iOS laid the page out 951 wide, at ×0\.91/.test(s.away), JSON.stringify(s));
+      await page.evaluate(() => dispatchEvent(new Event('resize'))); await sleep(1500);
+      ok('and isn’t tried again on that shape', (await state()).meta.startsWith('width=device-width'));
+      await done();
+    })(),
+    // in Safari, or anywhere that isn't the Home Screen app, the page is as it was
+    (async () => {
+      const { page, done } = await stage(answer, { w: 867, h: 669, me: true, touch: true });
+      await levels(page, 15000); await sleep(1200);
+      const s = await page.evaluate(() => ({ meta: document.querySelector('meta[name="viewport"]').content, col: document.documentElement.dataset.col ?? null }));
+      ok('outside the Home Screen app nothing is taken', s.meta === 'width=device-width, initial-scale=1, viewport-fit=cover' && s.col === null, JSON.stringify(s));
       await done();
     })(),
   ]);
