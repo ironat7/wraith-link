@@ -1,4 +1,4 @@
-// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo column unseen update chatq return player budget pill lists2 battery.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE } from './lib.mjs';
@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'column', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -3083,6 +3083,191 @@ if (want('duo')) {
       await page.waitForSelector('#vods a.vod', { state: 'attached', timeout: 8000 }).catch(never); await sleep(100);
       const t = await rect(page, '#vods .thumb');
       ok('and a video’s picture uses the strip’s height', t.h >= 76 && t.b <= 466, JSON.stringify(t));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('column')) {
+  // The closed screen upright on iOS 27.2: the page is laid out 382 of the screen's 466 wide, and Wraith lays it out at the screen's size
+  // for the picture to run under iOS's strip (Jerry, 2026-11-09: "I still want to attempt at least the full width video in outer
+  // portrait, too thin otherwise"). Chrome lays a page with a set size out as iOS does, the strip off past the edge of the window.
+  // iOS finding nothing in the strip to tap is staged with a cover over it that takes Chrome's own taps there.
+  const rect = (page, sel) => page.evaluate(q => { const n = document.querySelector(q); if (!n) return null; const b = n.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), seen: !!n.getClientRects().length }; }, sel);
+  const box = async (page, ...sels) => Object.fromEntries(await Promise.all(sels.map(async q => [q, await rect(page, q)])));
+  const CONTROLS = ['#bPlay', '#bMute', '#bLat', '#bSet', '#bFull'];
+  const LINE = (id, who) => `@id=${id};tmi-sent-ts=${Date.now()};user-id=${who};display-name=u${who} :u${who}!u${who}@u${who}.tmi.twitch.tv PRIVMSG #staged :hello there`;
+  // the strip taken, as Column has it once iOS has laid the page out across it
+  const taken = page => page.evaluate(() => {
+    wraith.Column.set(84);
+    const cover = document.createElement('div');
+    cover.style.cssText = 'position: fixed; top: 0; right: 0; bottom: 0; width: 84px; z-index: 99';
+    document.body.append(cover);
+  });
+  // where WebKit looks for a fixed layer at the right edge to colour iOS's strip by (halfway down it), and what it would find
+  const spot = page => page.evaluate(() => {
+    const n = document.querySelector('.colspot');
+    if (!n) return null;
+    const probe = document.createElement('div');   // the rect fixed things are laid out in, which is where WebKit looks
+    probe.style.cssText = 'position: fixed; inset: 0; visibility: hidden; pointer-events: none';
+    document.body.append(probe);
+    const f = probe.getBoundingClientRect(), x = f.right - 4, y = (f.top + f.bottom) / 2, r = n.getBoundingClientRect();
+    probe.remove();
+    return { inBody: n.parentElement === document.body, on: x >= r.left && x <= r.right && y >= r.top && y <= r.bottom, small: r.width < 100 && r.height < 200, fixed: getComputedStyle(n).position === 'fixed', clear: !n.firstChild && getComputedStyle(n).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(n).pointerEvents !== 'none' }; });
+  const spotOk = s => s?.inBody && s.on && s.small && s.fixed && s.clear;
+  // what there is to tap that reaches into the strip
+  const strays = page => page.evaluate(() => {
+    const cw = document.documentElement.clientWidth, out = [];
+    for (const n of document.querySelectorAll('#watch :is(button, a[href], input, [role="button"])')) {
+      const cs = getComputedStyle(n), r = n.getBoundingClientRect();
+      if (!n.getClientRects().length || !r.width || !r.height || cs.visibility === 'hidden' || cs.pointerEvents === 'none') continue;
+      if (r.right > cw - 83.5) out.push(n.id || n.className);
+    }
+    return out;
+  });
+  const ui = page => page.evaluate(() => document.getElementById('stage').classList.contains('ui'));
+  const drag = async (c, page, [x0, y0], [x1, y1]) => {
+    const cdp = await c.newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+    for (let i = 1; i <= 6; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + (x1 - x0) * i / 6, y: y0 + (y1 - y0) * i / 6 }] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+  };
+  // A Home Screen app, turned as the test says, with every sideways scroll noted. `__mute` keeps Chrome's own resize events from the
+  // page, and `__deaf` what its ResizeObservers would hear, which is how a fold's sizes reach a page on iOS: late, and with nothing said.
+  const STANDALONE = () => {
+    Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true }); window.__turn = -90; Object.defineProperty(window, 'orientation', { configurable: true, get: () => window.__turn });
+    for (const t of [window, window.visualViewport]) t.addEventListener('resize', e => { if (window.__mute && e.isTrusted) e.stopImmediatePropagation(); }, true);
+    const RO = window.ResizeObserver;
+    window.ResizeObserver = class extends RO { constructor(heard) { super((...a) => { if (!window.__deaf) heard(...a); }); } };
+    window.__xs = []; addEventListener('scroll', () => { if (window.__xs.at(-1) !== scrollX) window.__xs.push(scrollX); }, true);
+  };
+  const DEVICE = 'width=device-width, initial-scale=1, viewport-fit=cover';
+  const state = page => page.evaluate(() => ({ meta: document.querySelector('meta[name="viewport"]').content, col: document.documentElement.dataset.col ?? null, w: document.documentElement.clientWidth, strip: document.documentElement.dataset.strip ?? null, x: scrollX, xs: window.__xs?.join(), away: JSON.parse(localStorage.getItem('wraith.away') || '[]').slice(-3).join(' | ') }));
+  const TAKEN = s => s.meta.startsWith('width=466, height=678') && s.col === '' && s.w === 466 && s.strip === 'right' && s.x === 0, LEFT = s => s.meta === DEVICE && s.col === null;
+  await Promise.all([
+    // the picture runs under the strip below iOS's things, and what you touch keeps out of it
+    (async () => {
+      const { page, done } = await stage(answer, { w: 466, h: 678, me: true, touch: true });
+      await levels(page, 15000);
+      await page.evaluate(l => wraith.Chat.line(l), LINE('c1', 1)); await sleep(300);
+      await taken(page); await sleep(300);
+      let b = await box(page, '#stage', '.info', '#iName', '#sayGo', '.log');
+      const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingRight));
+      ok('closed, upright, the strip taken: the picture the width of the screen, just below iOS’s things', b['#stage'].w === 466 && b['#stage'].h === 262 && b['#stage'].y >= 165 && b['#stage'].y <= 176, JSON.stringify(b['#stage']));
+      ok('and the box, chat and the channel’s row out of the strip', b['#sayGo'].seen && b['#sayGo'].r <= 382 && pad >= 84 && b['#iName'].r <= 382, `${pad} ${JSON.stringify(b)}`);
+      const sp = await spot(page);
+      ok('where WebKit looks for a fixed layer to colour the strip by, it finds a small clear one of Wraith’s', spotOk(sp), JSON.stringify(sp));
+      await page.screenshot({ path: 'fixes-column-closed-upright.png', timeout: 8000 }).catch(() => {});
+      await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(250);
+      b = await box(page, ...CONTROLS);
+      const out = await strays(page);
+      ok('the picture’s controls keep out of it too, and nothing else to tap is in it', CONTROLS.every(q => !b[q].seen || b[q].r <= 382) && b['#bFull'].seen && !out.length, `${out} ${JSON.stringify(b)}`);
+      const was = await ui(page);
+      await page.touchscreen.tap(424, 300); await sleep(450);
+      ok('a tap on the picture in the strip brings its controls up or down', await ui(page) !== was);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
+      const opt = await rect(page, '.panel .opt'), top = (await rect(page, '.panel')).y;
+      ok('a sheet keeps out of the strip', opt?.seen && opt.r <= 382, JSON.stringify(opt));
+      await page.touchscreen.tap(424, Math.max(1, top - 8)); await sleep(400);
+      ok('and a tap in the strip off it closes it, as one anywhere off it does', await page.evaluate(() => document.getElementById('sheet').hidden), String(top));
+      await page.evaluate(() => { wraith.UI.fill(true); document.getElementById('stage').classList.add('ui'); }); await sleep(300);
+      b = await box(page, '#stage', '#bFull', '#bBack', '#bPlay');
+      ok('fullscreen runs the picture under it, the controls clear of it', b['#stage'].w === 466 && b['#stage'].h === 678 && ['#bFull', '#bBack', '#bPlay'].every(q => b[q].seen && b[q].r <= 382), JSON.stringify(b));
+      await done();
+    })(),
+    // taking it and giving it back, as a Home Screen app
+    (async () => {
+      const { c, page, done } = await stage(answer, { w: 867, h: 669, me: true, touch: true, init: STANDALONE });
+      const cdp = await c.newCDPSession(page);
+      const to = async (w, h, turn, insets = {}) => { await page.evaluate(t => { window.__turn = t; window.__xs = []; }, turn); await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 0, left: 0, ...insets } }); await page.setViewportSize({ width: w, height: h }); await sleep(1500); };
+      await levels(page, 15000); await sleep(1200);
+      let s = await state(page);
+      ok('iOS 27.2, open: the page as iOS gives it', LEFT(s) && s.w === 867 && s.strip === null && !/strip/.test(s.away), JSON.stringify(s));
+      await to(382, 678, 0);
+      s = await state(page);
+      ok('closed and upright: the page laid out across iOS’s strip, and the sheet says so', TAKEN(s) && /strip taken for the picture: 466×678/.test(s.away), JSON.stringify(s));
+      ok('with a nudge sideways and back after it, for WebKit to move its cover off the strip', /^1,0(,1,0)*$/.test(s.xs), s.xs);
+      ok('and the spot where WebKit looks', spotOk(await spot(page)), JSON.stringify(await spot(page)));
+      await page.evaluate(() => { const wide = document.createElement('div'); wide.id = 'wide'; wide.style.cssText = 'position: absolute; top: 0; left: 0; width: 1400px; height: 1px'; document.body.append(wide); window.__most = 0; addEventListener('scroll', () => { window.__most = Math.max(window.__most, scrollX); }, true); });
+      await sleep(700);   // past the last nudge
+      await page.evaluate(() => scrollTo(40, 0)); await sleep(300);
+      s = await state(page);
+      ok('a page slid sideways goes back', s.x === 0 && await page.evaluate(() => window.__most) >= 40, JSON.stringify(s));
+      await page.evaluate(() => { window.__most = 0; });
+      await drag(c, page, [300, 250], [130, 256]); await sleep(400);
+      ok('and a sideways drag on the picture doesn’t slide it, bar the nudge as the finger lifts', await page.evaluate(() => window.__most) <= 1 && (await state(page)).x === 0, String(await page.evaluate(() => window.__most)));
+      await page.evaluate(() => { window.__xs = []; window.__spots = 0; new MutationObserver(ms => { for (const m of ms) for (const n of m.addedNodes) if (n.className === 'colspot') window.__spots++; }).observe(document.body, { childList: true }); });
+      await sleep(2600); await page.touchscreen.tap(200, 500); await sleep(500);
+      s = await state(page);
+      ok('any touch has WebKit look at its covers again: the nudge, and the spot put in anew', s.xs === '1,0' && s.x === 0 && await page.evaluate(() => window.__spots) === 1 && spotOk(await spot(page)), `${s.xs} ${await page.evaluate(() => window.__spots)}`);
+      await page.evaluate(() => document.getElementById('wide').remove());
+      await to(867, 669, -90);
+      s = await state(page);
+      ok('opened: back to the page iOS gives, and the sheet has its size', LEFT(s) && s.w === 867 && s.strip === null && /left to it: the page is \d+×\d+ \(-90\)/.test(s.away), JSON.stringify(s));
+      ok('and the spot goes with it', await spot(page) === null);
+      await to(594, 466, 90);
+      ok('closed on its side is iOS’s too', LEFT(await state(page)), JSON.stringify(await state(page)));
+      await to(466, 678, 0, { right: 84, bottom: 55 });
+      s = await state(page);
+      ok('where iOS gives the page the strip as a safe area (27.1), there’s nothing to take', LEFT(s) && s.w === 466 && s.strip === 'right', JSON.stringify(s));
+      await to(382, 678, 0);
+      ok('closed and upright again: taken again', TAKEN(await state(page)), JSON.stringify(await state(page)));
+      await page.evaluate(() => { const v = window.visualViewport; Object.defineProperty(v, 'scale', { configurable: true, get: () => 0.82 }); Object.defineProperty(v, 'width', { configurable: true, get: () => 466 }); dispatchEvent(new Event('resize')); }); await sleep(1500);
+      s = await state(page);
+      ok('a page iOS lays out shrunk is given back, and the sheet says why', LEFT(s) && /given back: iOS laid the page out 466 wide, at ×0\.82/.test(s.away), JSON.stringify(s));
+      await page.evaluate(() => dispatchEvent(new Event('resize'))); await sleep(2200);
+      ok('and isn’t tried again as it is', LEFT(await state(page)));
+      await page.evaluate(() => { delete window.visualViewport.scale; delete window.visualViewport.width; dispatchEvent(new Event('pageshow')); }); await sleep(1000);
+      ok('until the app comes back', TAKEN(await state(page)), JSON.stringify(await state(page)));
+      await done();
+    })(),
+    // "closing and reopening breaks it again": a fold's `resize` comes with the old display's sizes still in place, and the new ones later, unannounced
+    (async () => {
+      const { page, done } = await stage(answer, { w: 867, h: 669, me: true, touch: true, init: STANDALONE });
+      await levels(page, 15000); await sleep(1200);
+      const fold = async (w, h, turn, { said = true } = {}) => {
+        await page.evaluate(([t, said]) => { window.__mute = true; window.__turn = t; window.__xs = []; if (said) dispatchEvent(new Event('resize')); }, [turn, said]);
+        await sleep(80);
+        await page.setViewportSize({ width: w, height: h });
+        await sleep(700);
+        return state(page);
+      };
+      const nudged = s => /^1,0/.test(s.xs);
+      let s = await state(page);
+      ok('open to start with, nothing taken', LEFT(s), JSON.stringify(s));
+      // with nothing but timers: the sizes after the resize, and nothing heard of them
+      await page.evaluate(() => { window.__deaf = true; });
+      s = await fold(382, 678, 0);
+      ok('closed, its sizes coming after the `resize` with no word: the strip is taken, and the cover nudged off', TAKEN(s) && nudged(s), JSON.stringify(s));
+      s = await fold(867, 669, -90);
+      ok('opened again: the open screen’s own page, not the cover’s width kept', LEFT(s) && s.w === 867, JSON.stringify(s));
+      s = await fold(382, 678, 0);
+      ok('and closed again: taken again, nudged again', TAKEN(s) && nudged(s), JSON.stringify(s));
+      s = await fold(867, 669, -90);
+      ok('and opened again', LEFT(s) && s.w === 867, JSON.stringify(s));
+      // with no event at all and the turn the same either way, only the sizes changing under the page
+      await page.evaluate(() => { window.__deaf = false; });
+      await fold(867, 669, 0, { said: false });
+      s = await fold(382, 678, 0, { said: false });
+      ok('closed with no event at all, only the sizes changing: taken', TAKEN(s) && nudged(s), JSON.stringify(s));
+      s = await fold(867, 669, 0, { said: false });
+      ok('and opened the same way', LEFT(s) && s.w === 867, JSON.stringify(s));
+      // the height last of all, as on the phone: the width and the turn first, with an event, then the height with none
+      await page.evaluate(() => { window.__deaf = true; window.__mute = false; window.__turn = 0; window.__xs = []; });
+      await page.setViewportSize({ width: 382, height: 669 }); await sleep(60);
+      await page.evaluate(() => { window.__mute = true; });
+      await page.setViewportSize({ width: 382, height: 678 }); await sleep(900);
+      s = await state(page);
+      ok('closed, the height coming last and unannounced: taken at the cover’s size', TAKEN(s) && nudged(s), JSON.stringify(s));
+      await done();
+    })(),
+    // in Safari, or anywhere that isn't the Home Screen app, the page is as it was
+    (async () => {
+      const { page, done } = await stage(answer, { w: 382, h: 678, me: true, touch: true });
+      await levels(page, 15000); await sleep(1200);
+      const s = await page.evaluate(() => ({ meta: document.querySelector('meta[name="viewport"]').content, col: document.documentElement.dataset.col ?? null }));
+      ok('outside the Home Screen app nothing is taken', s.meta === 'width=device-width, initial-scale=1, viewport-fit=cover' && s.col === null, JSON.stringify(s));
       await done();
     })(),
   ]);
