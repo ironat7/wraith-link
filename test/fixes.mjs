@@ -2771,6 +2771,27 @@ if (want('duo')) {
       n = await page.evaluate(() => ({ y: scrollY, min: document.body.style.minHeight, away: localStorage.getItem('wraith.away') }));
       ok('a page found scrolled up under the watch screen is put back at its top', sat === 82 && n.y === 0 && n.min === '' && /the page sat 82 up, put back/.test(n.away), `${sat} ${n.y} ${String(n.away).slice(-120)}`);
       await page.evaluate(() => document.getElementById('tall').remove());
+      // and what his sheet said it is: the page 82 short of a screen that 100lvh still has whole, with nothing scrolled. Chrome can't be
+      // made to do it, so the screen's height is staged, and what's checked is what the page asks of iOS.
+      const metas = () => page.evaluate(() => window.__metas.map(x => /interactive-widget=overlays-content/.test(x) ? 'look' : /viewport-fit=auto/.test(x) ? 'edges' : /viewport-fit=cover$/.test(x) ? 'as it was' : x));
+      await page.evaluate(() => {
+        Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true });
+        window.__metas = []; const m = document.querySelector('meta[name="viewport"]');
+        new MutationObserver(() => window.__metas.push(m.content)).observe(m, { attributes: true });
+        wraith.Settle.large = () => innerHeight + (window.__short ?? 82);
+        dispatchEvent(new Event('resize'));
+      });
+      await sleep(900);
+      ok('a page short of the screen has iOS look at its size again, by the viewport’s interactive-widget', (await metas()).join() === 'look,as it was', (await metas()).join());
+      await sleep(1400);
+      ok('still short, the edges are given up and taken back', (await metas()).join() === 'look,as it was,edges,as it was', (await metas()).join());
+      await page.evaluate(() => dispatchEvent(new Event('scroll'))); await page.evaluate(() => wraith.Settle.go(true)); await sleep(1300);
+      n = await page.evaluate(() => ({ away: localStorage.getItem('wraith.away'), meta: document.querySelector('meta[name="viewport"]').content }));
+      ok('and after that it’s left alone, the viewport as it was, with the record saying so', (await metas()).length === 4 && n.meta === 'width=device-width, initial-scale=1, viewport-fit=cover' && /82 short of the screen, still 82 short after a new look at its size/.test(n.away) && /still 82 short after giving the edges up and taking them back/.test(n.away), `${(await metas()).length} ${n.meta} ${String(n.away).slice(-200)}`);
+      await page.evaluate(() => { window.__metas.length = 0; wraith.Settle.tries = 0; new MutationObserver((_, o) => { window.__short = 0; o.disconnect(); }).observe(document.querySelector('meta[name="viewport"]'), { attributes: true }); window.__short = 82; wraith.Settle.go(); });
+      await sleep(2400);
+      n = await page.evaluate(() => localStorage.getItem('wraith.away'));
+      ok('one that the first look makes whole gets no more than that', (await metas()).join() === 'look,as it was' && /82 short of the screen, whole again after a new look/.test(n), `${(await metas()).join()} ${String(n).slice(-160)}`);
       await keyboard(page, 500);
       await page.evaluate(() => { window.__ys.length = 0; dispatchEvent(new Event('resize')); });
       await sleep(800);

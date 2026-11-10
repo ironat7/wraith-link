@@ -2331,24 +2331,56 @@ safeBox.style.cssText = 'position: fixed; visibility: hidden; pointer-events: no
 document.body.append(safeBox);
 const safeNow = () => { const c = getComputedStyle(safeBox); return [c.paddingTop, c.paddingRight, c.paddingBottom, c.paddingLeft].map(x => Math.round(parseFloat(x)) || 0); };
 const screenNow = () => `${innerWidth}×${innerHeight}, safe ${safeNow().join('/')}`;
-// Turned upright, on its side and upright again, iOS leaves a Home Screen app's page scrolled up by about the height of its strip: the watch
-// screen, which doesn't scroll, ends that far short of the bottom with the gap under chat's box, until a finger pulls the page down and
-// lets go (Jerry, 2026-11-10, on the Duo's inner screen: "When you go from portrait to landscape to portrait again, it becomes like this.
-// And you can actually pull it down back to normal"; his screenshots have it 82 short, then 78). Chrome doesn't do it. So with the watch
-// screen up and no keyboard, the page is put back at its top whenever it's found anywhere else: after a resize, on coming back, on a
-// scroll, and when a finger lifts. The scroll goes a point down first, as one to where the page already believes it is does nothing.
+// Turned upright, on its side and upright again, iOS leaves a Home Screen app's page short of the screen by the height of its strip: the
+// watch screen ends that far above the bottom, the gap under chat's box, until a finger pulls the page down and lets go (Jerry,
+// 2026-11-10, on the Duo's inner screen: "When you go from portrait to landscape to portrait again, it becomes like this. And you can
+// actually pull it down back to normal"). His sheet in that state: the window 669×873 and the page 669×869 on a 951 screen, a top safe
+// area of 82, nothing scrolled, and 100lvh still 951. So the page is under the strip as it should be, and its height is one WebKit worked
+// out mid-turn with the strip taken off (WKWebView's activeViewLayoutSize, the bounds less whatever safe area the scroll view was
+// applying then) and never worked out again. Two things in WebKit's source work it out afresh from the page's side: a change of the
+// viewport's interactive-widget (_didCommitLayerTree), which changes nothing else with no keyboard up, and a change of viewport-fit
+// (_setAvoidsUnsafeArea), which for a moment gives the edges up. The first is tried, then the second, then it's left alone until the
+// phone is turned again. Chrome never has the page short, so neither has been seen to work here.
+// A page left scrolled under the watch screen, which doesn't scroll, is put back at its top too (bd6d47b, aa19d55: the first two
+// readings of the same gap, which weren't it; the scroll after a resize did move iOS's 869 to 873).
 const Settle = {
-  n: 0, since: 0, at: 0, touching: false,
+  n: 0, since: 0, at: 0, touching: false, tries: 0, forW: 0, fixing: false,
   off() { return Math.round(scrollY) || Math.round(vv?.pageTop || 0) || Math.round(vv?.offsetTop || 0); },
+  // The screen's height as iOS has it for 100lvh, which a Home Screen app has all of. (In Safari the bars come out of the window and not
+  // out of that, so there it says nothing.)
+  large() {
+    const box = this.box ??= document.body.appendChild(Object.assign(el('div'), { style: 'position: fixed; visibility: hidden; pointer-events: none; width: 0; height: 100lvh;' }));
+    return box.offsetHeight;
+  },
+  short() { const d = navigator.standalone ? this.large() - innerHeight : 0; return d > 40 ? d : 0; },
+  // On its side after being upright, the top safe area stays the strip's, which is down a side by then: a new look costs nothing.
+  stale() { return !!navigator.standalone && innerWidth > innerHeight && safeNow()[0] > 60; },
+  fix(short) {
+    if (this.fixing) return;
+    if (this.forW !== innerWidth) { this.forW = innerWidth; this.tries = 0; }
+    const m = document.querySelector('meta[name="viewport"]'), was = m.content, go = ++this.tries;
+    if (go > 2 || (go > 1 && !short)) return;
+    this.fixing = true;
+    m.content = go === 1 ? `${was}, interactive-widget=overlays-content` : was.replace('viewport-fit=cover', 'viewport-fit=auto');
+    setTimeout(() => { m.content = was; }, 160);
+    setTimeout(() => {
+      this.fixing = false;
+      const left = this.short();
+      if (P.feed) Away.add(`screen: the page ${short ? `${short} short of the screen` : 'with the strip’s safe area on top'}, ${left ? `still ${left} short` : short ? 'whole again' : `now safe ${safeNow().join('/')}`} after ${go === 1 ? 'a new look at its size' : 'giving the edges up and taking them back'} (${screenNow()})`);
+      if (left) this.go();
+    }, 900);
+  },
   free() {
     const w = $('watch'), a = document.activeElement;
     return ios && !w.hidden && !w.classList.contains('kb') && !document.hidden && !this.touching && !/^(INPUT|TEXTAREA)$/.test(a?.tagName || '');
   },
   soon(ms) { clearTimeout(this.at); this.at = setTimeout(() => this.go(), ms); },
   go(nudge) {   // nudge: with nothing seen wrong, scroll anyway, in case what iOS shows isn't what it tells the page
-    if (!this.free()) return;
+    if (!this.free() || this.fixing) return;
+    const short = this.short();
+    if (short || this.stale()) { this.fix(short); if (this.fixing) return; }   // one thing at a time: it looks again once that's done, if still short
     const off = this.off(), b = document.body, now = performance.now();
-    if (!off && !nudge) return;
+    if (!off && (!nudge || short)) return;
     if (now - this.since > 10e3) { this.since = now; this.n = 0; }
     if (++this.n > 4) return;   // a screen that answers each one by moving again isn't going to settle for it
     const was = screenNow();
@@ -2363,7 +2395,7 @@ window.addEventListener('resize', () => {
   screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${screenNow()}${Settle.off() ? `, the page ${Settle.off()} up` : ''}`); Settle.go(true); }, 500);
   Settle.late = setTimeout(() => Settle.go(), 1600);   // iOS can finish its turn after that
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) Settle.soon(500); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { Settle.tries = 0; Settle.soon(500); } });
 window.addEventListener('scroll', () => { if (!$('watch').hidden && Settle.off()) Settle.soon(250); }, { passive: true });
 window.visualViewport?.addEventListener('scroll', () => { if (!$('watch').hidden && Settle.off()) Settle.soon(250); });
 for (const ev of ['touchstart', 'touchend', 'touchcancel']) document.addEventListener(ev, e => { Settle.touching = e.touches ? e.touches.length > 0 : e.type === 'touchstart'; if (!Settle.touching) Settle.soon(400); }, { passive: true, capture: true });
@@ -4412,7 +4444,7 @@ Sound.set(Sound.muted);
 Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Settle, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);
