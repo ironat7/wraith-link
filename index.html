@@ -2331,30 +2331,42 @@ safeBox.style.cssText = 'position: fixed; visibility: hidden; pointer-events: no
 document.body.append(safeBox);
 const safeNow = () => { const c = getComputedStyle(safeBox); return [c.paddingTop, c.paddingRight, c.paddingBottom, c.paddingLeft].map(x => Math.round(parseFloat(x)) || 0); };
 const screenNow = () => `${innerWidth}×${innerHeight}, safe ${safeNow().join('/')}`;
-// iOS can leave a Home Screen app's page short of the screen after a turn, the gap under chat's box, until a finger drags something
-// (Jerry, 2026-11-10, upright on the Duo's inner screen: "you kind of have to drag the chat back down"; in his screenshot the watch screen
-// ends 82 short of a 951 screen, the height of iOS's strip). Chrome doesn't do it and the page can't see the screen, so which of iOS's
-// numbers is off isn't known: its size, where it sits, or the bottom inset. What the page can do is the nearest thing to that drag, a
-// scroll of its own a point down and back once the screen has settled, and keep the numbers (here and on the sheet's View line).
+// Turned upright, on its side and upright again, iOS leaves a Home Screen app's page scrolled up by about the height of its strip: the watch
+// screen, which doesn't scroll, ends that far short of the bottom with the gap under chat's box, until a finger pulls the page down and
+// lets go (Jerry, 2026-11-10, on the Duo's inner screen: "When you go from portrait to landscape to portrait again, it becomes like this.
+// And you can actually pull it down back to normal"; his screenshots have it 82 short, then 78). Chrome doesn't do it. So with the watch
+// screen up and no keyboard, the page is put back at its top whenever it's found anywhere else: after a resize, on coming back, on a
+// scroll, and when a finger lifts. The scroll goes a point down first, as one to where the page already believes it is does nothing.
 const Settle = {
-  n: 0, since: 0,
-  go() {
-    const w = $('watch'), b = document.body, now = performance.now();
-    if (!ios || w.hidden || w.classList.contains('kb') || scrollY || document.hidden) return;
+  n: 0, since: 0, at: 0, touching: false,
+  off() { return Math.round(scrollY) || Math.round(vv?.pageTop || 0) || Math.round(vv?.offsetTop || 0); },
+  free() {
+    const w = $('watch'), a = document.activeElement;
+    return ios && !w.hidden && !w.classList.contains('kb') && !document.hidden && !this.touching && !/^(INPUT|TEXTAREA)$/.test(a?.tagName || '');
+  },
+  soon(ms) { clearTimeout(this.at); this.at = setTimeout(() => this.go(), ms); },
+  go(nudge) {   // nudge: with nothing seen wrong, scroll anyway, in case what iOS shows isn't what it tells the page
+    if (!this.free()) return;
+    const off = this.off(), b = document.body, now = performance.now();
+    if (!off && !nudge) return;
     if (now - this.since > 10e3) { this.since = now; this.n = 0; }
-    if (++this.n > 3) return;   // a screen that answers each one with a change of size isn't going to settle for it
+    if (++this.n > 4) return;   // a screen that answers each one by moving again isn't going to settle for it
     const was = screenNow();
     b.style.minHeight = 'calc(100dvh + 2px)';
-    scrollTo(0, 1);
+    scrollTo(0, off === 1 ? 2 : 1);
     setTimeout(() => { scrollTo(0, 0); b.style.minHeight = ''; }, 80);
-    setTimeout(() => { const is = screenNow(); if (is !== was && P.feed) Away.add(`screen after a nudge ${is}`); }, 700);
+    setTimeout(() => { const is = screenNow(), left = this.off(); if (P.feed && (off || left || is !== was)) Away.add(`screen: the page sat ${off} up, ${left ? `still ${left} up` : 'put back'}${is !== was ? `, now ${is}` : ''}`); }, 700);
   },
 };
 window.addEventListener('resize', () => {
-  clearTimeout(screenAt);
-  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${screenNow()}`); Settle.go(); }, 500);
+  clearTimeout(screenAt); clearTimeout(Settle.late);
+  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${screenNow()}${Settle.off() ? `, the page ${Settle.off()} up` : ''}`); Settle.go(true); }, 500);
+  Settle.late = setTimeout(() => Settle.go(), 1600);   // iOS can finish its turn after that
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { clearTimeout(screenAt); screenAt = setTimeout(() => Settle.go(), 500); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) Settle.soon(500); });
+window.addEventListener('scroll', () => { if (!$('watch').hidden && Settle.off()) Settle.soon(250); }, { passive: true });
+window.visualViewport?.addEventListener('scroll', () => { if (!$('watch').hidden && Settle.off()) Settle.soon(250); });
+for (const ev of ['touchstart', 'touchend', 'touchcancel']) document.addEventListener(ev, e => { Settle.touching = e.touches ? e.touches.length > 0 : e.type === 'touchstart'; if (!Settle.touching) Settle.soon(400); }, { passive: true, capture: true });
 new IntersectionObserver(es => {
   inView = es[es.length - 1].isIntersecting;
   if (P.feed && !inView && !$('watch').hidden) Away.add('picture out of view');
@@ -2933,17 +2945,23 @@ const Chat = {
 Chat.box.addEventListener('click', e => { const n = e.target.closest('.n'); if (n) Card.open(n.closest('.m')); });
 document.addEventListener('visibilitychange', () => { Chat.nap(); if (!document.hidden) Chat.wake(); });
 window.addEventListener('online', () => Chat.wake());
-let chatResized = 0;   // turning the phone or unfolding moves the scroll position; that isn't you scrolling up
+let chatResized = 0, chatHand = -1e9;   // turning the phone or unfolding moves the scroll position; that isn't you scrolling up
 new ResizeObserver(() => { chatResized = performance.now(); if (Chat.stick) Chat.box.scrollTop = Chat.box.scrollHeight; }).observe(Chat.box);
 Chat.box.addEventListener('scroll', () => {
-  const b = Chat.box, up = b.scrollTop < Chat.top;
+  const b = Chat.box, up = b.scrollTop < Chat.top, now = performance.now();
   Chat.top = b.scrollTop;
-  if (performance.now() - chatResized < 250) return;
+  if (now - chatResized < 250) return;
   if (b.scrollHeight - b.scrollTop - b.clientHeight < 40) { Chat.stick = true; $('more').hidden = true; }
-  else if (up) Chat.stick = false;   // short of the end without moving up is only lines growing as their emotes load
+  // Short of the end without moving up is only lines growing as their emotes load. Moved up, it's you only with a hand on it or just off
+  // it: an iPhone turned on its side and back says where chat was a good while after the turn, which left it stopped with "New messages"
+  // over it (Jerry, 2026-11-10: "you kind of have to drag the chat back down").
+  else if (up && (Chat.held || Chat.grab || now - chatHand < 3000)) Chat.stick = false;
+  else if (up && Chat.stick) { b.scrollTop = b.scrollHeight; Chat.top = b.scrollTop; }
   Chat.rest();
 }, { passive: true });
 for (const ev of ['touchstart', 'touchend', 'touchcancel']) Chat.box.addEventListener(ev, e => { Chat.held = e.type === 'touchstart'; Chat.rest(); }, { passive: true });
+for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel', 'wheel', 'pointerdown']) Chat.box.addEventListener(ev, e => { chatHand = performance.now(); if (e.type === 'pointerdown') Chat.grab = true; }, { passive: true });
+for (const ev of ['pointerup', 'pointercancel']) window.addEventListener(ev, () => { if (Chat.grab) { Chat.grab = false; chatHand = performance.now(); } }, { passive: true });
 $('more').onclick = () => Chat.follow();
 
 // ── past broadcast chat ─────────────────────────────
@@ -4000,7 +4018,7 @@ const Sheet = {
   view() {
     const d = document.documentElement, w = $('watch').getBoundingClientRect(), box = this.vhBox ??= document.body.appendChild(Object.assign(el('div'), { style: 'position: fixed; visibility: hidden; pointer-events: none; width: 0;' }));
     const tall = u => { box.style.height = '100' + u; return box.offsetHeight; };
-    return `View: ${screenNow()} · page ${d.clientWidth}×${d.clientHeight} · in sight ${vv ? `${Math.round(vv.width)}×${Math.round(vv.height)} at ${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)}` : '?'} · lvh ${tall('lvh')} svh ${tall('svh')} dvh ${tall('dvh')} · watch ${Math.round(w.top)} to ${Math.round(w.bottom)} · scrolled ${Math.round(scrollY)}`;
+    return `View: ${screenNow()} · page ${d.clientWidth}×${d.clientHeight} · in sight ${vv ? `${Math.round(vv.width)}×${Math.round(vv.height)} at ${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)}` : '?'} · lvh ${tall('lvh')} svh ${tall('svh')} dvh ${tall('dvh')} · watch ${Math.round(w.top)} to ${Math.round(w.bottom)} · scrolled ${Math.round(scrollY)}, in sight from ${Math.round(vv?.pageTop || 0)}`;
   },
   // What the player says about the picture, so a screenshot with the sound going and no picture says which part let go. Reading a frame
   // has iOS count the player as needed while away, so that's only done with this sheet open.

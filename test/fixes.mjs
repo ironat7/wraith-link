@@ -2763,6 +2763,14 @@ if (want('duo')) {
       let n = await page.evaluate(() => ({ ys: window.__ys, y: scrollY, min: document.body.style.minHeight, away: localStorage.getItem('wraith.away') }));
       ok('after a turn the page scrolls itself a point down and back, and nothing of it is left', n.ys.includes(1) && n.y === 0 && n.min === '', JSON.stringify(n.ys));
       ok('and the record has the size and the safe area', /screen 669×869, safe 82\/0\/116\/0/.test(n.away), String(n.away).slice(-140));
+      // what iOS does after upright, on its side and upright again: the page left scrolled up, the watch screen short of the bottom by as much
+      await sleep(1200);
+      await page.evaluate(() => { const d = document.body.appendChild(document.createElement('div')); d.id = 'tall'; d.style.height = '2000px'; scrollTo(0, 82); });
+      const sat = await page.evaluate(() => scrollY);
+      await sleep(1300);
+      n = await page.evaluate(() => ({ y: scrollY, min: document.body.style.minHeight, away: localStorage.getItem('wraith.away') }));
+      ok('a page found scrolled up under the watch screen is put back at its top', sat === 82 && n.y === 0 && n.min === '' && /the page sat 82 up, put back/.test(n.away), `${sat} ${n.y} ${String(n.away).slice(-120)}`);
+      await page.evaluate(() => document.getElementById('tall').remove());
       await keyboard(page, 500);
       await page.evaluate(() => { window.__ys.length = 0; dispatchEvent(new Event('resize')); });
       await sleep(800);
@@ -2770,7 +2778,7 @@ if (want('duo')) {
       ok('not while typing', n.kb && !n.ys.length, JSON.stringify(n));
       await page.evaluate(() => { document.activeElement.blur(); document.getElementById('bSet').click(); }); await sleep(1300);
       const view = await page.evaluate(() => [...document.querySelectorAll('#sheetBody .stats div')].map(d => d.textContent).find(x => x.startsWith('View:')));
-      ok('the sheet has every size iOS gives the page', /^View: 669×869, safe 82\/0\/116\/0 · page 669×869 · in sight 669×\d+ at 0,0 · lvh 869 svh 869 dvh 869 · watch 0 to 869 · scrolled 0$/.test(view || ''), view);
+      ok('the sheet has every size iOS gives the page', /^View: 669×869, safe 82\/0\/116\/0 · page 669×869 · in sight 669×\d+ at 0,0 · lvh 869 svh 869 dvh 869 · watch 0 to 869 · scrolled 0, in sight from 0$/.test(view || ''), view);
       await done();
     })(),
     // typing: the box and some chat stay above the keyboard, on a screen short enough that the picture has to give way
@@ -2902,9 +2910,13 @@ if (want('duo')) {
       await levels(page, 15000);
       await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); wraith.Chat.resumeAfter = 2500; }, Array.from({ length: 80 }, (_, i) => LINE('f' + i, i))); await sleep(300);
       const st = () => page.evaluate(() => { const b = wraith.Chat.box; return { stick: wraith.Chat.stick, more: !document.getElementById('more').hidden, end: b.scrollHeight - b.scrollTop - b.clientHeight < 40 }; });
-      const up = () => page.evaluate(() => { const b = wraith.Chat.box; b.scrollTop = b.scrollTop > 200 ? 100 : 0; });
-      await up(); await sleep(200);
+      const up = (hand = true) => page.evaluate(h => { const b = wraith.Chat.box; if (h) b.dispatchEvent(new Event('wheel')); b.scrollTop = b.scrollTop > 200 ? 100 : 0; }, hand);
+      // only a hand on it stops it: an iPhone turned on its side and back says where chat was a good while after, with nobody touching it
+      await up(false); await sleep(300);
       let s = await st();
+      ok('moved up with no hand on it (a turn of the phone), chat goes on following', s.stick && s.end && !s.more, JSON.stringify(s));
+      await up(); await sleep(200);
+      s = await st();
       if (s.stick) { await up(); await sleep(200); s = await st(); }   // a single scroll can land with a redraw, where a finger would carry on through it
       ok('scrolled up, chat stays there', !s.stick && !s.end, JSON.stringify(s));
       await page.evaluate(l => wraith.Chat.line(l), LINE('f100', 100));
