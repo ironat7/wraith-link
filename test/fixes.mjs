@@ -771,12 +771,8 @@ if (want('fullscreen')) {
   const closes = script => page.evaluate(script);
   const closed = "wraith.P.active().dispatchEvent(new Event('webkitendfullscreen'))";
 
-  // a stream's fullscreen is the page's own; iOS's player is for past videos, and its closing is still handled as below
   await page.evaluate(() => document.getElementById('bFull').click());
-  ok('the button fills the screen in the page for a stream', await page.evaluate(() => !window.__full) && await fill(), await page.evaluate(() => String(window.__full)));
-  await page.evaluate(() => document.getElementById('bFull').click());
-  ok('and the button undoes it', !(await fill()));
-  await page.evaluate(() => wraith.P.active().webkitEnterFullscreen());
+  ok('the button hands the video to iOS’s player', await page.evaluate(() => window.__full === wraith.P.active().id) && !(await fill()), await page.evaluate(() => String(window.__full)));
 
   await closes(`${closed}; setTimeout(() => wraith.P.active().pause(), 300);`); await sleep(1000);
   ok('closing it plays on when the pause comes after', !(await paused()));
@@ -803,6 +799,11 @@ if (want('fullscreen')) {
   ok('leaving the app as it closes doesn’t start the picture', await page.evaluate(() => window.__plays === 0), await page.evaluate(() => String(window.__plays)));
   await vis(page, false); await playing(page);
 
+  // nothing to hand over yet: it fills the page instead, and the button undoes that
+  await page.evaluate(() => { window.__refuse = true; window.__full = null; document.getElementById('bFull').click(); });
+  ok('with the player refusing, the picture fills the page', await fill());
+  await page.evaluate(() => document.getElementById('bFull').click());
+  ok('and the button undoes it', !(await fill()));
   await done();
 }
 
@@ -931,8 +932,8 @@ if (want('sound')) {
   // Leaving from iOS's fullscreen player: it comes out of it, or Control Center stays with the paused picture.
   const { page, done } = await open({ iphone: true, w: 951, h: 669, init: iosFullscreen });
   await page.goto(base + `?c=${A}`); await playing(page);
-  await page.evaluate(() => wraith.P.active().webkitEnterFullscreen());   // a past video's way there; a stream's fullscreen is the page's own
-  ok('in iOS’s fullscreen player', await page.evaluate(() => window.__fs === wraith.P.active()));
+  await page.evaluate(() => document.getElementById('bFull').click());
+  ok('fullscreen hands the video to iOS’s player', await page.evaluate(() => window.__fs === wraith.P.active()));
   await vis(page, true); await sounding(page);
   let s = await snd(page);
   await page.waitForFunction(() => window.__told > 0, null, { timeout: 2000 }).catch(never);
@@ -3000,18 +3001,22 @@ if (want('duo')) {
       ok('turned around, a filled picture’s way back is clear of the island', b.x >= 84, JSON.stringify(b));
       await done();
     })(),
-    // An iPhone's fullscreen is the page's own for a stream (2026-11-05: touching iOS's player's controls brought the Now Playing pill back):
-    // edge to edge as iOS's player has it, the controls clear of iOS's strip, the picture still too small a box to count, and the button back out.
+    // An iPhone's fullscreen is iOS's own player, for a stream too (2026-11-09: on 27.2 the page stops short of the strip, so only that is the
+    // whole screen). With that player refusing the video the page fills itself: edge to edge, the controls clear of iOS's strip, the picture
+    // still too small a box to count for the pill, and the button back out.
     ...[['open', OPEN], ['turned', FLIP], ['closed', CLOSED], ['closed upright', CLOSEDUP], ['upright', UP]].map(([name, s]) => (async () => {
-      const { page, done } = await on(s, { init: () => { delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen; HTMLVideoElement.prototype.webkitEnterFullscreen = function () { window.__native = this.id; }; } });
+      const { page, done } = await on(s, { init: () => { delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen; HTMLVideoElement.prototype.webkitEnterFullscreen = function () { if (window.__refuse) throw new DOMException('not ready', 'InvalidStateError'); window.__native = this.id; }; } });
       await levels(page, 15000);
       await page.evaluate(() => document.getElementById('bFull').click()); await sleep(300);
+      const took = await page.evaluate(() => ({ native: window.__native || null, active: wraith.P.active()?.id, full: document.getElementById('watch').classList.contains('full') }));
+      ok(`fullscreen ${name}: the stream goes to iOS's own player`, took.native && took.native === took.active && !took.full, JSON.stringify(took));
+      await page.evaluate(() => { window.__refuse = true; window.__native = null; document.getElementById('bFull').click(); }); await sleep(300);
       await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(250);
       const [w, h, ins] = s, sal = ins.left || 0, sar = ins.right || 0, sat = ins.top || 0, sab = ins.bottom || 0;
       const st = await rect(page, '#stage'), b = await box(page, '#bFull', '#bPlay', '#bBack');
       const v = await page.evaluate(() => { const v = document.getElementById('vLL'); return { laidOut: v.offsetWidth * v.offsetHeight, native: window.__native || null, full: document.getElementById('watch').classList.contains('full'), decoy: !!document.querySelector('video.decoy')?.isConnected }; });
       const clear = Object.values(b).every(r => r && r.seen && r.x >= sal - 1 && r.r <= w - sar + 1 && r.y >= sat - 1 && r.b <= h - sab + 1);
-      ok(`fullscreen ${name}: the page's own, edge to edge`, v.full && !v.native && st.x === 0 && st.y === 0 && st.w === w && st.h === h, JSON.stringify({ st, v }));
+      ok(`fullscreen ${name}: refused, the page's own, edge to edge`, v.full && !v.native && st.x === 0 && st.y === 0 && st.w === w && st.h === h, JSON.stringify({ st, v }));
       ok(`fullscreen ${name}: the controls clear of iOS's strip`, clear, JSON.stringify(b));
       ok(`fullscreen ${name}: the pill stays hidden`, v.decoy && v.laidOut < 120000, JSON.stringify(v));
       await page.evaluate(() => document.getElementById('bFull').click()); await sleep(300);

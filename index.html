@@ -395,7 +395,7 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
 }
 html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --sal: 0px; --sar: 0px; }
 @media not ((orientation: landscape) and (min-width: 560px)) { #bChat { display: none; } }
-/* fullscreen on an iPhone: the player fills the screen, edge to edge as iOS's own player has it, with the controls clear of iOS's strip (see UI.fill) */
+/* fullscreen on an iPhone when iOS's own player won't take the video: the player fills the page, edge to edge, with the controls clear of iOS's strip (see UI.fill) */
 #watch.full .stage { position: fixed; inset: 0; z-index: 5; width: auto; height: auto; max-height: none; margin: 0; aspect-ratio: auto; overflow: hidden; border-radius: 0; background: #000; }
 #watch.full .hud { padding: var(--sat) 0 var(--sab); }
 #watch.full #bChat { display: none; }
@@ -2328,7 +2328,7 @@ window.addEventListener('online', () => {
 let screenAt = 0, inView = null;
 // Upright, on its side and upright again, iOS 27.2 leaves a Home Screen app's page 82 short of the Duo's inner screen, the gap under chat's
 // box, until a finger pulls the page down and lets go. Three goes at curing it from the page did nothing on the phone and are out (Jerry,
-// 2026-11-10: "the gap is not fixed, give up and strip it out"): a scroll of the page's own, putting a scrolled page back, and having
+// 2026-11-09: "the gap is not fixed, give up and strip it out"): a scroll of the page's own, putting a scrolled page back, and having
 // WebKit work the page's size out again by changing the viewport's interactive-widget and viewport-fit.
 window.addEventListener('resize', () => {
   clearTimeout(screenAt);
@@ -2921,7 +2921,7 @@ Chat.box.addEventListener('scroll', () => {
   if (b.scrollHeight - b.scrollTop - b.clientHeight < 40) { Chat.stick = true; $('more').hidden = true; }
   // Short of the end without moving up is only lines growing as their emotes load. Moved up, it's you only with a hand on it or just off
   // it: an iPhone turned on its side and back says where chat was a good while after the turn, which left it stopped with "New messages"
-  // over it (Jerry, 2026-11-10: "you kind of have to drag the chat back down").
+  // over it (Jerry, 2026-11-09: "you kind of have to drag the chat back down").
   else if (up && (Chat.held || Chat.grab || now - chatHand < 3000)) Chat.stick = false;
   else if (up && Chat.stick) { b.scrollTop = b.scrollHeight; Chat.top = b.scrollTop; }
   Chat.rest();
@@ -3745,8 +3745,8 @@ const UI = {
   spin(on) { $('spin').hidden = !on || P.userPaused; },
   big(on) { $('bigPlay').hidden = !on; if (on) this.spin(false); },
   unmute(on) { $('unmute').hidden = !on; },
-  // For when there's no fullscreen to be had yet: the Home Screen app has no browser bar to hide, so the player just
-  // fills the screen. The status bar stays, and on an iPhone Duo that's a pill over the picture.
+  // For when iOS's own player won't take the video (see bFull): the Home Screen app has no browser bar to hide, so the player just
+  // fills the page. The status bar stays, and on an iPhone Duo so does iOS's strip.
   fill(on) {
     if (on !== $('watch').classList.contains('full')) Away.add(on ? 'fullscreen in the page' : 'fullscreen in the page closed');
     $('watch').classList.toggle('full', on); setIcon($('bFull'), on || document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full');
@@ -3850,11 +3850,12 @@ $('bFull').onclick = () => {
   if (!v) return;   // no picture yet
   if (stage.requestFullscreen) stage.requestFullscreen().catch(() => UI.fill(true));
   else if (stage.webkitRequestFullscreen) stage.webkitRequestFullscreen();
-  // An iPhone can't make part of a page fullscreen, only hand the video to iOS's own player. A stream fills the screen in the page instead:
-  // touching iOS's player's controls brought the Now Playing pill back (Jerry, 2026-11-05), and on the Duo it looks no different, keeping
-  // iOS's strip just the same. A past video still goes to iOS's player, for its scrubbing.
-  else if (P.feed === 'vod') { try { v.webkitEnterFullscreen(); } catch { UI.fill(true); } }
-  else UI.fill(true);
+  // An iPhone can't make part of a page fullscreen, only hand the video to iOS's own player, and that's what the button does, for a stream
+  // as for a past video. From 2026-11-05 a stream filled the page instead, since touching iOS's player's controls brings the Now Playing pill
+  // back while it's up; but iOS 27.2 keeps a Home Screen app's page out of the Duo's strip, so a filled page stopped being the whole screen
+  // (Jerry, 2026-11-09: "Try to implement the full screen as iPhone's native full screen. That way it's a real full screen"). The page fills
+  // itself only when iOS's player won't take the video.
+  else { try { v.webkitEnterFullscreen(); } catch { UI.fill(true); } }
 };
 for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => setIcon($('bFull'), document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full'));
 document.addEventListener('keydown', e => {
