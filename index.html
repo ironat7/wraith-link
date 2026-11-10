@@ -26,7 +26,7 @@
   --fg: #f4f4f6; --fg-2: #a8a8b2; --fg-3: #6e6e79;
   --live: #ff3b4f; --good: #3ddc97; --warn: #fbbf24;
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, sans-serif;
-  --sat: env(safe-area-inset-top); --sab: min(env(safe-area-inset-bottom), 56px);   /* no screen's is more, and a wrong one after a turn stays small (see Settle) */
+  --sat: env(safe-area-inset-top); --sab: env(safe-area-inset-bottom);
   --sal: env(safe-area-inset-left); --sar: env(safe-area-inset-right);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2326,79 +2326,14 @@ window.addEventListener('online', () => {
 // For the record on the settings sheet: what the screen and iOS's own player did, and whether the picture counts as in view. iOS lets go
 // of a video's layer when it doesn't (WebKit 311380@main), going by an observer like this one.
 let screenAt = 0, inView = null;
-const safeBox = el('div');
-safeBox.style.cssText = 'position: fixed; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);';
-document.body.append(safeBox);
-const safeNow = () => { const c = getComputedStyle(safeBox); return [c.paddingTop, c.paddingRight, c.paddingBottom, c.paddingLeft].map(x => Math.round(parseFloat(x)) || 0); };
-const screenNow = () => `${innerWidth}×${innerHeight}, safe ${safeNow().join('/')}`;
-// Turned upright, on its side and upright again, iOS leaves a Home Screen app's page short of the screen by the height of its strip: the
-// watch screen ends that far above the bottom, the gap under chat's box, until a finger pulls the page down and lets go (Jerry,
-// 2026-11-10, on the Duo's inner screen: "When you go from portrait to landscape to portrait again, it becomes like this. And you can
-// actually pull it down back to normal"). His sheet in that state: the window 669×873 and the page 669×869 on a 951 screen, a top safe
-// area of 82, nothing scrolled, and 100lvh still 951. So the page is under the strip as it should be, and its height is one WebKit worked
-// out mid-turn with the strip taken off (WKWebView's activeViewLayoutSize, the bounds less whatever safe area the scroll view was
-// applying then) and never worked out again. Two things in WebKit's source work it out afresh from the page's side: a change of the
-// viewport's interactive-widget (_didCommitLayerTree), which changes nothing else with no keyboard up, and a change of viewport-fit
-// (_setAvoidsUnsafeArea), which for a moment gives the edges up. The first is tried, then the second, then it's left alone until the
-// phone is turned again. Chrome never has the page short, so neither has been seen to work here.
-// A page left scrolled under the watch screen, which doesn't scroll, is put back at its top too (bd6d47b, aa19d55: the first two
-// readings of the same gap, which weren't it; the scroll after a resize did move iOS's 869 to 873).
-const Settle = {
-  n: 0, since: 0, at: 0, touching: false, tries: 0, forW: 0, fixing: false,
-  off() { return Math.round(scrollY) || Math.round(vv?.pageTop || 0) || Math.round(vv?.offsetTop || 0); },
-  // The screen's height as iOS has it for 100lvh, which a Home Screen app has all of. (In Safari the bars come out of the window and not
-  // out of that, so there it says nothing.)
-  large() {
-    const box = this.box ??= document.body.appendChild(Object.assign(el('div'), { style: 'position: fixed; visibility: hidden; pointer-events: none; width: 0; height: 100lvh;' }));
-    return box.offsetHeight;
-  },
-  short() { const d = navigator.standalone ? this.large() - innerHeight : 0; return d > 40 ? d : 0; },
-  // On its side after being upright, the top safe area stays the strip's, which is down a side by then: a new look costs nothing.
-  stale() { return !!navigator.standalone && innerWidth > innerHeight && safeNow()[0] > 60; },
-  fix(short) {
-    if (this.fixing) return;
-    if (this.forW !== innerWidth) { this.forW = innerWidth; this.tries = 0; }
-    const m = document.querySelector('meta[name="viewport"]'), was = m.content, go = ++this.tries;
-    if (go > 2 || (go > 1 && !short)) return;
-    this.fixing = true;
-    m.content = go === 1 ? `${was}, interactive-widget=overlays-content` : was.replace('viewport-fit=cover', 'viewport-fit=auto');
-    setTimeout(() => { m.content = was; }, 160);
-    setTimeout(() => {
-      this.fixing = false;
-      const left = this.short();
-      if (P.feed) Away.add(`screen: the page ${short ? `${short} short of the screen` : 'with the strip’s safe area on top'}, ${left ? `still ${left} short` : short ? 'whole again' : `now safe ${safeNow().join('/')}`} after ${go === 1 ? 'a new look at its size' : 'giving the edges up and taking them back'} (${screenNow()})`);
-      if (left) this.go();
-    }, 900);
-  },
-  free() {
-    const w = $('watch'), a = document.activeElement;
-    return ios && !w.hidden && !w.classList.contains('kb') && !document.hidden && !this.touching && !/^(INPUT|TEXTAREA)$/.test(a?.tagName || '');
-  },
-  soon(ms) { clearTimeout(this.at); this.at = setTimeout(() => this.go(), ms); },
-  go(nudge) {   // nudge: with nothing seen wrong, scroll anyway, in case what iOS shows isn't what it tells the page
-    if (!this.free() || this.fixing) return;
-    const short = this.short();
-    if (short || this.stale()) { this.fix(short); if (this.fixing) return; }   // one thing at a time: it looks again once that's done, if still short
-    const off = this.off(), b = document.body, now = performance.now();
-    if (!off && (!nudge || short)) return;
-    if (now - this.since > 10e3) { this.since = now; this.n = 0; }
-    if (++this.n > 4) return;   // a screen that answers each one by moving again isn't going to settle for it
-    const was = screenNow();
-    b.style.minHeight = 'calc(100dvh + 2px)';
-    scrollTo(0, off === 1 ? 2 : 1);
-    setTimeout(() => { scrollTo(0, 0); b.style.minHeight = ''; }, 80);
-    setTimeout(() => { const is = screenNow(), left = this.off(); if (P.feed && (off || left || is !== was)) Away.add(`screen: the page sat ${off} up, ${left ? `still ${left} up` : 'put back'}${is !== was ? `, now ${is}` : ''}`); }, 700);
-  },
-};
+// Upright, on its side and upright again, iOS 27.2 leaves a Home Screen app's page 82 short of the Duo's inner screen, the gap under chat's
+// box, until a finger pulls the page down and lets go. Three goes at curing it from the page did nothing on the phone and are out (Jerry,
+// 2026-11-10: "the gap is not fixed, give up and strip it out"): a scroll of the page's own, putting a scrolled page back, and having
+// WebKit work the page's size out again by changing the viewport's interactive-widget and viewport-fit.
 window.addEventListener('resize', () => {
-  clearTimeout(screenAt); clearTimeout(Settle.late);
-  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${screenNow()}${Settle.off() ? `, the page ${Settle.off()} up` : ''}`); Settle.go(true); }, 500);
-  Settle.late = setTimeout(() => Settle.go(), 1600);   // iOS can finish its turn after that
+  clearTimeout(screenAt);
+  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${innerWidth}×${innerHeight}`); }, 500);
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { Settle.tries = 0; Settle.soon(500); } });
-window.addEventListener('scroll', () => { if (!$('watch').hidden && Settle.off()) Settle.soon(250); }, { passive: true });
-window.visualViewport?.addEventListener('scroll', () => { if (!$('watch').hidden && Settle.off()) Settle.soon(250); });
-for (const ev of ['touchstart', 'touchend', 'touchcancel']) document.addEventListener(ev, e => { Settle.touching = e.touches ? e.touches.length > 0 : e.type === 'touchstart'; if (!Settle.touching) Settle.soon(400); }, { passive: true, capture: true });
 new IntersectionObserver(es => {
   inView = es[es.length - 1].isIntersecting;
   if (P.feed && !inView && !$('watch').hidden) Away.add('picture out of view');
@@ -4038,19 +3973,12 @@ const Sheet = {
     if (Quota.n) lines.push(`Relay today: ${Quota.n.toLocaleString()} of 20,000`);
     const errs = Object.entries(P.errs).sort((a, b) => b[1] - a[1]).slice(0, 4);
     if (errs.length) lines.push(`Hiccups: ${errs.map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ')}`);
-    if (ios) lines.push(Awake.say(), this.view());
+    if (ios) lines.push(Awake.say());
     s.textContent = '';
     for (const x of lines) s.append(el('div', null, x));
     // what each page did about leaving, coming back and the screen, newest last, a line each
     const away = store.get('away', []).slice(-16);
     if (away.length) { const log = el('div', 'log'); log.append(el('div', null, 'Away: '), ...away.map(x => el('div', null, x))); s.append(log); }
-  },
-  // Every size iOS gives the page, for a screenshot of a screen laid out wrong (see Settle): the window, the page, the part in sight,
-  // the safe area (top/right/bottom/left), the three viewport heights, and where the watch screen ends.
-  view() {
-    const d = document.documentElement, w = $('watch').getBoundingClientRect(), box = this.vhBox ??= document.body.appendChild(Object.assign(el('div'), { style: 'position: fixed; visibility: hidden; pointer-events: none; width: 0;' }));
-    const tall = u => { box.style.height = '100' + u; return box.offsetHeight; };
-    return `View: ${screenNow()} · page ${d.clientWidth}×${d.clientHeight} · in sight ${vv ? `${Math.round(vv.width)}×${Math.round(vv.height)} at ${Math.round(vv.offsetLeft)},${Math.round(vv.offsetTop)}` : '?'} · lvh ${tall('lvh')} svh ${tall('svh')} dvh ${tall('dvh')} · watch ${Math.round(w.top)} to ${Math.round(w.bottom)} · scrolled ${Math.round(scrollY)}, in sight from ${Math.round(vv?.pageTop || 0)}`;
   },
   // What the player says about the picture, so a screenshot with the sound going and no picture says which part let go. Reading a frame
   // has iOS count the player as needed while away, so that's only done with this sheet open.
@@ -4444,7 +4372,7 @@ Sound.set(Sound.muted);
 Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Settle, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);

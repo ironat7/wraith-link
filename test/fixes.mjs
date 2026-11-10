@@ -2751,57 +2751,6 @@ if (want('duo')) {
       await page.screenshot({ path: 'fixes-duo-272-home-closed-upright.png', timeout: 8000 }).catch(() => {});
       await done();
     })(),
-    // Upright on the inner screen iOS can leave the page short of the screen after a turn, until something's dragged (Jerry, 2026-11-10:
-    // "you kind of have to drag the chat back down"). Chrome can't stage iOS doing that; what's here is what the page does about it.
-    (async () => {
-      const { page, done } = await on([669, 869, { top: 82, bottom: 116 }]);
-      await levels(page, 15000);
-      const b = await box(page, '#stage', '#sayTx');
-      ok('upright, a bottom inset bigger than any screen’s is kept small', b['#stage'].y === 82 && b['#sayTx'].b >= 869 - 8 - 56 - 1, JSON.stringify(b));
-      await page.evaluate(() => { window.__ys = []; addEventListener('scroll', () => window.__ys.push(scrollY)); dispatchEvent(new Event('resize')); });
-      await sleep(1000);
-      let n = await page.evaluate(() => ({ ys: window.__ys, y: scrollY, min: document.body.style.minHeight, away: localStorage.getItem('wraith.away') }));
-      ok('after a turn the page scrolls itself a point down and back, and nothing of it is left', n.ys.includes(1) && n.y === 0 && n.min === '', JSON.stringify(n.ys));
-      ok('and the record has the size and the safe area', /screen 669×869, safe 82\/0\/116\/0/.test(n.away), String(n.away).slice(-140));
-      // what iOS does after upright, on its side and upright again: the page left scrolled up, the watch screen short of the bottom by as much
-      await sleep(1200);
-      await page.evaluate(() => { const d = document.body.appendChild(document.createElement('div')); d.id = 'tall'; d.style.height = '2000px'; scrollTo(0, 82); });
-      const sat = await page.evaluate(() => scrollY);
-      await sleep(1300);
-      n = await page.evaluate(() => ({ y: scrollY, min: document.body.style.minHeight, away: localStorage.getItem('wraith.away') }));
-      ok('a page found scrolled up under the watch screen is put back at its top', sat === 82 && n.y === 0 && n.min === '' && /the page sat 82 up, put back/.test(n.away), `${sat} ${n.y} ${String(n.away).slice(-120)}`);
-      await page.evaluate(() => document.getElementById('tall').remove());
-      // and what his sheet said it is: the page 82 short of a screen that 100lvh still has whole, with nothing scrolled. Chrome can't be
-      // made to do it, so the screen's height is staged, and what's checked is what the page asks of iOS.
-      const metas = () => page.evaluate(() => window.__metas.map(x => /interactive-widget=overlays-content/.test(x) ? 'look' : /viewport-fit=auto/.test(x) ? 'edges' : /viewport-fit=cover$/.test(x) ? 'as it was' : x));
-      await page.evaluate(() => {
-        Object.defineProperty(Navigator.prototype, 'standalone', { configurable: true, get: () => true });
-        window.__metas = []; const m = document.querySelector('meta[name="viewport"]');
-        new MutationObserver(() => window.__metas.push(m.content)).observe(m, { attributes: true });
-        wraith.Settle.large = () => innerHeight + (window.__short ?? 82);
-        dispatchEvent(new Event('resize'));
-      });
-      await sleep(900);
-      ok('a page short of the screen has iOS look at its size again, by the viewport’s interactive-widget', (await metas()).join() === 'look,as it was', (await metas()).join());
-      await sleep(1400);
-      ok('still short, the edges are given up and taken back', (await metas()).join() === 'look,as it was,edges,as it was', (await metas()).join());
-      await page.evaluate(() => dispatchEvent(new Event('scroll'))); await page.evaluate(() => wraith.Settle.go(true)); await sleep(1300);
-      n = await page.evaluate(() => ({ away: localStorage.getItem('wraith.away'), meta: document.querySelector('meta[name="viewport"]').content }));
-      ok('and after that it’s left alone, the viewport as it was, with the record saying so', (await metas()).length === 4 && n.meta === 'width=device-width, initial-scale=1, viewport-fit=cover' && /82 short of the screen, still 82 short after a new look at its size/.test(n.away) && /still 82 short after giving the edges up and taking them back/.test(n.away), `${(await metas()).length} ${n.meta} ${String(n.away).slice(-200)}`);
-      await page.evaluate(() => { window.__metas.length = 0; wraith.Settle.tries = 0; new MutationObserver((_, o) => { window.__short = 0; o.disconnect(); }).observe(document.querySelector('meta[name="viewport"]'), { attributes: true }); window.__short = 82; wraith.Settle.go(); });
-      await sleep(2400);
-      n = await page.evaluate(() => localStorage.getItem('wraith.away'));
-      ok('one that the first look makes whole gets no more than that', (await metas()).join() === 'look,as it was' && /82 short of the screen, whole again after a new look/.test(n), `${(await metas()).join()} ${String(n).slice(-160)}`);
-      await keyboard(page, 500);
-      await page.evaluate(() => { window.__ys.length = 0; dispatchEvent(new Event('resize')); });
-      await sleep(800);
-      n = await page.evaluate(() => ({ ys: window.__ys, kb: document.getElementById('watch').classList.contains('kb') }));
-      ok('not while typing', n.kb && !n.ys.length, JSON.stringify(n));
-      await page.evaluate(() => { document.activeElement.blur(); document.getElementById('bSet').click(); }); await sleep(1300);
-      const view = await page.evaluate(() => [...document.querySelectorAll('#sheetBody .stats div')].map(d => d.textContent).find(x => x.startsWith('View:')));
-      ok('the sheet has every size iOS gives the page', /^View: 669×869, safe 82\/0\/116\/0 · page 669×869 · in sight 669×\d+ at 0,0 · lvh 869 svh 869 dvh 869 · watch 0 to 869 · scrolled 0, in sight from 0$/.test(view || ''), view);
-      await done();
-    })(),
     // typing: the box and some chat stay above the keyboard, on a screen short enough that the picture has to give way
     ...[[CLOSEDUP, 342, 'closed, upright'], [UP, 615, 'open, upright'], [[390, 844, { top: 59, bottom: 34 }], 508, 'a phone']].map(([shape, left, name]) => (async () => {
       const { page, done } = await on(shape);
