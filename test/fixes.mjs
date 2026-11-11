@@ -3041,6 +3041,58 @@ if (want('duo')) {
       ok('coming back with the keyboard gone restores the layout', await page.evaluate(() => !document.getElementById('watch').classList.contains('kb')));
       await done();
     })(),
+    // Open and on its side, a picture watched with nothing touched goes to iOS's player by itself (2 minutes, shortened here), and only there
+    ...[[[867, 669, { bottom: 34 }], 'open on its side', true], [OPEN, 'open on its side, with the strip the page’s', true], [[669, 873, { top: 82, bottom: 34 }], 'open, upright', false],
+      [[594, 466, { bottom: 21 }], 'closed on its side', false], [[382, 678, { bottom: 34 }], 'closed, upright', false]].map(([shape, name, goes]) => (async () => {
+      const { page, done } = await on(shape, { touch: true, init: () => {
+        delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen; window.__auto = 0;
+        HTMLVideoElement.prototype.webkitEnterFullscreen = function () { if (window.__refuse) throw new DOMException('no tap', 'InvalidStateError'); window.__auto++; window.__fs = this; this.dispatchEvent(new Event('webkitbeginfullscreen')); };
+        Object.defineProperty(HTMLVideoElement.prototype, 'webkitDisplayingFullscreen', { configurable: true, get() { return window.__fs === this; } });
+      } });
+      await levels(page, 15000);
+      // the staged picture never gets a frame: it's set going by hand
+      await page.evaluate(() => { const v = wraith.P.active(); Object.defineProperty(v, 'paused', { configurable: true, get: () => !!window.__paused }); wraith.P.started = true; wraith.P.quietStart = false; wraith.UI.unmute(false); wraith.Auto.after = 2500; });
+      const n = () => page.evaluate(() => window.__auto), log = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]').join(' | '));
+      const went = async (ms = 8000) => page.waitForFunction(k => window.__auto > k, await n(), { timeout: ms }).then(() => true, () => false);
+      const close = () => page.evaluate(() => { window.__fs = null; wraith.P.active().dispatchEvent(new Event('webkitendfullscreen')); });
+      if (!goes) {
+        await sleep(6000);
+        ok(`by itself, ${name}: stays as it is`, await n() === 0, `${await n()} ${JSON.stringify(await page.evaluate(() => ({ w: innerWidth, h: innerHeight, watching: wraith.Auto.watching() })))}`);
+        return done();
+      }
+      const t0 = Date.now();
+      ok(`by itself, ${name}: goes to iOS's player`, await went() && await n() === 1 && Date.now() - t0 > 2000 && /fullscreen by itself/.test(await log()) && !(await page.evaluate(() => document.getElementById('watch').classList.contains('full'))), `${await n()} after ${Date.now() - t0} ms: ${await log()}`);
+      await sleep(5000);
+      ok(`by itself, ${name}: asked once while it's there`, await n() === 1, String(await n()));
+      // closed again: touches keep it out, and with none it goes back
+      await close();
+      for (let i = 0; i < 8; i++) { await sleep(700); await page.evaluate(() => document.dispatchEvent(new Event('touchend', { bubbles: true }))); }
+      ok(`by itself, ${name}: not while the screen's being touched`, await n() === 1, String(await n()));
+      ok(`by itself, ${name}: again once it's left alone`, await went() && await n() === 2, String(await n()));
+      // paused, a sheet up, typing, turned off: none of them is watching
+      await close();
+      for (const [what, set, unset] of [
+        ['paused', () => { window.__paused = true; }, () => { window.__paused = false; }],
+        ['with the sheet up', () => wraith.Sheet.open(), () => wraith.Sheet.close()],
+        ['in the say box', () => document.getElementById('sayTx').focus(), () => document.activeElement.blur()],
+        ['turned off', () => wraith.Auto.set(false), () => wraith.Auto.set(true)],
+      ]) {
+        await page.evaluate(set); await sleep(5000);
+        ok(`by itself, ${name}: not ${what}`, await n() === 2, `${await n()} ${await page.evaluate(() => wraith.Auto.watching())}`);
+        await page.evaluate(unset);
+      }
+      // iOS saying no: nothing else happens, and it asks again later
+      await page.evaluate(() => { window.__refuse = true; wraith.Auto.since = 0; });
+      await page.waitForFunction(() => /refused fullscreen by itself/.test(localStorage.getItem('wraith.away') || ''), null, { timeout: 8000 }).catch(never);
+      ok(`by itself, ${name}: refused, the page stays as it is and says so`, await n() === 2 && /refused fullscreen by itself/.test(await log()) && !(await page.evaluate(() => document.getElementById('watch').classList.contains('full'))), await log());
+      await page.evaluate(() => { window.__refuse = false; });
+      ok(`by itself, ${name}: and asks again later`, await went() && await n() === 3, String(await n()));
+      // a picture no tap has played is played in the next one, once, which is what lets iOS take it later
+      await close();
+      const plays = await page.evaluate(() => { const v = wraith.P.active(); let k = 0; v.tapped = false; v.play = () => { k++; return Promise.resolve(); }; document.body.click(); document.body.click(); return k; });
+      ok(`by itself, ${name}: a tap plays a picture no tap had`, plays === 1, String(plays));
+      await done();
+    })()),
     // a stream ending under iOS's own player
     (async () => {
       const { page, done } = await on(OPEN);

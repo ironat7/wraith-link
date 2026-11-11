@@ -2311,6 +2311,7 @@ for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
   if (Awake.granted) Awake.sync(true); else Awake.ask(true);   // first: the tap only counts for it a few seconds
   Pages.touchedAt = Date.now();
   Pages.see();
+  if (ev === 'click') Auto.tap();   // a click is always a tap to iOS; a touch that ends a scroll isn't
 }, { capture: true, passive: true });
 // typing is you being there too, sending with the keyboard's own key included, which no tap goes with, and a key counts for the lock as a tap does
 document.addEventListener('keydown', () => { if (Awake.granted) Awake.sync(true); else Awake.ask(true); Pages.see(); }, { capture: true, passive: true });
@@ -2402,6 +2403,39 @@ aBG.addEventListener('timeupdate', () => {
   if (!aBG.paused && BG.wanted) BG.heard = Date.now();
   if (P.feed === 'vod') { savePlace(aBG.currentTime); if (aBG.currentTime > 1) BG.at = aBG.currentTime; }
 });
+// On the Duo's inner screen held on its side, a picture watched for 2 minutes with nothing touched goes to fullscreen by itself (Jerry,
+// 2026-11-11: "make wraith auto fullscreen if watching for more than 2 min in landscape inner screen"). Watching is the picture going, in
+// front, with nothing else up: no sheet, keyboard, message or muted start. A touch starts the 2 minutes over, and so does turning or
+// closing the phone, pausing, or closing the fullscreen it went to. iOS's player takes a video with no tap once that video has been played
+// inside one (WebKit's RequireUserGestureForFullscreen, which removeBehaviorRestrictionsAfterFirstUserGesture lifts for good): opening a
+// channel with a tap does that (unlock), and for a picture that started with none the next tap plays it again, which changes nothing else.
+// Refused all the same, it waits another 2 minutes: filling the page instead would gain nothing here, with the picture already as wide as
+// the page. Unproven on the phone: the sheet can turn it off.
+const Auto = {
+  on: store.get('autoFull', true), after: 2 * 60e3,
+  since: 0, at: 0,   // when the watching that counts began, and when it was last looked at
+  can: /iPhone/.test(navigator.userAgent),
+  set(on) { this.on = on; store.set('autoFull', on); this.since = 0; },
+  // The inner screen is 669 across its short side (closed, the screen is 466, and no other iPhone reaches 600)
+  inner() { return this.can && innerWidth > innerHeight && innerHeight >= 600; },
+  watching() {
+    const v = P.active(), w = $('watch');
+    return this.on && !!v && !v.paused && !v.ended && P.started && !P.quietStart && !BG.on && this.inner() && Pages.inFront()
+      && !w.hidden && !w.classList.contains('kb') && !w.classList.contains('full') && !v.inFull && !v.webkitDisplayingFullscreen
+      && $('sheet').hidden && $('msgbox').hidden && $('unmute').hidden && !document.activeElement?.matches?.('input, textarea');
+  },
+  tick() {
+    const now = Date.now(), gap = now - this.at;
+    this.at = now;
+    if (!this.watching() || gap > 5000) { this.since = 0; return; }   // a page iOS froze a while wasn't being watched
+    this.since = Math.max(this.since || now, Pages.touchedAt);
+    if (now - this.since < this.after) return;
+    this.since = now;
+    try { P.active().webkitEnterFullscreen(); Away.add('fullscreen by itself'); } catch { Away.add('iOS refused fullscreen by itself'); }
+  },
+  // inside a tap: a picture going that no tap has played gets played in this one, so iOS will take it to fullscreen without one later
+  tap() { const v = P.active(); if (this.can && v && !v.paused && !v.ended && !v.tapped) { v.tapped = true; const p = v.play(); if (p) p.catch(() => {}); } },
+};
 let lastTick = Date.now(), idleFor = 0;
 setInterval(() => {
   // iOS froze the page a while, which it only does with nothing playing. The record says how long: a page you can't see that logs one is
@@ -2421,6 +2455,7 @@ setInterval(() => {
   }
   if (P.feed && Awake.granted) Awake.sync();
   P.checkFull();
+  Auto.tick();
   // nothing else of this page's asks the relay. Out of sight that's only for sound that's going: with none, the page is doing nothing
   // to ask about, and coming back asks at once (Pages.see)
   const idle = Pages.idle();
@@ -3924,6 +3959,10 @@ const Sheet = {
       { label: 'Hidden while you watch', desc: 'Control Center and AirPods buttons reach Wraith once you leave it.', on: Pill.on, pick: () => { Pill.set(true); this.close(); } },
       { label: 'Shown', on: !Pill.on, pick: () => { Pill.set(false); this.close(); } },
     ]);
+    if (Auto.can) this.group(body, 'Fullscreen by itself', [
+      { label: 'After 2 minutes of watching', desc: 'Open and on its side, with nothing touched.', on: Auto.on, pick: () => { Auto.set(true); this.close(); } },
+      { label: 'Never', on: !Auto.on, pick: () => { Auto.set(false); this.close(); } },
+    ]);
     this.accountItems(body);
     // the details: there for a screenshot, shut until asked for (Jerry, 2026-11-09: "clean up the settings")
     const more = el('button', 'det' + (this.details ? ' on' : ''), 'Details'), stats = el('div', 'stats');
@@ -4373,7 +4412,7 @@ Sound.set(Sound.muted);
 Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake, Auto };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
 Pages.tell('here');
 route(false);
