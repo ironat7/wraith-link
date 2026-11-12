@@ -1259,6 +1259,22 @@ if (want('relay')) {
     [{ pick: true }, 'a stream you picked the CDN for', 'The CDN feed isn’t availableTry the low-latency feed instead.Try again'],
   ];
   await Promise.all([
+    // Apps Script sitting on asks it never answers (2026-11-12: 3 in 10): a playlist's third ask gets it, well inside the 8 s timeout
+    (async () => {
+      const S = { sit: false, run: 0, got: 0, asks: 0 };
+      const { page, done } = await stage(route => {
+        if (!S.sit || !route.request().url().includes('chunked')) return answer(route);
+        S.asks++;
+        if (S.run < 2) { S.run++; return null; }
+        S.run = 0; S.got++;
+        return answer(route);
+      });
+      await levels(page, 15000); await sleep(1000);
+      S.sit = true; await sleep(14000);
+      const s = await st(page);
+      ok('a relay sitting on two asks in a row: the third gets the playlist, with no timeout', S.got >= 2 && S.asks >= S.got * 3 && !s.errs.levelLoadTimeOut, `${S.got} of ${S.asks} asks ${JSON.stringify(s.errs)}`);
+      await done();
+    })(),
     ...feeds.flatMap(([how, name, words]) => [
       refused(how, async (page, S) => {
         await sleep(3000);
