@@ -2363,7 +2363,10 @@ for (const v of [vL, vC]) {
     // not you (a tap, or the page acting on one), and not the page: something outside it, which it doesn't overrule (see play). A picture stopped
     // that way still has what it had loaded: a browser can say the same of one whose load failed or was replaced, which is no reason to hold back.
     if (v.pausing) v.pausing = false;
-    else if (v === P.active() && v.paused && !v.ended && !v.error && v.readyState >= 2 && !P.userPaused && !BG.on && !document.hidden && Date.now() - Pages.touchedAt > 1500) P.taken = true;
+    else if (v === P.active() && v.paused && !v.ended && !v.error && v.readyState >= 2 && !P.userPaused && !BG.on && !document.hidden && Date.now() - Pages.touchedAt > 1500) {
+      P.taken = true;
+      Away.add(`stopped from outside${v.inFull || v.webkitDisplayingFullscreen ? ', in fullscreen' : ''}`);
+    }
   });
   // iOS's fullscreen player pauses the video as you close it, some time around telling the page it closed,
   // so the video is kept going for a moment after, unless it was already paused
@@ -2411,31 +2414,85 @@ aBG.addEventListener('timeupdate', () => {
 // channel with a tap does that (unlock), and for a picture that started with none the next tap plays it again, which changes nothing else.
 // Refused all the same, it waits another 2 minutes: filling the page instead would gain nothing here, with the picture already as wide as
 // the page. Unproven on the phone: the sheet can turn it off.
+// The day it shipped, Jerry: "It occurred 2 times where I'm just watching normally and the screen went black and audio paused. I mean, it
+// just stopped playing. And I had to force quit." The relay's history has both (18:32 and 18:50, on this build): the stream's playlists
+// asked for every 2 s with no start over and no ad break before them, then nothing for 10 and 16 s, then a new page. So nothing the player
+// did, and what the phone showed wasn't known. Since then: it only goes with the screen lock held, as a screen iOS is about to put to sleep
+// is no time to hand the picture over; a picture that stops within 6 s of going is brought back out and played, and going by itself
+// turns itself off (check); every 5 s the page writes down how the picture stands (beat), and a page that takes another's place within 3
+// minutes of its last note sends that note and its last lines to the relay's count of callers (learn; ?stats=1 shows it, under the
+// pages with no seat), which can be read without the phone. One that ended in a fullscreen it went to by itself turns it off too.
 const Auto = {
   on: store.get('autoFull', true), after: 2 * 60e3,
   since: 0, at: 0,   // when the watching that counts began, and when it was last looked at
+  took: null, tookAt: 0, bad: 0,   // the picture it took to fullscreen, until that closes; when; and how many looks have found it stopped
   can: /iPhone/.test(navigator.userAgent),
-  set(on) { this.on = on; store.set('autoFull', on); this.since = 0; },
+  set(on) { this.on = on; store.set('autoFull', on); store.set('autoFullOff', ''); this.since = 0; },
+  off(why) {
+    this.on = false; store.set('autoFull', false); store.set('autoFullOff', why);
+    Away.add(`fullscreen by itself turned off: ${why}`);
+    setTimeout(() => UI.toast(`Fullscreen by itself is off: ${why}. Settings turns it back on`), 800);
+  },
   // The inner screen is 669 across its short side (closed, the screen is 466, and no other iPhone reaches 600)
   inner() { return this.can && innerWidth > innerHeight && innerHeight >= 600; },
   watching() {
     const v = P.active(), w = $('watch');
     return this.on && !!v && !v.paused && !v.ended && P.started && !P.quietStart && !BG.on && this.inner() && Pages.inFront()
       && !w.hidden && !w.classList.contains('kb') && !w.classList.contains('full') && !v.inFull && !v.webkitDisplayingFullscreen
+      && (!navigator.wakeLock || !!Awake.lock)
       && $('sheet').hidden && $('msgbox').hidden && $('unmute').hidden && !document.activeElement?.matches?.('input, textarea');
   },
   tick() {
     const now = Date.now(), gap = now - this.at;
     this.at = now;
+    this.check(now);
+    if (++this.beats % 5 === 0) this.beat(now);
     if (!this.watching() || gap > 5000) { this.since = 0; return; }   // a page iOS froze a while wasn't being watched
     this.since = Math.max(this.since || now, Pages.touchedAt);
     if (now - this.since < this.after) return;
     this.since = now;
-    try { P.active().webkitEnterFullscreen(); Away.add('fullscreen by itself'); } catch { Away.add('iOS refused fullscreen by itself'); }
+    const v = P.active();
+    try { v.webkitEnterFullscreen(); this.took = v; this.tookAt = now; this.bad = 0; Away.add('fullscreen by itself'); } catch { Away.add('iOS refused fullscreen by itself'); }
+  },
+  // Stopped on two looks running within 6 s of going by itself, and not by you: going is what stopped it. Out it comes, playing.
+  check(now) {
+    const v = this.took;
+    if (!v) return;
+    if (now - this.tookAt > 6000) { if (!v.inFull && !v.webkitDisplayingFullscreen) this.took = null; return; }   // closed since: the next fullscreen is your own
+    if (P.active() !== v) return;
+    if (!v.paused || v.ended || P.userPaused || document.hidden) { this.bad = 0; return; }
+    if (++this.bad < 2) return;
+    this.took = null;
+    this.off('it stopped the picture');
+    try { v.webkitExitFullscreen(); } catch {}
+    const play = () => { if (P.active() === v && v.paused && !P.userPaused && !document.hidden) { P.taken = false; P.play(v); } };
+    play(); setTimeout(play, 1200);
+  },
+  // How the picture stands, every 5 s with the watch screen up, for the page that comes after this one (learn).
+  beats: 0,
+  beat(now) {
+    const v = P.active();
+    if (!this.can || !v || $('watch').hidden) return;
+    const full = v.inFull || v.webkitDisplayingFullscreen;
+    store.set('beat', [Pages.id, now, `${P.feed} ${v.paused ? (P.userPaused ? 'paused by you' : P.taken ? 'stopped from outside' : 'paused') : P.stuck() ? 'not moving' : 'going'}`
+      + `${full ? ` in fullscreen${this.took === v ? ' by itself' : ''}` : $('watch').classList.contains('full') ? ' filling the page' : ''}${document.hidden ? ', hidden' : ''}`
+      + `${Awake.lock ? '' : ', no screen lock'}, ${innerWidth}×${innerHeight}, touched ${Math.round((now - Pages.touchedAt) / 1e3)} s before`]);
+  },
+  learn(now = Date.now(), log = store.get('away', []), beat = store.get('beat', null)) {
+    if (!beat || beat[0] === Pages.id || now - beat[1] > 180e3 || now < beat[1]) return null;
+    const lines = log.filter(l => l.split(' ')[1] === beat[0]).map(l => l.replace(` ${beat[0]} `, ' ')), whats = lines.map(l => l.slice(9));
+    const at = whats.lastIndexOf('fullscreen by itself');
+    const ended = / by itself/.test(beat[2]) && !/hidden/.test(beat[2]) && at >= 0 && !whats.slice(at + 1).some(w => /^(fullscreen closed|left|fullscreen by itself turned off)/.test(w));
+    const was = `was ${beat[2]}, ${Math.round((now - beat[1]) / 1e3)} s before | ${lines.slice(-4).join(' | ')}`.slice(0, 240);
+    store.set('beat', null);
+    if (ended && this.on) this.off(`the app was quit from it at ${new Date(beat[1]).toTimeString().slice(0, 5)}`);
+    if (Pages.seated) fetch(`${RELAY}?ping=1&pg=${Pages.id}&b=${BUILD}&k=${encodeURIComponent(was)}`, { cache: 'no-store' }).catch(() => {});
+    return { ended, was };
   },
   // inside a tap: a picture going that no tap has played gets played in this one, so iOS will take it to fullscreen without one later
   tap() { const v = P.active(); if (this.can && v && !v.paused && !v.ended && !v.tapped) { v.tapped = true; const p = v.play(); if (p) p.catch(() => {}); } },
 };
+if (Auto.can) Auto.learn();
 let lastTick = Date.now(), idleFor = 0;
 setInterval(() => {
   // iOS froze the page a while, which it only does with nothing playing. The record says how long: a page you can't see that logs one is
@@ -3961,7 +4018,7 @@ const Sheet = {
     ]);
     if (Auto.can) this.group(body, 'Fullscreen by itself', [
       { label: 'After 2 minutes of watching', desc: 'Open and on its side, with nothing touched.', on: Auto.on, pick: () => { Auto.set(true); this.close(); } },
-      { label: 'Never', on: !Auto.on, pick: () => { Auto.set(false); this.close(); } },
+      { label: 'Never', desc: !Auto.on && store.get('autoFullOff', '') ? `Turned itself off: ${store.get('autoFullOff', '')}.` : '', on: !Auto.on, pick: () => { Auto.set(false); this.close(); } },
     ]);
     this.accountItems(body);
     // the details: there for a screenshot, shut until asked for (Jerry, 2026-11-09: "clean up the settings")
