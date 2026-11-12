@@ -1442,7 +1442,7 @@ if (want('relay')) {
       let calls = 0;
       const { page, done, t } = await stage(route => { calls++; return outOfFetches(route); }, { copy: () => true }), ms = await toCdn(page, t);
       const n = calls;
-      ok('the relay out of fetches: straight to the CDN, with no tries first', ms < 8000 && n <= 2, `${ms} ms, ${n} calls`);
+      ok('the relay out of fetches: straight to the CDN, with no tries first', ms < 8000 && n <= 1 + Math.min(3, Math.floor(ms / 1500)), `${ms} ms, ${n} calls`);   // an answer that's slow in coming has its twins, one each 1.5 s
       await page.waitForFunction(() => wraith.P.active().readyState >= 3, null, { timeout: 15000 }).catch(never);
       ok('and it plays', await page.evaluate(() => { const v = wraith.P.active(); return !v.paused && !wraith.P.hls; }), JSON.stringify(await st(page)));
       await sleep(3000);

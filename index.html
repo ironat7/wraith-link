@@ -484,7 +484,6 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
 .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--line-2); margin: 2px auto 8px; }
 .panel h3 { margin: 16px 4px 8px; font-size: 12.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-3); }
 .opts { background: var(--bg-2); border-radius: 13px; overflow: hidden; }
-.opts + .opts { margin-top: 10px; }   /* a group with no title of its own */
 .opt { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 50px; padding: 10px 14px; text-align: left; }
 .opt + .opt { border-top: 1px solid var(--line); }
 .opt:active { background: var(--bg-3); }
@@ -736,6 +735,7 @@ async function tokenFor(login) {
   const tok = await getToken(login).catch(() => null);
   return tok?.authorization?.isForbidden ? Me.streamToken(login) : tok;
 }
+const noToken = tok => !tok || !!tok.authorization?.isForbidden;   // none, or one Twitch won't play (sub-only)
 
 function usherUrl(login, tok) {
   const q = new URLSearchParams({
@@ -781,11 +781,14 @@ if (!document.hidden) fetch(RELAY + '?ping=1').catch(() => {});   // Apps Script
 const attr = (line, k) => (line.match(new RegExp(`[:,]${k}="?([^",]*)`)) || [])[1] || '';
 const audioIn = master => master?.match(/VIDEO="audio_only"[^\n]*\n(\S+)/)?.[1] || null;
 
+function relayAnswer(t) {   // { code, body } of what the relay sent, with Pages and Quota told of it; code 0 if it didn't start with one
+  const nl = t.indexOf('\n'), code = parseInt(t.slice(0, nl), 10) || 0, body = t.slice(nl + 1);
+  Pages.answered(code); Quota.note(code, body);
+  return { code, body };
+}
 async function relayGet(url) {   // { code, body }, with code 0 if the relay couldn't be reached
   try {
-    const t = await (await fetch(relayUrl(url), { cache: 'no-store', signal: AbortSignal.timeout(10e3) })).text(), nl = t.indexOf('\n'), code = parseInt(t.slice(0, nl), 10) || 0;
-    Pages.answered(code); Quota.note(code, t);
-    return { code, body: t.slice(nl + 1) };
+    return relayAnswer(await (await fetch(relayUrl(url), { cache: 'no-store', signal: AbortSignal.timeout(10e3) })).text());
   } catch { return { code: 0, body: '' }; }
 }
 async function relayText(url) {   // the body, or null on any failure
@@ -894,26 +897,26 @@ class RelayLoader {
   constructor() { this.stats = newStats(); this.context = null; this.callbacks = null; this.ctrl = null; this.timers = []; }
   load(context, config, callbacks) {
     this.context = context; this.callbacks = callbacks;
-    const st = this.stats, real = context.url;
+    const st = this.stats, real = context.url, kind = this.quiet ? 'a' : context.type === 'manifest' ? 'm' : 'v';   // as relayUrl's k
     st.loading.start = performance.now();
-    if (!this.quiet && context.type !== 'manifest' && primed?.url === real && Date.now() - primed.at < 5000) {
+    if (kind === 'v' && primed?.url === real && Date.now() - primed.at < 5000) {
       const text = primed.text;
       primed = null;
       Promise.resolve().then(() => this.callbacks && this.done(real, rewrite(text, real)));
       return;
     }
     // the relay appends this rendition's media playlist to the master, saving a round trip
-    const first = !this.quiet && context.type === 'manifest' ? '&first=' + encodeURIComponent(P.q === 'source' || P.q === 'auto' ? 'top' : P.q) : '';
+    const first = kind === 'm' ? '&first=' + encodeURIComponent(P.q === 'source' || P.q === 'auto' ? 'top' : P.q) : '';
     const ctrl = this.ctrl = new AbortController();
     let sent = 0, failed = 0;
     const finish = fn => {
       if (this.ctrl !== ctrl) return;
-      this.ctrl = null; this.clear(); ctrl.abort();
+      this.stop();
       if (this.callbacks) fn();
     };
     const send = () => {
       sent++;   // a twin goes without the first media playlist, which would cost the relay a second fetch for an answer that may go unused
-      fetch(relayUrl(real, this.quiet ? 'a' : context.type === 'manifest' ? 'm' : 'v') + (sent === 1 ? first : ''), { signal: ctrl.signal, cache: 'no-store' })
+      fetch(relayUrl(real, kind) + (sent === 1 ? first : ''), { signal: ctrl.signal, cache: 'no-store' })
         .then(r => r.text())
         .then(t => finish(() => this.parse(t, real)), () => {
           if (this.ctrl !== ctrl) return;
@@ -926,11 +929,9 @@ class RelayLoader {
     this.timers.push(setTimeout(() => finish(() => callbacks.onTimeout(st, context, null)), config.timeout || 10000));
   }
   parse(t, real) {
-    const nl = t.indexOf('\n'), code = parseInt(t.slice(0, nl), 10);
-    let body = t.slice(nl + 1);
-    Pages.answered(code); Quota.note(code, body);
+    let { code, body } = relayAnswer(t);
     if (code === 409 || !this.callbacks) return;   // another page has the seat, and this player's gone
-    if (code !== 200) return this.callbacks.onError({ code: code || 0, text: (code ? body : t).slice(0, 200) }, this.context, null, this.stats);
+    if (code !== 200) return this.callbacks.onError({ code, text: (code ? body : t).slice(0, 200) }, this.context, null, this.stats);
     const cut = body.indexOf('\n#WRAITH-MEDIA:');
     if (cut >= 0) {
       const rest = body.slice(cut + 15), eol = rest.indexOf('\n'), [status, url] = rest.slice(0, eol).split(' ');
@@ -950,15 +951,15 @@ class RelayLoader {
     st.loaded = st.total = data.length;
     this.callbacks.onSuccess({ url, data }, st, this.context, null);
   }
-  clear() { this.timers.forEach(clearTimeout); this.timers = []; }
+  stop() { this.ctrl?.abort(); this.ctrl = null; this.timers.forEach(clearTimeout); this.timers = []; }
   twin() { return true; }
   abort() {
     if (!this.ctrl) return;
-    this.ctrl.abort(); this.ctrl = null; this.clear();
+    this.stop();
     this.stats.aborted = true;
     this.callbacks?.onAbort?.(this.stats, this.context, null);
   }
-  destroy() { this.ctrl?.abort(); this.ctrl = null; this.clear(); this.callbacks = null; }
+  destroy() { this.stop(); this.callbacks = null; }
   getCacheAge() { return null; }
   getResponseHeader() { return null; }
 }
@@ -1017,8 +1018,13 @@ function recoverHls(hls, media) {
 const stripSides = el('div');
 stripSides.style.cssText = 'position: fixed; visibility: hidden; pointer-events: none; width: var(--sal); height: var(--sar);';
 document.body.append(stripSides);
+// Fullscreen is two things: the page's own, where a browser has it, and iOS's player, which is all an iPhone has (inFull is the page's note of it).
+function pageFull() { return document.fullscreenElement || document.webkitFullscreenElement; }
+function leavePageFull() { return (document.exitFullscreen || document.webkitExitFullscreen).call(document); }
+function nativeFull(v) { return v.inFull || v.webkitDisplayingFullscreen; }
+function leaveNative(v) { if (v?.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {} }
 function findStrip() {
-  const l = stripSides.offsetWidth, r = stripSides.offsetHeight, whole = document.fullscreenElement || document.webkitFullscreenElement;
+  const l = stripSides.offsetWidth, r = stripSides.offsetHeight, whole = pageFull();
   const side = whole ? null : l > 40 && !r ? 'left' : r > 40 && !l ? 'right' : null;
   if (side) document.documentElement.dataset.strip = side; else delete document.documentElement.dataset.strip;
 }
@@ -1055,7 +1061,7 @@ const nothingOpen = () => ({
   tokenP: null, audioUrl: null,      // the token the first start uses; this session's audio_only playlist
   groups: [], subOnly: false,        // the renditions hls.js found; whether only the CDN can play this
   base: null, start: 0, seekPending: false,   // the copy on the CDN, when the stream began, whether the copy's yet to be seeked into
-  rend: null, asks: 0, played: null, // the name the copy turned out to be under; how often it's been asked for again; the address of one that has played
+  rend: null, asks: 0, played: null, failedAt: 0,   // the name the copy turned out to be under; how often it's been asked for again; the address of one that has played; when it last failed
   vodSrcs: null, vodAudio: null, vodAt: 0,    // addresses for a video and its sound, best first; where to put it once it has loaded
   ad: false, adEnd: 0, cover: false, // an ad break, when it ends, and whether the CDN feed is covering it
   dodged: new Set(), dodging: false, // kinds of session already tried on this ad break
@@ -1079,7 +1085,7 @@ const nothingOpen = () => ({
 
 const P = {
   ...nothingOpen(),
-  gen: 0, hls: null, liveRun: 0, timer: 0,
+  gen: 0, hls: null, liveRun: 0, timer: 0, retryT: 0,
   playerType: PLAYER_TYPES.includes(store.get('playerType', '')) ? store.get('playerType', '') : PLAYER_TYPES[0],
   pref: store.get('feed', 'live'),   // the feed picked in the sheet: 'live' | 'cdn'
   q: store.get('quality', 'source'), // 'source' | 'auto' | a rendition like '720p60'
@@ -1175,7 +1181,7 @@ const P = {
     if (tok.authorization?.isForbidden) {   // sub-only, but your account may be in
       tok = await Me.streamToken(this.login);
       if (stale()) return;
-      if (!tok || tok.authorization?.isForbidden) { this.subOnly = true; return this.fallback('Sub-only stream'); }
+      if (noToken(tok)) { this.subOnly = true; return this.fallback('Sub-only stream'); }
     }
     let Hls;
     try { Hls = window.Hls || await hlsReady; } catch { hlsAgain(); if (!stale()) this.fallback('The player didn’t load'); return; }
@@ -1243,14 +1249,14 @@ const P = {
   setQuality(id) {
     this.q = id; this.cap = 0; this.rend = null; store.set('quality', id);
     this.quietUntil = Date.now() + 6000;   // the switch's own buffering isn't a bad connection
-    if (this.feed === 'live' || this.cover) this.applyQuality();
+    if (this.liveUp()) this.applyQuality();
     if (this.feed === 'cdn') this.playCdn({ cover: this.cover, reload: true });
   },
 
   setPref(f) {
     this.pref = f; store.set('feed', f);
     if (!this.user?.stream || this.feed === 'vod') return;
-    if (f === 'cdn' && (this.feed === 'live' || this.cover)) { this.destroyHls(); this.noAd(); this.playCdn(); }
+    if (f === 'cdn' && this.liveUp()) { this.destroyHls(); this.noAd(); this.playCdn(); }
     else if (f === 'live' && this.feed === 'cdn' && !this.subOnly) this.playLive();
   },
 
@@ -1289,7 +1295,7 @@ const P = {
     if (this.retries++ < 3) {
       if (!this.cover) UI.spin(true);
       // while away the sound has its own player, and coming back starts this one over anyway
-      setTimeout(() => { if (gen === this.gen && (this.feed === 'live' || this.cover) && !BG.on) this.playLive(); }, 1500 * this.retries);
+      setTimeout(() => { if (gen === this.gen && this.liveUp() && !BG.on) this.playLive(); }, 1500 * this.retries);
       return;
     }
     this.checkEnded().then(ended => { if (!ended && gen === this.gen) this.fallback('The low-latency feed keeps failing'); });
@@ -1313,14 +1319,15 @@ const P = {
   // One wait at a time: each failed go at low latency would otherwise start another.
   retryLive() {
     const gen = this.gen;
+    const off = () => gen !== this.gen || this.feed !== 'cdn' || this.pref !== 'live';   // overtaken: another channel, or the CDN's no longer standing in for low latency
     clearTimeout(this.retryT);
     this.retryT = setTimeout(async () => {
-      if (gen !== this.gen || this.feed !== 'cdn' || this.pref !== 'live') return;
+      if (off()) return;
       if (BG.on || (document.hidden && !BG.may()) || Pages.idle()) return this.retryLive();
       if (!window.Hls?.isSupported()) { hlsAgain(); return this.retryLive(); }   // nothing to go back to yet: the picture stays put
       const tok = await tokenFor(this.login);
-      const master = tok && !tok.authorization?.isForbidden ? await relayText(usherUrl(this.login, tok)) : null;
-      if (gen !== this.gen || this.feed !== 'cdn' || this.pref !== 'live') return;   // the CDN may have been picked meanwhile
+      const master = !noToken(tok) ? await relayText(usherUrl(this.login, tok)) : null;
+      if (off()) return;   // the CDN may have been picked meanwhile
       if (!master?.includes('#EXT-X-STREAM-INF')) return this.retryLive();
       this.retries = 0; this.tokenP = Promise.resolve(tok);
       this.playLive();
@@ -1328,6 +1335,8 @@ const P = {
   },
 
   noAd() { this.cover = this.ad = false; this.adEnd = 0; UI.banner(); },
+  uncover() { this.cover = false; this.stopCdn(); this.show('live'); },   // the cover off an ad break, back to the low-latency picture
+  liveUp() { return this.feed === 'live' || this.cover; },   // the low-latency player is the one in use: on screen, or under an ad break's cover
 
   onAd(on, end) {
     if (on) {
@@ -1340,7 +1349,7 @@ const P = {
       this.dodged.clear();   // the next break starts its search afresh, also after one that ended with a new session arriving clean
       if (!this.ad) return;
       this.ad = false; this.adEnd = 0;
-      if (this.cover) { this.cover = false; this.stopCdn(); this.show('live'); }
+      if (this.cover) this.uncover();
       if (BG.on) this.hls?.stopLoad();   // away, on the CDN's sound: it all comes back with the picture
       else if (this.feed === 'live') {   // to the edge now, and again once the playlist that said so is in
         this.toLiveEdge(); this.play(vL);
@@ -1356,7 +1365,7 @@ const P = {
   async dodge() {
     if (this.dodging) return;
     this.dodging = true;
-    const gen = this.gen, login = this.login;
+    const gen = this.gen, login = this.login, over = () => gen !== this.gen || !this.ad || BG.on;
     const cover = () => { if (gen === this.gen && this.ad && this.feed === 'live' && !BG.on && cdnLive && this.base) { this.cover = true; this.playCdn({ cover: true }); UI.banner(); } };
     const slow = setTimeout(cover, 5000);
     try {
@@ -1364,11 +1373,11 @@ const P = {
         if (kind === this.playerType || this.dodged.has(kind)) continue;
         this.dodged.add(kind);
         const tok = kind === 'account' ? await Me.streamToken(login) : await getToken(login, kind).catch(() => null);
-        if (gen !== this.gen || !this.ad || BG.on) return;
-        if (!tok || tok.authorization?.isForbidden) continue;
+        if (over()) return;
+        if (noToken(tok)) continue;
         const master = await relayText(usherUrl(login, tok)), media = master && master.match(/#EXT-X-STREAM-INF[^\n]*\n(\S+)/)?.[1];
         const text = media && await relayText(media);
-        if (gen !== this.gen || !this.ad || BG.on) return;
+        if (over()) return;
         if (!text?.includes('#EXTINF') || /stitched-ad|X-TV-TWITCH-AD|,Amazon/.test(text)) continue;
         if (kind !== 'account') { this.playerType = kind; store.set('playerType', kind); }
         this.dodged.clear();
@@ -1410,7 +1419,7 @@ const P = {
   cdnFailed() {
     if (this.cover) {
       if (this.nextRendition()) return;
-      this.cover = false; this.stopCdn(); this.show('live'); UI.spin(false); UI.banner();
+      this.uncover(); UI.spin(false); UI.banner();
       return;
     }
     if (this.feed !== 'cdn' || BG.on) return;   // while away the sound does the asking, and coming back loads the picture again
@@ -1491,7 +1500,7 @@ const P = {
     vC.classList.toggle('off', which === 'live');
     const out = which === 'live' ? vC : vL;
     // iOS's own fullscreen player shows that one video, and would sit on its last frame with the sound going on behind it
-    if (out.webkitDisplayingFullscreen) try { out.webkitExitFullscreen(); } catch {}
+    leaveNative(out);
     out.pause();
     this.rate = 'normal';
     UI.feed();
@@ -1586,7 +1595,7 @@ const P = {
     this.watch(v, now);
     if (v.paused) return this.rest();
     // a picked quality stays picked, whatever hls.js decides after an error
-    if (this.feed === 'live' && this.q !== 'auto' && this.hls?.autoLevelEnabled && this.groups.length) this.hls.loadLevel = this.levelIndex();
+    if (this.feed === 'live' && this.q !== 'auto' && this.hls?.autoLevelEnabled) this.applyQuality(true);
     if (v.readyState < 3) {   // stalled: hop the hole a cut-out ad leaves if picture is buffered past it
       const b = v.buffered;
       for (let i = 0; i < b.length; i++) if (b.start(i) > v.currentTime + 0.1) { v.currentTime = b.start(i) + 0.05; break; }
@@ -1620,7 +1629,7 @@ const P = {
   // sound, nobody's waiting on it either (now).
   rest(now) {
     const h = this.hls;
-    if (!h?.loadingEnabled || !h.levels.length || (this.feed !== 'live' && !this.cover)) return;
+    if (!h?.loadingEnabled || !h.levels.length || !this.liveUp()) return;
     if (BG.on) { h.stopLoad(); if (this.feed === 'live') this.dropBuffer(); }   // nobody's looking, and iOS may as well have the memory
     else if (this.feed === 'live' && (now || (!this.ad && performance.now() - Math.max(this.pausedAt, this.resumedAt) > this.restAfter))) h.stopLoad();
   },
@@ -1722,6 +1731,7 @@ const P = {
     }
   },
 
+  refreshIfDue() { if (this.refreshDue) { this.refreshDue = false; this.refresh(); } },
   async refresh() {
     // Out of sight with no sound, going or paused from the lock screen (whose play has to find the stream as it is now), or with nobody
     // about (Pages.idle), nobody's waiting on what Twitch would say: coming back asks
@@ -1733,7 +1743,8 @@ const P = {
       // the look for it going live, which goes by that, would never start it)
       if (gen !== this.gen || !u || !this.user?.stream) return;
       // A new stream: pick it up, as paused or not as this one was. Out of front with no sound going, it waits for you, and plays once you're back.
-      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id && this.feed === 'live' && this.liveId === String(u.stream.id)) {
+      const fresh = u.stream && u.stream.id !== this.user.stream.id;
+      if (fresh && this.feed === 'live' && this.liveId === String(u.stream.id)) {
         // a restart already brought the new broadcast in: what's known about it catches up, with nothing torn down
         const base = await cdnBase(u);
         if (gen !== this.gen) return;
@@ -1741,7 +1752,7 @@ const P = {
         UI.info(u);
         return;
       }
-      if (u.stream && this.user?.stream && u.stream.id !== this.user.stream.id) {
+      if (fresh) {
         const held = BG.on && BG.held, carry = BG.may(), away = !this.userPaused && !held && !carry && !Pages.inFront();
         const paused = this.userPaused || held || away;   // stopped from the lock screen is a pause you chose too
         this.open(this.login);
@@ -1749,7 +1760,7 @@ const P = {
         return;
       }
       // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
-      if (!u.stream && this.user?.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
+      if (!u.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
       this.gone = 0;
       if (!u.stream) return this.ended(u);
       this.user = u; UI.info(u);
@@ -1796,7 +1807,7 @@ const P = {
     const v = this.active();
     BG.stop(true); BG.carry = false;
     this.destroyHls(); this.stopCdn(); vL.removeAttribute('src');
-    if (v?.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}   // iOS's own fullscreen player would sit on the last frame. After the reloads: see checkFull
+    leaveNative(v);   // iOS's own fullscreen player would sit on the last frame. After the reloads: see checkFull
     this.feed = null; this.noAd();
     this.user = u; UI.info(u);
     Vods.channel(u.login); About.channel(u.login);   // what they just streamed is a past broadcast now
@@ -1855,8 +1866,15 @@ const BG = {
   lapse() {
     if (!this.on || !this.wanted) return;
     Away.add('sound gave up');
-    this.wanted = this.carry = false;
-    aBG.pause(); this.hls?.stopLoad();
+    this.hush();
+  },
+  hush() { this.wanted = this.carry = false; aBG.pause(); this.hls?.stopLoad(); },   // stopped: no relay polling while paused
+  // Whether a player that's been waiting on something is still the one, and still wanted: too long quiet meanwhile, it gives up (lapse).
+  still(h) {
+    if (this.hls !== h || !this.wanted) return false;
+    if (this.going()) return true;
+    this.lapse();
+    return false;
   },
   claim() {
     if (!('mediaSession' in navigator) || !Remote.up) return;
@@ -1868,7 +1886,7 @@ const BG = {
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
     this.on = this.wanted = true; this.held = false;
     // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
-    if (v.webkitDisplayingFullscreen) try { v.webkitExitFullscreen(); } catch {}
+    leaveNative(v);
     aBG.muted = false;
     if (P.feed === 'live') {
       // it takes ~2.5 s to start, so it starts ~2.5 s further back: the sound resumes where the
@@ -1888,8 +1906,7 @@ const BG = {
           recoverHls(h, aBG);
           aBG.play().catch(() => {});
         } else setTimeout(() => {
-          if (this.hls !== h || !this.wanted) return;
-          if (!this.going()) return this.lapse();
+          if (!this.still(h)) return;
           if (d.response?.code >= 400 && d.response.code < 500) this.renew(h); else this.load(h);
         }, 2000);
       });
@@ -1927,11 +1944,9 @@ const BG = {
   // doesn't start a page's sound out of sight.
   async renew(h) {
     const tok = await tokenFor(P.login);
-    if (this.hls !== h || !this.wanted) return;
-    if (!this.going()) return this.lapse();   // before spending a fetch on a sound that's not coming back
+    if (!this.still(h)) return;   // before spending a fetch on a sound that's not coming back
     const url = tok && audioIn(await relayText(usherUrl(P.login, tok)));
-    if (this.hls !== h || !this.wanted) return;
-    if (!this.going()) return this.lapse();
+    if (!this.still(h)) return;
     if (!url) return void setTimeout(() => { if (this.hls === h && this.wanted) this.renew(h); }, 5000);
     P.audioUrl = url;
     h.loadSource(url);
@@ -1993,9 +2008,7 @@ aBG.addEventListener('error', () => {
 aBG.addEventListener('pause', () => {
   if (!BG.on || !BG.wanted || aBG.ended || aBG.error) return;
   Away.add('iOS paused the sound');
-  BG.wanted = BG.carry = false;
-  aBG.pause();
-  BG.hls?.stopLoad();
+  BG.hush();
 });
 aBG.addEventListener('play', () => {
   if (!BG.on || BG.wanted) return;
@@ -2036,18 +2049,18 @@ const Pages = {
     if (code === 409) this.heard('play');
     else if (code) this.takeAt = 0;
   },
-  ask() {   // a CDN feed or a past broadcast sends nothing else through the relay
-    fetch(`${RELAY}?ping=1${this.seat()}`, { cache: 'no-store' }).then(r => r.text()).then(t => this.answered(parseInt(t, 10))).catch(() => {});
+  async ping(signal) {   // the relay's word on whose the seat is
+    const code = parseInt(await (await fetch(`${RELAY}?ping=1${this.seat()}`, { cache: 'no-store', signal })).text(), 10);
+    this.answered(code);
+    return code;
   },
+  ask() { this.ping().catch(() => {}); },   // a CDN feed or a past broadcast sends nothing else through the relay
+  unseenByRelay() { return this.seated && (P.login || P.vod) && !relayBusy(); },   // something's open here, and nothing of it is going through the relay to say so
   // A stream starting with nobody having asked for it here (going live, starting over) plays only if the seat is still this page's: asked
   // before anything plays, as a copy on the CDN never goes near the relay, and would play for up to half a minute before hearing.
   async confirm() {
     if (!this.seated || this.taking()) return true;
-    try {
-      const code = parseInt(await (await fetch(`${RELAY}?ping=1${this.seat()}`, { cache: 'no-store', signal: AbortSignal.timeout(8e3) })).text(), 10);
-      this.answered(code);
-      return code !== 409;
-    } catch { return true; }   // better to play than not, if the relay can't say
+    try { return await this.ping(AbortSignal.timeout(8e3)) !== 409; } catch { return true; }   // better to play than not, if the relay can't say
   },
   // iOS reloads a page it has dropped while the app's away (four times in 23 minutes on 2026-11-04). Out of sight that page asks nothing of
   // anyone until it's looked at, which may be never: it would have no sound to give, and the memory and relay calls are likely what got it
@@ -2077,12 +2090,12 @@ const Pages = {
     if (was) {   // what waited for you
       Chat.wake();
       if (!$('home').hidden) Home.load();
-      if (P.refreshDue) { P.refreshDue = false; P.refresh(); }
+      P.refreshIfDue();
       P.lookLive();
     }
     // You're here. With nothing of this page's going through the relay to say so (a channel waiting to go live, the CDN's feed, a picture
     // paused a while), a ping does: otherwise the seat stays with a page iOS dropped, and this one is turned away once it starts playing.
-    if (this.seated && (P.login || P.vod) && !relayBusy() && Date.now() - this.askedAt > 20e3) { this.askedAt = Date.now(); this.ask(); }
+    if (this.unseenByRelay() && Date.now() - this.askedAt > 20e3) { this.askedAt = Date.now(); this.ask(); }
   },
   ch: ios && window.BroadcastChannel ? new BroadcastChannel('wraith') : null,
   tell(what) { if (!document.hidden) this.ch?.postMessage(what); },
@@ -2111,7 +2124,7 @@ document.addEventListener('visibilitychange', () => {
   if ($('watch').hidden) return;
   if (!document.hidden) {
     BG.carry = false;
-    if (P.refreshDue) { P.refreshDue = false; P.refresh(); }   // the look at the channel that waited for you
+    P.refreshIfDue();   // the look at the channel that waited for you
     if (BG.on) return BG.stop();
     if (P.feed === 'live' && P.hls && !vL.paused) P.resume();   // its loading stopped as the app left, and the picture's still going
     P.wake();
@@ -2124,8 +2137,7 @@ document.addEventListener('visibilitychange', () => {
   const v = P.active();
   // or a channel you've just tapped, still asking Twitch about it (no player yet), whose sound comes on once its player has started
   const starting = !v && P.login && !P.vod && P.user?.stream !== null && Date.now() - P.openedAt < 20e3 && !P.quietStart;
-  if ((v && !v.muted && !Sound.muted && !P.userPaused && (!v.paused || performance.now() - P.pausedAt < 2000 || P.ad || !P.started))
-    || (starting && !Sound.muted && !P.userPaused)) {
+  if (!Sound.muted && !P.userPaused && ((v && !v.muted && (!v.paused || performance.now() - P.pausedAt < 2000 || P.ad || !P.started)) || starting)) {
     BG.carry = true; BG.heard = Date.now();   // and if its player's starting over just now, the sound comes on once it has
     BG.start();
   }
@@ -2166,8 +2178,8 @@ const Pill = {
   decoy: null, hiding: false,
   sync() {
     const hide = ios && !document.hidden && !$('watch').hidden && (P.feed === 'live' || P.feed === 'cdn');
-    if (hide && !this.decoy) this.make();
     if (hide) {
+      if (!this.decoy) this.make();
       const r = stage.getBoundingClientRect();
       stage.style.setProperty('--k', Math.max(2, Math.ceil(Math.sqrt(r.width * r.height / 1e5) * 4) / 4));   // under 120,000 px² laid out
       if (!this.decoy.isConnected) document.body.append(this.decoy);
@@ -2204,9 +2216,8 @@ const Pill = {
 };
 new ResizeObserver(() => { if (Pill.hiding) Pill.sync(); }).observe(stage);   // a bigger picture (fullscreen, the phone turning) needs a bigger factor
 if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
-  const ms = { setActionHandler: (a, f) => Remote.set(a, f) };
-  const hold = () => { BG.held = true; BG.wanted = BG.carry = false; aBG.pause(); BG.hls?.stopLoad(); };   // stopped: no relay polling while paused
-  ms.setActionHandler('play', () => {
+  const hold = () => { BG.held = true; BG.hush(); };
+  Remote.set('play', () => {
     Away.add('button: play');
     Pages.takeAt = Pages.seenAt = Date.now();   // that's you, as much as a tap is
     P.taken = false;
@@ -2222,8 +2233,8 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
     if (BG.on) hold();
     else if (P.active() && !P.active().paused) togglePlay();
   };
-  ms.setActionHandler('pause', pause);
-  try { ms.setActionHandler('stop', pause); } catch {}
+  Remote.set('pause', pause);
+  Remote.set('stop', pause);
 }
 
 const Sound = {
@@ -2261,6 +2272,7 @@ const Sound = {
 const Awake = {
   lock: null, asking: 0, granted: false, refused: '', since: 0, offAt: 0, lost: 0, hinted: false,
   wanted() { const v = P.active(); return !!v && !v.paused && !document.hidden && !P.stuck(); },
+  onTap() { if (this.granted) this.sync(true); else this.ask(true); },   // a tap or a key: iOS only counts it for the lock a few seconds
   async ask(tap) {
     if (this.lock || !navigator.wakeLock) return;
     const waited = this.asking ? Date.now() - this.asking : 0;
@@ -2313,13 +2325,13 @@ const Awake = {
 document.addEventListener('visibilitychange', () => { if (document.hidden) Awake.hinted = false; Awake.sync(); });
 // touchend too: iOS sends no click for a tap on something that doesn't take one, like chat
 for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
-  if (Awake.granted) Awake.sync(true); else Awake.ask(true);   // first: the tap only counts for it a few seconds
+  Awake.onTap();   // first: the tap only counts for it a few seconds
   Pages.touchedAt = Date.now();
   Pages.see();
   if (ev === 'click') Auto.tap();   // a click is always a tap to iOS; a touch that ends a scroll isn't
 }, { capture: true, passive: true });
 // typing is you being there too, sending with the keyboard's own key included, which no tap goes with, and a key counts for the lock as a tap does
-document.addEventListener('keydown', () => { if (Awake.granted) Awake.sync(true); else Awake.ask(true); Pages.see(); }, { capture: true, passive: true });
+document.addEventListener('keydown', () => { Awake.onTap(); Pages.see(); }, { capture: true, passive: true });
 
 // A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
 window.addEventListener('online', () => {
@@ -2370,7 +2382,7 @@ for (const v of [vL, vC]) {
     if (v.pausing) v.pausing = false;
     else if (v === P.active() && v.paused && !v.ended && !v.error && v.readyState >= 2 && !P.userPaused && !BG.on && !document.hidden && Date.now() - Pages.touchedAt > 1500) {
       P.taken = true;
-      Away.add(`stopped from outside${v.inFull || v.webkitDisplayingFullscreen ? ', in fullscreen' : ''}`);
+      Away.add(`stopped from outside${nativeFull(v) ? ', in fullscreen' : ''}`);
       // Nothing on the page said so, and a tap only brought the controls up: a still picture with you watching, which reads as frozen (the
       // phone's own record, 2026-11-12 17:18: stopped from outside on the CDN's feed, a tap ten seconds on, still stopped, then the app quit).
       // So it gets the play button, and the next tap anywhere plays it, as for any start that's waiting for you.
@@ -2448,7 +2460,7 @@ const Auto = {
   watching() {
     const v = P.active(), w = $('watch');
     return this.on && !!v && !v.paused && !v.ended && P.started && !P.quietStart && !BG.on && this.inner() && Pages.inFront()
-      && !w.hidden && !w.classList.contains('kb') && !w.classList.contains('full') && !v.inFull && !v.webkitDisplayingFullscreen
+      && !w.hidden && !w.classList.contains('kb') && !w.classList.contains('full') && !nativeFull(v)
       && (!navigator.wakeLock || !!Awake.lock)
       && $('sheet').hidden && $('msgbox').hidden && $('unmute').hidden && !document.activeElement?.matches?.('input, textarea');
   },
@@ -2468,7 +2480,7 @@ const Auto = {
   check(now) {
     const v = this.took;
     if (!v) return;
-    if (now - this.tookAt > 6000) { if (!v.inFull && !v.webkitDisplayingFullscreen) this.took = null; return; }   // closed since: the next fullscreen is your own
+    if (now - this.tookAt > 6000) { if (!nativeFull(v)) this.took = null; return; }   // closed since: the next fullscreen is your own
     if (P.active() !== v) return;
     if (!v.paused || v.ended || P.userPaused || document.hidden) { this.bad = 0; return; }
     if (++this.bad < 2) return;
@@ -2483,7 +2495,7 @@ const Auto = {
   beat(now) {
     const v = P.active();
     if (!this.can || !v || $('watch').hidden) return;
-    const full = v.inFull || v.webkitDisplayingFullscreen;
+    const full = nativeFull(v);
     store.set('beat', [Pages.id, now, `${P.feed} ${v.paused ? (P.userPaused ? 'paused by you' : P.taken ? 'stopped from outside' : 'paused') : P.stuck() ? 'not moving' : 'going'}`
       + `${full ? ` in fullscreen${this.took === v ? ' by itself' : ''}` : $('watch').classList.contains('full') ? ' filling the page' : ''}${document.hidden ? ', hidden' : ''}`
       + `${Awake.lock ? '' : ', no screen lock'}, ${P.latency() == null ? '' : `${P.latency().toFixed(0)} s behind, `}${bufAhead(v).toFixed(1)} s loaded, ${innerWidth}×${innerHeight}, touched ${Math.round((now - Pages.touchedAt) / 1e3)} s before`]);
@@ -2526,7 +2538,7 @@ setInterval(() => {
   // nothing else of this page's asks the relay. Out of sight that's only for sound that's going: with none, the page is doing nothing
   // to ask about, and coming back asks at once (Pages.see)
   const idle = Pages.idle();
-  if (Pages.seated && (P.login || P.vod) && !relayBusy() && (!document.hidden || BG.going()) && !idle && ++Pages.ticks % 30 === 0) Pages.ask();
+  if (Pages.unseenByRelay() && (!document.hidden || BG.going()) && !idle && ++Pages.ticks % 30 === 0) Pages.ask();
   // Untouched for half an hour, "nobody about" hangs on the picture playing this second, and a player starting over is paused for a moment:
   // chat dozed then stayed dozed, as nothing woke it short of leaving and coming back. So it takes a while of it to doze, and waking is
   // looked at here too.
@@ -2562,6 +2574,7 @@ function parseIrc(line) {
   return m;
 }
 const loginOf = m => m.tags.login || m.prefix.split('!')[0];   // a subscription or announcement comes from tmi.twitch.tv, with who it's about in a tag
+const plain = s => /^[\x20-\x7e]+$/.test(s);   // a name in plain letters
 
 const Chat = {
   box: $('chat'), ws: null, login: null, uid: null, queue: [], stick: true, retry: 0, timer: 0, pinger: 0,
@@ -2593,6 +2606,8 @@ const Chat = {
   },
 
   clear() { this.box.textContent = ''; this.stick = true; this.top = 0; $('more').hidden = true; clearTimeout(this.idle); },
+  hangUp() { if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); } },
+  toEnd() { this.box.scrollTop = this.box.scrollHeight; this.top = this.box.scrollTop; },   // to the newest line, with where that is kept for the scroll listener
   follow() { this.stick = true; this.box.scrollTop = this.box.scrollHeight; $('more').hidden = true; clearTimeout(this.idle); },
   rest() {   // not with a finger on it or someone's card open
     clearTimeout(this.idle);
@@ -2644,7 +2659,7 @@ const Chat = {
   },
   // So too with nobody about for half an hour (Pages.idle): a page iOS keeps where you can't see it would otherwise draw chat for good.
   doze() {
-    if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+    this.hangUp();
     for (const q of this.queue) this.seen.delete(q.m.tags.id);   // never drawn, so the history fetched on the way back fills them in
     this.behind = true; this.queue = [];
     this.clocks(false);   // and its timers stop: away with the sound on, the page keeps running, and they'd wake it for nothing
@@ -2660,7 +2675,7 @@ const Chat = {
     if (on) { this.timer = setInterval(() => this.flush(), 200); this.pinger = setInterval(() => this.ping(), 25e3); }
   },
   reconnect() {
-    if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+    this.hangUp();
     this.behind = true; this.retry = 0;
     this.connect();
   },
@@ -2798,7 +2813,7 @@ const Chat = {
       while (i < drawn.length && +drawn[i].dataset.ts <= q.ts) i++;
       this.box.insertBefore(this.render(q.m), drawn[i] || null);
     }
-    if (this.stick) { this.box.scrollTop = this.box.scrollHeight; this.top = this.box.scrollTop; }   // lines put in above the newest would leave it short of the end
+    if (this.stick) this.toEnd();   // lines put in above the newest would leave it short of the end
   },
 
   append(nodes) {
@@ -2809,8 +2824,7 @@ const Chat = {
     if (this.stick) {
       const extra = this.box.children.length - 220;
       for (let i = 0; i < extra; i++) this.box.firstChild.remove();
-      this.box.scrollTop = this.box.scrollHeight;
-      this.top = this.box.scrollTop;
+      this.toEnd();
     } else $('more').hidden = false;
   },
 
@@ -2822,7 +2836,7 @@ const Chat = {
       if (n.classList.contains('gone')) d.classList.add('gone');
       n.replaceWith(d);
     }
-    if (this.stick) { this.box.scrollTop = this.box.scrollHeight; this.top = this.box.scrollTop; }
+    if (this.stick) this.toEnd();
   },
 
   render(m) {
@@ -2857,7 +2871,7 @@ const Chat = {
     const action = text.startsWith('\x01ACTION ') && text.endsWith('\x01');
     if (action) { text = text.slice(8, -1); d.classList.add('me'); }
     const name = t['display-name'] || login;
-    const n = el('span', 'n', /^[\x20-\x7e]+$/.test(name) || !login ? name : `${name} (${login})`);
+    const n = el('span', 'n', plain(name) || !login ? name : `${name} (${login})`);
     n.style.color = nameColor(t.color, login || name);
     if (login) { this.names.delete(login); this.names.set(login, name); if (this.names.size > 500) this.names.delete(this.names.keys().next().value); }
     d.append(n, action ? ' ' : ': ');
@@ -3003,7 +3017,7 @@ const Chat = {
 
   close() {
     this.clocks(false); clearTimeout(this.sampleT); clearTimeout(this.napT); clearTimeout(this.againT);
-    if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+    this.hangUp();
     this.login = null; this.uid = null; this.queue = []; this.mine = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
     this.seen = new Set(); this.names = new Map(); this.said = []; this.sampled = false;
     this.badges = new Map(); this.emotes = new Map(this.global);
@@ -3025,7 +3039,7 @@ Chat.box.addEventListener('scroll', () => {
   // it: an iPhone turned on its side and back says where chat was a good while after the turn, which left it stopped with "New messages"
   // over it (Jerry, 2026-11-09: "you kind of have to drag the chat back down").
   else if (up && (Chat.held || Chat.grab || now - chatHand < 3000)) Chat.stick = false;
-  else if (up && Chat.stick) { b.scrollTop = b.scrollHeight; Chat.top = b.scrollTop; }
+  else if (up && Chat.stick) Chat.toEnd();
   Chat.rest();
 }, { passive: true });
 for (const ev of ['touchstart', 'touchend', 'touchcancel']) Chat.box.addEventListener(ev, e => { Chat.held = e.type === 'touchstart'; Chat.rest(); }, { passive: true });
@@ -3038,12 +3052,12 @@ $('more').onclick = () => Chat.follow();
 const Replay = {
   id: null, q: [], seen: new Set(), at: 0, cursor: null, last: -1, busy: false, done: false, dead: false, run: 0, wait: 0,
   open(id) { this.close(); this.id = id; },
-  close() { this.run++; this.id = null; this.q = []; this.seen = new Set(); this.cursor = null; this.last = -1; this.busy = this.done = this.dead = false; this.wait = 0; },
+  reset() { this.run++; this.q = []; this.seen = new Set(); this.cursor = null; this.busy = this.done = false; this.wait = 0; },   // what a seek and closing both drop
+  close() { this.reset(); this.id = null; this.last = -1; this.dead = false; },
   tick(t) {
     if (!this.id || this.dead) return;
     if (this.last < 0 || t < this.last - 2 || t > this.last + 8) {   // just started, or a seek
-      this.run++; this.busy = false; this.wait = 0;
-      this.q = []; this.seen = new Set(); this.at = Math.floor(t); this.cursor = null; this.done = false;
+      this.reset(); this.at = Math.floor(t);
       Chat.clear();
     }
     this.last = t;
@@ -3138,7 +3152,7 @@ const Me = {
       if (there?.token && there.token !== a.token) return this.save(there);
       this.log({ refused: Date.now() });
       if (this.doubt && Date.now() - this.doubt > 5 * 60e3) this.doubt = 0;
-      if (!this.doubt) { this.doubt = Date.now(); setTimeout(() => this.check(), 60e3); }   // once can be a hiccup at Twitch
+      if (!this.doubt) { this.doubt = Date.now(); again(); }   // once can be a hiccup at Twitch
       else if (Date.now() - this.doubt > 50e3) this.lost();
     } else again();
   },
@@ -3281,7 +3295,8 @@ const Me = {
       : { query: 'mutation($i: UnfollowUserInput!) { unfollowUser(input: $i) { follow { user { id } } } }', variables: { i: { targetID: u.id } } });
     const did = on ? j?.data?.followUser : j?.data?.unfollowUser;
     if (!did || did.error) throw new Error(j?.errors?.[0]?.message || did?.error?.code || j?.message || 'no answer');
-    this.follows = on ? [u.login, ...(this.follows || FOLLOWS).filter(x => x !== u.login)] : (this.follows || FOLLOWS).filter(x => x !== u.login);
+    const rest = (this.follows || FOLLOWS).filter(x => x !== u.login);
+    this.follows = on ? [u.login, ...rest] : rest;
     store.set('follows', this.follows);
     Home.at = 0;
   },
@@ -3331,14 +3346,9 @@ const SignIn = {
     body.append(el('h3', null, 'Sign in with Twitch'));
     const f = this.flow;
     if (!f) return body.append(el('p', 'sgn', 'Asking Twitch for a code…'));
-    if (f.error) {
-      body.append(el('p', 'sgn', `Couldn’t start: ${f.error}`));
-      const b = el('button', 'btn pri wide', 'Try again'); b.type = 'button'; b.onclick = () => this.start(); body.append(b);
-      return;
-    }
-    if (f.over) {
-      body.append(el('p', 'sgn', 'That code ran out.'));
-      const b = el('button', 'btn pri wide', 'Get a new code'); b.type = 'button'; b.onclick = () => this.start(); body.append(b);
+    if (f.error || f.over) {
+      body.append(el('p', 'sgn', f.error ? `Couldn’t start: ${f.error}` : 'That code ran out.'));
+      const b = el('button', 'btn pri wide', f.error ? 'Try again' : 'Get a new code'); b.type = 'button'; b.onclick = () => this.start(); body.append(b);
       return;
     }
     const code = el('button', 'code', f.code); code.type = 'button'; code.setAttribute('aria-label', 'Copy the code');
@@ -3396,7 +3406,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && Si
 // The API says outright whether a message went out and why not, so it goes first. If it turns this
 // client away, chat's own socket does the job: a second connection used only for sending, while the
 // messages you read (your own included) keep coming through the anonymous one.
-const atName = (login, name) => '@' + (/^[\x20-\x7e]+$/.test(name) ? name : login);   // Twitch only links a mention by a name in plain letters
+const atName = (login, name) => '@' + (plain(name) ? name : login);   // Twitch only links a mention by a name in plain letters
 const Talk = {
   busy: false, tx: $('sayTx'), go: $('sayGo'), reply: null, draftFor: null,
   irc: null, ircOk: false, ircRx: 0, ircQ: [], ircWait: null, useIrc: false,
@@ -3441,7 +3451,7 @@ const Talk = {
     else for (const e of [...Chat.popular(), ...Me.emotes.filter(e => e.sub), ...Chat.chanEmotes, ...Me.emotes, ...Chat.globalEmotes]) if (e.name.toLowerCase().startsWith(low) && !unwanted(e.name) && !hits.some(h => h.word === e.name)) hits.push({ word: e.name, url: e.url });
     for (const x of hits.slice(0, 16)) {
       const b = el('button'); b.type = 'button'; b.dataset.w = x.word;
-      if (x.url) { const i = pic(x.url, 'em'); i.alt = ''; b.append(i); }
+      if (x.url) { b.append(pic(x.url, 'em')); }
       b.append(x.word);
       box.append(b);
     }
@@ -3688,6 +3698,7 @@ $('vods').addEventListener('click', e => {
 const About = {
   login: null, loaded: null,
   channel(login) { this.login = login; this.loaded = null; $('about').textContent = ''; if (!$('paneAbout').hidden) this.load(); },
+  nextLine(u) { const n = u?.channel?.schedule?.nextSegment; return n ? `Next stream: ${when(n.startAt)}${n.title ? ' · ' + n.title : ''}` : ''; },   // '' with none scheduled
   fetch(login) {
     return gql('query($l: String!) { user(login: $l) { description createdAt followers { totalCount } roles { isPartner } lastBroadcast { startedAt title } channel { socialMedias { name title url } schedule { nextSegment { startAt title } } } } }', { l: login }).then(d => d.user);
   },
@@ -3704,8 +3715,8 @@ const About = {
       const facts = [u?.followers && `${count(u.followers.totalCount)} followers`, u?.roles?.isPartner && 'Partner', u?.createdAt && `since ${new Date(u.createdAt).getFullYear()}`];
       box.append(el('div', 'facts', facts.filter(Boolean).join(' · ')));
       if (u?.description) box.append(el('p', 'desc', u.description));
-      const next = u?.channel?.schedule?.nextSegment;
-      if (next) box.append(el('p', 'desc', `Next stream: ${when(next.startAt)}${next.title ? ' · ' + next.title : ''}`));
+      const next = this.nextLine(u);
+      if (next) box.append(el('p', 'desc', next));
       if (u?.lastBroadcast?.startedAt) box.append(el('p', 'desc dim', `Last went live ${ago(u.lastBroadcast.startedAt)}${u.lastBroadcast.title ? ': ' + u.lastBroadcast.title : ''}`));
       const socials = u?.channel?.socialMedias || [];
       if (socials.length) {
@@ -3805,13 +3816,12 @@ const UI = {
     if (!$('watch').hidden) this.owner();
   },
   offline(u, ended) {
-    this.spin(false);
     UI.msg(u.profileImageURL, ended ? `${u.displayName}’s stream ended` : `${u.displayName} is offline`, 'Starts by itself if they go live.');
     $('watch').classList.add('idle');
     const gen = P.gen;
     About.fetch(u.login).then(x => {
-      const next = x?.channel?.schedule?.nextSegment;
-      if (next && gen === P.gen && !$('msgbox').hidden) $('msgbox').append(el('div', 'nx', `Next stream: ${when(next.startAt)}${next.title ? ' · ' + next.title : ''}`));
+      const next = About.nextLine(x);
+      if (next && gen === P.gen && !$('msgbox').hidden) $('msgbox').append(el('div', 'nx', next));
     }).catch(() => {});
     Tabs.show('vods');
   },
@@ -3851,7 +3861,7 @@ const UI = {
   // fills the page. The status bar stays, and on an iPhone Duo so does iOS's strip.
   fill(on) {
     if (on !== $('watch').classList.contains('full')) Away.add(on ? 'fullscreen in the page' : 'fullscreen in the page closed');
-    $('watch').classList.toggle('full', on); setIcon($('bFull'), on || document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full');
+    $('watch').classList.toggle('full', on); setIcon($('bFull'), on || pageFull() ? 'unfull' : 'full');
   },
   playIcon() { const v = P.active(); setIcon($('bPlay'), v && !v.paused ? 'pause' : 'play'); },
   feed() {
@@ -3947,7 +3957,7 @@ $('bChat').onclick = $('bChat2').onclick = () => { Tabs.show('chat'); store.set(
 $('bLat').onclick = $('bSet').onclick = () => Sheet.open();
 $('bFull').onclick = () => {
   if ($('watch').classList.contains('full')) return UI.fill(false);
-  if (document.fullscreenElement || document.webkitFullscreenElement) return (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  if (pageFull()) return leavePageFull();
   const v = P.active();
   if (!v) return;   // no picture yet
   if (stage.requestFullscreen) stage.requestFullscreen().catch(() => UI.fill(true));
@@ -3959,7 +3969,7 @@ $('bFull').onclick = () => {
   // itself only when iOS's player won't take the video.
   else { try { v.webkitEnterFullscreen(); } catch { UI.fill(true); } }
 };
-for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => setIcon($('bFull'), document.fullscreenElement || document.webkitFullscreenElement ? 'unfull' : 'full'));
+for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => setIcon($('bFull'), pageFull() ? 'unfull' : 'full'));
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && !$('sheet').hidden) return Sheet.close();
   if ($('watch').hidden || e.target.closest('input') || e.metaKey || e.ctrlKey) return;
@@ -3974,7 +3984,7 @@ const Sheet = {
   fn: null,
   show(fn) {
     // a computer's fullscreen is the picture alone, and the sheet isn't in it: it would open unseen under it, and hold the controls up
-    if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    if (pageFull()) leavePageFull();
     this.fn = fn;
     this.render();
     $('sheet').hidden = false;
@@ -4045,7 +4055,7 @@ const Sheet = {
       return;
     }
     const name = me.name || me.login;
-    const facts = [`${(Me.follows || FOLLOWS).length} follows`, `${Me.blocks.size} blocked`, `${Me.emotes.filter(e => e.sub).length} sub emotes`].join(' · ');
+    const facts = [`${Home.roster().length} follows`, `${Me.blocks.size} blocked`, `${Me.emotes.filter(e => e.sub).length} sub emotes`].join(' · ');
     this.group(body, 'Account', [{ label: `Sign out ${name}`, desc: facts, pick: () => this.show(b => this.group(b, `Sign out ${name}?`, [
       { label: 'Sign out', pick: () => { this.close(); Me.signOut(); } },
       { label: 'Stay signed in', pick: () => this.close() },
@@ -4128,7 +4138,7 @@ function streamRow(x) {
   const a = el('a', 'row');
   a.href = `?c=${x.login}`;
   const th = el('div', 'thumb');
-  th.append(thumb(x.login, x.thumb), el('span', 'tag', !x.type || x.type === 'live' ? 'LIVE' : String(x.type).toUpperCase()), el('span', 'vc', count(x.viewers)));
+  th.append(thumb(x.login, x.thumb), el('span', 'tag', String(x.type || 'live').toUpperCase()), el('span', 'vc', count(x.viewers)));
   if (x.since) th.append(el('span', 'vc r', uptime(x.since)));
   const meta = el('div', 'meta'), who = el('div', 'who');
   who.append(pic(x.avatar, 'av'), el('span', 'nm', x.name));
@@ -4231,6 +4241,7 @@ const STREAM = 'viewersCount type createdAt title previewImageURL(width: 440, he
 const Browse = {
   game: null, cursor: null, end: false, busy: false, at: 0, key: null, run: 0, listed: new Set(),
   lang() { return store.get('lang', 'English'); },
+  rewatch() { this.near.unobserve($('brEnd')); this.near.observe($('brEnd')); },   // watched afresh, the end of the list says again whether it's in view
   async load(force) {
     const key = `${this.game || ''}|${this.lang()}`, deep = $('brList').children.length > 30;
     // A list you've scrolled down stays as it is for a good while: reloading keeps only its first page.
@@ -4284,11 +4295,11 @@ const Browse = {
     } catch (e) {
       if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
       // a later page that failed gets another go in a while, if the end of the list is still in reach then
-      else if (run === this.run) setTimeout(() => { if (run === this.run && !this.end) { this.near.unobserve($('brEnd')); this.near.observe($('brEnd')); } }, 15e3);
+      else if (run === this.run) setTimeout(() => { if (run === this.run && !this.end) this.rewatch(); }, 15e3);
     } finally { if (run === this.run) this.busy = false; }
     // The observer below only calls when the end of the list comes into reach or goes out of it. With it still in reach after this page (a
     // tall window, few rows, a scroll landing as they went in), it would never call again: watching afresh has it say how things stand.
-    if (loaded && run === this.run) { this.near.unobserve($('brEnd')); this.near.observe($('brEnd')); }
+    if (loaded && run === this.run) this.rewatch();
   },
 };
 Browse.near = new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' });
@@ -4303,10 +4314,10 @@ const Search = {
   mine(low) { return Home.users.filter(u => u.login.includes(low) || u.displayName?.toLowerCase().includes(low)); },
   input() {
     const term = $('q').value.trim();
+    if (term.length < 2 || /[/.]/.test(term)) return this.hide();
     clearTimeout(this.timer);
     this.n++;   // the answer on its way is for what was typed before
     this.answered = null;
-    if (term.length < 2 || /[/.]/.test(term)) return this.hide();
     this.draw(this.mine(term.toLowerCase()).slice(0, 6), []);
     this.timer = setTimeout(() => this.run(term), 150);
   },
