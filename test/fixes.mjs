@@ -1627,6 +1627,25 @@ if (want('vod')) {
 }
 
 if (want('cdn')) {
+  // The CDN's feed running dry by itself aims further back, for that stream (2026-11-12): a wait the page's own move caused doesn't count.
+  {
+    const { page, done } = await stage(never, { pick: true, copy: () => true, since: ago(300) });
+    await page.waitForFunction(() => wraith.P.feed === 'cdn' && wraith.P.started && wraith.P.active().currentTime >= 3 && !wraith.P.active().seeking && !wraith.P.seekPending, null, { timeout: 25000 }).catch(never);
+    const wait = (set = {}) => page.evaluate(s => { Object.assign(wraith.P, { sought: 0, cdnDry: 0 }, s); document.getElementById('vCDN').dispatchEvent(new Event('waiting')); return wraith.P.cdnT; }, set);
+    const t0 = await page.evaluate(() => wraith.P.cdnT);
+    ok('a wait the page’s own move of the CDN’s feed caused leaves its target alone', t0 === 16 && await wait({ sought: Date.now() }) === 16, String(t0));
+    const first = await wait(), errs = await page.evaluate(() => wraith.P.errs);
+    ok('running dry by itself, it aims 4 s further back, and the details say so', first === 20 && errs['cdn ran dry'] === 1, `${first} ${JSON.stringify(errs)}`);
+    ok('a second wait straight after is the same one', await wait({ cdnDry: Date.now() }) === 20);
+    for (let i = 0; i < 6; i++) await wait();
+    const top = await page.evaluate(() => wraith.P.cdnT);
+    await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
+    const line = await page.evaluate(() => (document.querySelector('#sheetBody .stats')?.innerText || '').split('\n').find(l => l.startsWith('Behind live')) || '');
+    ok('up to 32 s and no further, shown beside how far behind it is', top === 32 && /aiming for 32 s/.test(line), `${top} ${line}`);
+    await page.evaluate(() => wraith.P.close());
+    ok('and the next stream starts from 16 again', await page.evaluate(() => wraith.P.cdnT) === 16);
+    await done();
+  }
   const onCdn = page => page.waitForFunction(() => { const v = wraith.P.active(); return wraith.P.feed === 'cdn' && !v.paused && v.readyState >= 3 && v.currentTime > 0; }, null, { timeout: 25000 }).catch(never);
   // what the copy has, staged on the real element: a playlist's end `by` seconds past the picture, and so much of it loaded
   const fake = (page, by, ahead) => page.evaluate(([by, ahead]) => { const v = wraith.P.active(); window.__ahead = ahead; Object.defineProperty(v, 'seekable', { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => v.currentTime + by }) }); Object.defineProperty(v, 'buffered', { configurable: true, get: () => ({ length: 1, start: () => 0, end: () => v.currentTime + window.__ahead }) }); }, [by, ahead]);
@@ -3699,9 +3718,15 @@ if (want('return')) {
       const tap = () => page.evaluate(() => document.body.dispatchEvent(new MouseEvent('click', { bubbles: true })));
       await going();
       await fromOutside(); await sleep(200);
-      ok('a pause from outside the page is told from one of yours', (await state()).taken);
-      await page.evaluate(() => wraith.P.play(wraith.P.active())); await sleep(700);
       let s = await state();
+      ok('a pause from outside the page is told from one of yours, and the big button says the picture has stopped', s.taken && s.big, JSON.stringify(s));
+      await tap(); await going();
+      await page.waitForFunction(() => document.getElementById('bigPlay').hidden, null, { timeout: 3000 }).catch(never);
+      s = await state();
+      ok('and a tap anywhere plays it, with nothing having tried to start it since', !s.paused && !s.taken && !s.big, JSON.stringify(s));
+      await fromOutside(); await sleep(200);
+      await page.evaluate(() => wraith.P.play(wraith.P.active())); await sleep(700);
+      s = await state();
       ok('and the page doesn’t start it again by itself: it waits, with the big button', s.paused && s.big, JSON.stringify(s));
       await tap(); await going();
       await page.waitForFunction(() => document.getElementById('bigPlay').hidden, null, { timeout: 3000 }).catch(never);

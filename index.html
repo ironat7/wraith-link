@@ -632,7 +632,7 @@ const FOLLOWS = ('forsen redify kaise meltymim menmakiii powdur ruiasaka jellyho
   + 'kirsche fallenshadow asmongold sakae_izumi senzawa ikumi jinnytty nintendo nasa').split(' ');
 // Seconds behind the broadcast each feed holds. Live backs off from 2 s when the connection
 // stalls and creeps back down once it has been smooth for a while.
-const TARGET = { live: 2, liveMax: 5, cdn: 16 };
+const TARGET = { live: 2, liveMax: 5, cdn: 16, cdnMax: 32 };
 
 const $ = id => document.getElementById(id);
 const store = {
@@ -1061,6 +1061,7 @@ const nothingOpen = () => ({
   dodged: new Set(), dodging: false, // kinds of session already tried on this ad break
   cap: 0, capWait: 180e3, lastStall: 0, stalls: [],   // renditions below the pick that buffering has forced, for this stream only
   rate: 'normal', liveT: TARGET.live, calm: Date.now(),   // speed; current live target, and since when playback has been smooth
+  cdnT: TARGET.cdn, cdnDry: 0, sought: 0,   // the CDN feed's target for this stream, when it last ran dry, and when the page last moved it
   retries: 0, fixes: 0, began: 0,    // restarts and media recoveries in a row with nothing to show; when the live player last started
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
   pos: -1, moved: 0, gone: 0,        // where the picture last was and when; how many refreshes in a row said offline
@@ -1471,11 +1472,11 @@ const P = {
   cdnSeek() {
     if (!vC.seekable.length) return;
     const to = this.cdnSpot(vC);
-    if (to !== null && (this.seekPending || to > vC.currentTime + 3)) vC.currentTime = to;
+    if (to !== null && (this.seekPending || to > vC.currentTime + 3)) { vC.currentTime = to; this.sought = Date.now(); }
     this.seekPending = false;
   },
   cdnSpot(m) {   // for the picture's copy or the sound's, which run on the same clock
-    const s = m.seekable, end = s.length ? s.end(s.length - 1) : NaN, want = Date.now() / 1000 - this.start - TARGET.cdn;
+    const s = m.seekable, end = s.length ? s.end(s.length - 1) : NaN, want = Date.now() / 1000 - this.start - this.cdnT;
     return Number.isFinite(end) ? Math.max(s.start(0), Number.isFinite(want) ? Math.min(want, end - 3) : end - 3) : null;
   },
 
@@ -1591,7 +1592,7 @@ const P = {
       for (let i = 0; i < b.length; i++) if (b.start(i) > v.currentTime + 0.1) { v.currentTime = b.start(i) + 0.05; break; }
       return;
     }
-    const lat = this.latency(), live = this.feed === 'live', T = live ? this.liveT : TARGET.cdn;
+    const lat = this.latency(), live = this.feed === 'live', T = live ? this.liveT : this.cdnT;
     if (lat == null) return;
     if (lat > T + 10) {
       if (live) return this.toLiveEdge();
@@ -1655,6 +1656,19 @@ const P = {
     if (s === 'slow') return ahead > 3 ? 'normal' : s;
     if (ahead > 13 && lat > T + 1.2) return 'fast';
     return s === 'fast' && (ahead < 11 || lat < T + 0.3) ? 'normal' : s;
+  },
+
+  // The CDN's copy grows 10 s at a time, and iOS's player looks for more when it chooses. Both streams looked at on 2026-11-12 had a new
+  // segment every 10.0 s, the copy's end 4.5 s behind the clock just after one and 14.5 s just before the next: at 16 s behind that's 1.5 s
+  // in hand at most, less however long the player takes to hear of the segment and load it. Aimed there regardless, it ran dry, fell
+  // behind, was sped up or moved on to the end again, and ran dry again (Jerry, that day: "The CDN is also pretty buggy"). So each time
+  // it runs dry by itself it aims 4 s further back, for as long as this stream's open. A wait the page's own move caused doesn't count.
+  noteDry() {
+    const now = Date.now();
+    if (this.feed !== 'cdn' || !this.started || vC.seeking || this.seekPending || vC.currentTime < 3 || now - this.sought < 8000 || now - this.cdnDry < 8000) return;
+    this.cdnDry = now;
+    this.cdnT = Math.min(TARGET.cdnMax, this.cdnT + 4);
+    this.noteErr({ details: 'cdn ran dry' });
   },
 
   noteErr(d, where = '') {   // routine stall notices, the page's own aborts and cut-out ads left out
@@ -2343,7 +2357,7 @@ for (const v of [vL, vC]) {
       if (!v.paused) P.userPaused = false;   // only you can have started a paused picture, with iOS's own controls
       if (P.feed === 'cdn') P.asks = 0;
       P.ranAt = Date.now();
-      P.taken = false;
+      P.taken = P.waitsForYou = false;
       UI.spin(false); UI.big(false);
     }
     UI.playIcon(); Awake.sync();
@@ -2357,6 +2371,10 @@ for (const v of [vL, vC]) {
     else if (v === P.active() && v.paused && !v.ended && !v.error && v.readyState >= 2 && !P.userPaused && !BG.on && !document.hidden && Date.now() - Pages.touchedAt > 1500) {
       P.taken = true;
       Away.add(`stopped from outside${v.inFull || v.webkitDisplayingFullscreen ? ', in fullscreen' : ''}`);
+      // Nothing on the page said so, and a tap only brought the controls up: a still picture with you watching, which reads as frozen (the
+      // phone's own record, 2026-11-12 17:18: stopped from outside on the CDN's feed, a tap ten seconds on, still stopped, then the app quit).
+      // So it gets the play button, and the next tap anywhere plays it, as for any start that's waiting for you.
+      P.waitsForYou = true; UI.big(true);
     }
   });
   // iOS's fullscreen player pauses the video as you close it, some time around telling the page it closed,
@@ -2373,6 +2391,7 @@ for (const v of [vL, vC]) {
     if (P.active() !== v) return;
     UI.spin(true);
     if (v === vL && v.currentTime > 3) P.noteStall();
+    if (v === vC) P.noteDry();
   });
 }
 vL.addEventListener('play', () => P.resume());
@@ -2467,14 +2486,14 @@ const Auto = {
     const full = v.inFull || v.webkitDisplayingFullscreen;
     store.set('beat', [Pages.id, now, `${P.feed} ${v.paused ? (P.userPaused ? 'paused by you' : P.taken ? 'stopped from outside' : 'paused') : P.stuck() ? 'not moving' : 'going'}`
       + `${full ? ` in fullscreen${this.took === v ? ' by itself' : ''}` : $('watch').classList.contains('full') ? ' filling the page' : ''}${document.hidden ? ', hidden' : ''}`
-      + `${Awake.lock ? '' : ', no screen lock'}, ${innerWidth}×${innerHeight}, touched ${Math.round((now - Pages.touchedAt) / 1e3)} s before`]);
+      + `${Awake.lock ? '' : ', no screen lock'}, ${P.latency() == null ? '' : `${P.latency().toFixed(0)} s behind, `}${bufAhead(v).toFixed(1)} s loaded, ${innerWidth}×${innerHeight}, touched ${Math.round((now - Pages.touchedAt) / 1e3)} s before`]);
   },
   learn(now = Date.now(), log = store.get('away', []), beat = store.get('beat', null)) {
     if (!beat || beat[0] === Pages.id || now - beat[1] > 180e3 || now < beat[1]) return null;
     const lines = log.filter(l => l.split(' ')[1] === beat[0]).map(l => l.replace(` ${beat[0]} `, ' ')), whats = lines.map(l => l.slice(9));
     const at = whats.lastIndexOf('fullscreen by itself');
     const ended = / by itself/.test(beat[2]) && !/hidden/.test(beat[2]) && at >= 0 && !whats.slice(at + 1).some(w => /^(fullscreen closed|left|fullscreen by itself turned off)/.test(w));
-    const was = `was ${beat[2]}, ${Math.round((now - beat[1]) / 1e3)} s before | ${lines.slice(-4).join(' | ')}`.slice(0, 240);
+    const was = `was ${beat[2]}, ${Math.round((now - beat[1]) / 1e3)} s before | ${lines.slice(-6).join(' | ')}`.slice(0, 400);
     store.set('beat', null);
     if (ended && this.on) this.off(`the app was quit from it at ${new Date(beat[1]).toTimeString().slice(0, 5)}`);
     if (Pages.seated) fetch(`${RELAY}?ping=1&pg=${Pages.id}&b=${BUILD}&k=${encodeURIComponent(was)}`, { cache: 'no-store' }).catch(() => {});
@@ -3989,7 +4008,7 @@ const Sheet = {
     if (!past) this.group(body, 'Feed', [
       { label: 'Low latency', desc: `About ${TARGET.live} s behind. Ads are cut out${cdnLive ? '; during a break you watch the ad-free feed' : ''}.`,
         on: P.pref === 'live', disabled: P.subOnly, pick: () => P.setPref('live') },
-      { label: 'Ad-free CDN', desc: `About ${TARGET.cdn} s behind. Never has ads and plays sub-only streams${cdnLive ? '' : ' (Safari only)'}.`,
+      { label: 'Ad-free CDN', desc: `About ${TARGET.cdn} s behind, more if it has to wait for the CDN. Never has ads and plays sub-only streams${cdnLive ? '' : ' (Safari only)'}.`,
         on: P.pref === 'cdn', disabled: !cdnLive, pick: () => P.setPref('cdn') },
     ]);
     // where your pick lands on this stream, which may not have it. With no low-latency player to say what there is (the CDN's feed from
@@ -4047,7 +4066,7 @@ const Sheet = {
     const v = P.active(), l = P.latency(), lines = [];
     const lvl = P.hls?.levels?.[P.hls.currentLevel];
     lines.push(`Playing: ${P.cover ? 'ad-free feed (ad break)' : { live: 'low-latency feed', cdn: 'CDN feed', vod: 'past broadcast' }[P.feed]}`);
-    if (l != null) lines.push(`Behind live: ${l.toFixed(1)} s${P.feed === 'live' ? ` (aiming for ${P.liveT} s)` : ''}`);
+    if (l != null) lines.push(`Behind live: ${l.toFixed(1)} s${P.feed === 'live' ? ` (aiming for ${P.liveT} s)` : P.feed === 'cdn' ? ` (aiming for ${P.cdnT} s)` : ''}`);
     if (v && v.videoHeight) lines.push(`Picture: ${v.videoWidth}×${v.videoHeight}${lvl ? ` · ${(lvl.bitrate / 1e6).toFixed(1)} Mbps · ${lvl.details?.fragments?.[0]?.initSegment ? 'fMP4' : 'TS'}` : ''}${v.playbackRate !== 1 ? ` · speed ${v.playbackRate}×` : ''}`);
     if (v) lines.push(...this.look(v));
     if (P.cap) lines.push(`Held ${P.cap} step${P.cap > 1 ? 's' : ''} below your pick after buffering`);

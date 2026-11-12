@@ -4,3 +4,4 @@ test/*.png
 test/*.json
 !test/package.json
 test/package-lock.json
+/fixes-*.png
