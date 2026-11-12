@@ -349,14 +349,10 @@ video.decoy { position: fixed; left: 0; top: 0; width: 420px; height: 315px; z-i
 }
 /* The closed screen's island is around its camera, which stays where it is as you turn the phone. With the strip on the left it's at
    the top of the strip, to 134 with Now Playing in it and well short of 96 without (Jerry, 2026-11-05: "this orientation no longer has
-   pill either"): the controls run down the rest of the strip in a column, in line with it, as on the open screen. Where Now Playing can
-   show (the pill setting on Shown), the shorter room below it takes the same controls in pairs. With the strip on the right it's at the
+   pill either"): the controls run down the rest of the strip in a column, in line with it, as on the open screen. With the strip on the right it's at the
    foot, level with the strip along the bottom, which stops short of it, and the controls have the top to themselves. */
 @media (orientation: landscape) and (min-width: 560px) and (max-aspect-ratio: 1599/1000) and (max-height: 599px) {
-  html[data-strip=left] #watch:not(.kb, .full, .pillshown) .hud .bar:last-child { top: 96px; }
-  html[data-strip=left] #watch.pillshown:not(.kb, .full) .hud .bar:last-child { flex-flow: row wrap; align-content: space-evenly; justify-content: center; width: 84px; }
-  html[data-strip=left] #watch.pillshown:not(.kb, .full) .hud .cb { width: 40px; }
-  html[data-strip=left] #watch.pillshown:not(.kb, .full) .lat { flex-basis: 100%; justify-content: center; }
+  html[data-strip=left] #watch:not(.kb, .full) .hud .bar:last-child { top: 96px; }
   html[data-strip=right] #watch:not(.kb, .full) .hud .bar:last-child { top: 0; width: 84px; }
   html[data-strip=right] #watch:not(.kb, .idle) .side { margin-right: var(--sar); }
   html[data-strip=right] #watch:not(.kb, .idle) .info, html[data-strip=right] #watch:not(.kb, .idle) .tabs { right: var(--sar); }
@@ -440,13 +436,13 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
   #watch.kb:not(.idle):has(#epq:focus) .side { flex-basis: 193px; }
 }
 /* A closed Duo upright has iOS's island, clock and Wi-Fi down the right and nothing across the top: to 161 (Jerry's screenshot,
-   2026-11-05), or to 228 with Now Playing in there, which shows for a past video or with the pill setting on Shown. So the picture
+   2026-11-05), or to 228 with Now Playing in there, which shows for a past video. So the picture
    starts just below them, the width of the screen; the channel's row goes beside them, above it; and chat runs from under the picture
    down to its box (Jerry, 2026-11-05: "you can move the video up ... find an elegant solution for the chat"). A sheet stops short of
    them too. Only what doesn't hold the video gets rearranged: changing how a playing video's parents display makes iOS rebuild its layer. */
 @media (orientation: portrait) {
   html[data-strip] #watch:not(.full, .idle) { --top: 170px; background: var(--bg); }
-  html[data-strip] #watch:not(.full, .idle):is(.vodw, .pillshown) { --top: 232px; }
+  html[data-strip] #watch.vodw:not(.full, .idle) { --top: 232px; }
   html[data-strip] #watch:not(.full, .idle) :is(.side, #paneChat) { display: contents; }
   html[data-strip] #watch:not(.full, .idle) .main { order: 1; }
   html[data-strip] #watch:not(.full, .idle) .tabs { order: 2; }
@@ -468,7 +464,7 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
   html[data-strip] #watch.kb:not(.full, .idle):has(#epq:focus) .ep { flex: 1 0 136px; }
   html[data-strip] #watch.kb:not(.full, .idle) .stage { width: calc(100% - var(--sal) - var(--sar)); margin-left: var(--sal); }
   html[data-strip] .panel { max-height: calc(100dvh - 174px); }
-  html[data-strip]:has(#watch:not([hidden]):is(.vodw, .pillshown)) .panel { max-height: calc(100dvh - 236px); }
+  html[data-strip]:has(#watch.vodw:not([hidden])) .panel { max-height: calc(100dvh - 236px); }
 }
 
 /* ── settings sheet ───────────────────────────────── */
@@ -1042,7 +1038,7 @@ aBG.disableRemotePlayback = true;
 // Inside a tap, start-and-stop every player: Safari then lets any of them start with sound later
 // (an ad break or leaving the app switches players with no tap to hang it on).
 function unlock() {
-  if (Pill.on && ios && !Pill.decoy) Pill.make();   // its stand-in made inside a tap, and ready by the time a picture plays
+  if (ios && !Pill.decoy) Pill.make();   // its stand-in made inside a tap, and ready by the time a picture plays
   for (const v of [vL, vC, aBG]) {
     const was = v.paused;
     const p = v.play(); if (p) p.catch(() => {});
@@ -1712,14 +1708,6 @@ const P = {
     }
   },
 
-  // By hand, for a picture that's gone with the sound still going, which nothing here can always see.
-  reload() {
-    Away.add('reload asked for');
-    this.retries = this.fixes = 0;
-    if (this.feed === 'live') this.playLive();
-    else if (this.feed === 'cdn') this.playCdn({ cover: this.cover, reload: true });
-  },
-
   async refresh() {
     // Out of sight with no sound, going or paused from the lock screen (whose play has to find the stream as it is now), or with nobody
     // about (Pages.idle), nobody's waiting on what Twitch would say: coming back asks
@@ -2158,12 +2146,12 @@ const Remote = {
 // one in view and large, a box of at least 400×300 CSS px before transforms. So in front, with a picture: a silent stand-in that never plays,
 // large and behind everything; the picture laid out small and scaled up to fill (a fullscreen one too: it keeps its box); and no details or
 // buttons. As the app leaves it all goes back, before the sound starts, so the lock screen and Control Center work as ever. While Wraith is
-// in front, Control Center's and AirPods' buttons don't reach it. Unproven on the phone: the sheet can turn it off.
+// in front, Control Center's and AirPods' buttons don't reach it. The sheet could let the pill show until 2026-11-12 (Jerry: "Remove the
+// now playing pill and Reload the picture options. Just make it cleaner"); it's hidden for everyone now.
 const Pill = {
-  on: store.get('noPill', true), decoy: null, hiding: false,
-  set(on) { this.on = on; store.set('noPill', on); this.sync(); },
+  decoy: null, hiding: false,
   sync() {
-    const hide = this.on && ios && !document.hidden && !$('watch').hidden && (P.feed === 'live' || P.feed === 'cdn');
+    const hide = ios && !document.hidden && !$('watch').hidden && (P.feed === 'live' || P.feed === 'cdn');
     if (hide && !this.decoy) this.make();
     if (hide) {
       const r = stage.getBoundingClientRect();
@@ -2173,7 +2161,6 @@ const Pill = {
       Remote.off();
     } else { if (this.decoy) { this.decoy.muted = true; this.decoy.remove(); } Remote.on(); }
     stage.classList.toggle('pillfree', hide);
-    $('watch').classList.toggle('pillshown', ios && !this.on);   // it has room kept for it beside the picture (see the Duo's strip)
     if (hide !== this.hiding) Away.add(hide ? 'pill hidden' : 'pill back');
     this.hiding = hide;
   },
@@ -4014,11 +4001,6 @@ const Sheet = {
       { label: 'Source', desc: !cdnOnly && qs[0] ? qs[0].label.replace(' · source', '') : null, on: at === 0, pick: () => P.setQuality('source') },
       ...qs.slice(1).map((x, i) => ({ label: x.label, on: at === i + 1, pick: () => P.setQuality(x.id) })),
       ...(P.hls ? [{ label: 'Auto', desc: 'Lets the player drop quality on a weak connection.', on: P.q === 'auto', pick: () => P.setQuality('auto') }] : []),
-    ]);
-    if (live && !past) this.group(body, null, [{ label: 'Reload the picture', desc: 'If it’s gone black with the sound still going.', pick: () => { this.close(); P.reload(); } }]);
-    if (ios && !past) this.group(body, 'Now Playing pill', [
-      { label: 'Hidden while you watch', desc: 'Control Center and AirPods buttons reach Wraith once you leave it.', on: Pill.on, pick: () => { Pill.set(true); this.close(); } },
-      { label: 'Shown', on: !Pill.on, pick: () => { Pill.set(false); this.close(); } },
     ]);
     if (Auto.can) this.group(body, 'Fullscreen by itself', [
       { label: 'After 2 minutes of watching', desc: 'Open and on its side, with nothing touched.', on: Auto.on, pick: () => { Auto.set(true); this.close(); } },

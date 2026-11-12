@@ -2240,9 +2240,7 @@ if (want('screen')) {
       ok('until they’re shut again', !d.shown && d.open === 'false', JSON.stringify(d));
       await page.evaluate(() => { document.querySelector('.panel').scrollTop = 1e6; });
       await page.screenshot({ path: 'fixes-sheet.png', timeout: 8000 }).catch(() => {});
-      await page.evaluate(() => { window.__old = wraith.P.hls; [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.includes('Reload the picture')).click(); });
-      await page.waitForFunction(() => wraith.P.hls && wraith.P.hls !== window.__old, null, { timeout: 5000 }).catch(never);
-      ok('and reloading the picture by hand makes a new player and closes it', await page.evaluate(() => wraith.P.hls !== window.__old && document.getElementById('sheet').hidden));
+      ok('with nothing in it about the pill or reloading the picture', await page.evaluate(() => { const t = document.getElementById('sheetBody').textContent; return !/pill|Reload/i.test(t) && /Quality/.test(t); }), await page.evaluate(() => [...document.querySelectorAll('#sheetBody .opt')].map(b => b.textContent).join(' | ')));
       await done();
     })(),
     // the lock as WebKit grants it: within 5 s of a tap, or to a page it has already granted it to that way. It keeps its own clock of
@@ -2829,10 +2827,6 @@ if (want('duo')) {
       await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(200);
       const full = await rect(page, '#bFull');
       ok('the picture’s controls run to its edge', full.r >= 466 - 8, JSON.stringify(full));
-      await page.evaluate(() => wraith.Pill.set(false)); await sleep(200);
-      b = await box(page, '#stage', '.info');
-      ok('with Now Playing let back in, the picture keeps below it', b['#stage'].y >= 228 && Math.abs(b['.info'].b - b['#stage'].y) <= 1, JSON.stringify(b));
-      await page.evaluate(() => wraith.Pill.set(true)); await sleep(200);
       await page.evaluate(() => { document.getElementById('stage').classList.remove('ui'); document.getElementById('bChan').click(); }); await sleep(300);
       b = await box(page, '#paneVods', '#stage', '.tabs', '#bChanX', '#bFollow');
       const vodsPad = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById('vods')).paddingBottom));
@@ -2871,9 +2865,6 @@ if (want('duo')) {
       ok('and the controls in a column below it, in line with it', column.every((c, i) => c.seen && c.r <= 84 && Math.abs(c.x + c.w / 2 - 48) <= 2 && c.y >= (i ? column[i - 1].b : 90)) && column[4].b <= b['#stage'].b, JSON.stringify(column));
       ok('each one there to tap', await page.evaluate(() => ['bPlay', 'bMute', 'bLat', 'bSet', 'bFull'].every(id => { const n = document.getElementById(id), r = n.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('button') === n; })));
       await page.screenshot({ path: 'fixes-duo-closed-left.png', timeout: 8000 }).catch(() => {});
-      await page.evaluate(() => wraith.Pill.set(false)); await sleep(200);
-      b = await box(page, '#stage', '#bPlay', '#bFull');
-      ok('with Now Playing let back in, they keep below it, in pairs', b['#bPlay'].y >= 186 && b['#bFull'].b <= b['#stage'].b && b['#bFull'].r <= 84, JSON.stringify(b));
       await done();
     })(),
     // the channel row: its text gets the room there is, rather than being cut off under empty space
@@ -3592,9 +3583,6 @@ if (want('pill')) {
       ok('a paused picture is muted meanwhile, so WebKit has nothing to publish', (await look(page)).muted);
       await page.evaluate(() => document.getElementById('bPlay').click()); await sleep(500);
       ok('and playing again has its sound back', !(await look(page)).muted);
-      await page.evaluate(() => wraith.Pill.set(false)); await sleep(300);
-      s = await look(page);
-      ok('turned off in the sheet, everything is as it was', !s.free && !s.decoy && s.meta && s.play && s.fills, JSON.stringify(s));
       await done();
     })(),
   ]);
@@ -3973,8 +3961,6 @@ if (want('battery')) {
       ok('away, it’s muted, so it doesn’t count as a stream’s sound playing', !s.on && s.muted === true, JSON.stringify(s));
       await vis(page, false); await sleep(500);
       ok('back in front, it hides the pill again', (await look()).muted === false);
-      await page.evaluate(() => wraith.Pill.set(false)); await sleep(300);
-      ok('and with the pill turned on in the sheet, it’s muted too', (await look()).muted === true);
       await done();
     })(),
     (async () => {
