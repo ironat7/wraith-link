@@ -26,8 +26,11 @@ export async function serve(file = process.env.WRAITH_PAGE || fileURLToPath(new 
 
 // The relay has 20,000 fetches a day for everyone, the phone can use them all on a long day, and a day of test runs helped it to (2026-11-04).
 // So nothing here reaches it by accident. WRAITH_REAL_RELAY=1 is for a script that's there to measure the real thing.
+// WRAITH_PROXY=http://127.0.0.1:<port> sends Chrome's traffic through a proxy (a Nord exit by ~/bin/wireproxy) for the sections that reach Twitch,
+// as Jerry doesn't want automated work on his home IP. Chrome leaves 127.0.0.1, where the page is served, off the proxy by itself.
 export const launch = async (...args) => {
-  const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', ...args] });
+  const proxy = process.env.WRAITH_PROXY ? [`--proxy-server=${process.env.WRAITH_PROXY}`] : [];
+  const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required', '--mute-audio', ...proxy, ...args] });
   if (process.env.WRAITH_REAL_RELAY) return browser;
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...a) => { const c = await newContext(...a); await c.route(/script\.google/, route => route.abort().catch(() => {})); return c; };

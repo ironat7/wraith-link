@@ -696,6 +696,17 @@ function bufAhead(v) {
   for (let i = 0; i < b.length; i++) if (b.start(i) <= t + 0.25 && b.end(i) > t) return b.end(i) - t;
   return 0;
 }
+const holds = (v, t) => { const b = v.buffered; for (let i = 0; i < b.length; i++) if (b.start(i) <= t && b.end(i) > t + 0.3) return true; return false; };   // loaded there, with a little to play
+// Where a moment of a live stream (Twitch's stamp, in ms) falls on an hls.js player's clock: in the segment holding it, or reckoned on from
+// the newest one listed, as Twitch's segments run back to back. The picture and the sound are stamped alike, which is how one finds the other.
+function posAt(h, when) {
+  const fr = h?.latestLevelDetails?.fragments;
+  if (!fr?.length || !Number.isFinite(when)) return null;
+  let f = null;
+  for (const x of fr) if (x.programDateTime != null && x.programDateTime <= when) f = x;
+  f ||= fr.find(x => x.programDateTime != null);
+  return f ? f.start + (when - f.programDateTime) / 1000 : null;
+}
 
 // ── Twitch ──────────────────────────────────────────
 const gqlPost = (body, client, extra) => fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': client, 'Content-Type': 'application/json', 'X-Device-Id': DEVICE, ...extra }, body: JSON.stringify(body), signal: AbortSignal.timeout(15e3) });   // a request a dead connection holds would hold the start up for good
@@ -838,7 +849,7 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
   const out = [], prefetch = [];
   const shown = shownSegs.get(url) || new Map();
   shownSegs.set(url, shown);
-  let segDur = 2, tailAd = false, adEnd = 0, sn = 0, firstSn = -1;
+  let segDur = 2, tailAd = false, adEnd = 0, sn = 0, firstSn = -1, firstAt = 0;
   const seg = u => {
     const kept = shown.get(sn);
     if (!kept) shown.set(sn, u);
@@ -855,6 +866,7 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
       if (firstSn < shown.firstSn) shown.clear();   // the numbering started over: nothing kept still applies
       shown.firstSn = firstSn;
     }
+    if (!firstAt && line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) firstAt = Date.parse(line.slice(25));
     // Twitch declares 6 s for 2 s segments, and hls.js paces its playlist reloads on that number
     if (line.startsWith('#EXT-X-TARGETDURATION:')) { out.push('#EXT-X-TARGETDURATION:2'); continue; }
     if (line.startsWith('#EXT-X-DATERANGE') && /stitched-ad|X-TV-TWITCH-AD/.test(line)) {
@@ -872,6 +884,12 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
   if (!tailAd) for (const u of prefetch) out.push(`#EXTINF:${segDur.toFixed(3)},live`, seg(u));
   for (const k of shown.keys()) if (k < firstSn) shown.delete(k);
   if (!quiet) P.onAd(tailAd, adEnd);
+  // The sound's first list, as the app leaves: it starts at the moment the picture stopped, which hls.js takes from EXT-X-START.
+  if (quiet && BG.from) {
+    const off = (BG.from - firstAt) / 1000;
+    BG.from = 0;
+    if (firstAt && off >= 0 && off < (sn - firstSn) * segDur) out.splice(1, 0, `#EXT-X-START:TIME-OFFSET=${off.toFixed(3)},PRECISE=YES`);
+  }
   return out.join('\n') + '\n';
 }
 
@@ -1583,6 +1601,7 @@ const P = {
   // Chat shows up as late as the picture: Twitch viewers sit ~2.5 s behind, so delay by the rest. A picture
   // that's paused, or held through an ad break, has no pace to keep.
   chatDelay() {
+    if (BG.back) { const l = BG.lag(); return l == null ? 0 : Math.max(0, l - 2.5) * 1000; }   // what you hear is still the sound's
     const v = this.active();
     if (!v || this.feed === 'vod' || v.paused || (this.ad && !this.cover)) return 0;
     const l = this.latency();
@@ -1632,7 +1651,7 @@ const P = {
   // sound, nobody's waiting on it either (now).
   rest(now) {
     const h = this.hls;
-    if (!h?.loadingEnabled || !h.levels.length || !this.liveUp()) return;
+    if (!h?.loadingEnabled || !h.levels.length || !this.liveUp() || BG.back) return;   // held for the sound to reach it, it's loading on purpose
     if (BG.on) { h.stopLoad(); if (this.feed === 'live') this.dropBuffer(); }   // nobody's looking, and iOS may as well have the memory
     else if (this.feed === 'live' && (now || (!this.ad && performance.now() - Math.max(this.pausedAt, this.resumedAt) > this.restAfter))) h.stopLoad();
   },
@@ -1853,6 +1872,7 @@ const P = {
 // few minutes: a player starting over (the stream restarting, a start still under way as you left) brings it back, and its own retries keep
 // it going. A page iOS froze and woke up hours later, still thinking it was playing, stays quiet (2026-11-05).
 const KEEP = 5 * 60e3;
+const CUSHION = 5;   // seconds behind the stream the live sound keeps while away: room for iOS's slower timers there, and fewer calls on the relay
 const IDLE = 30 * 60e3;   // nobody has touched the screen or come back to the app for this long: likely nobody's there
 const LONG_IDLE = 4 * 3600e3, STRANDED = 2 * 3600e3;   // a picture with sound, untouched, pauses after this; a page with nothing going, untouched, closes after this (Pages.stranded)
 const BG = {
@@ -1863,6 +1883,7 @@ const BG = {
   wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back
   carry: false,  // you were hearing it as you left, and neither you nor iOS has stopped it since. It outlasts the player starting over
   heard: 0,      // when it was last heard going (or the picture, as you left)
+  from: 0,       // the moment the picture stopped, Twitch's stamp in ms: where the live sound starts (rewrite)
   may() { return document.hidden && this.carry && Date.now() - this.heard < KEEP; },
   going() { return this.on && this.wanted && this.carry && Date.now() - this.heard < KEEP; },
   // Quiet too long to come back by itself, as if iOS had stopped it: coming back to the app, or Control Center's play, brings it back.
@@ -1890,10 +1911,13 @@ const BG = {
     this.on = this.wanted = true; this.held = false;
     // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
     leaveNative(v);
-    aBG.muted = false;
+    aBG.muted = false; aBG.playbackRate = 1;
     if (P.feed === 'live') {
-      // it takes ~2.5 s to start, so it starts ~2.5 s further back: the sound resumes where the
-      // picture stopped, with more cushion for the slower timers of a backgrounded page
+      // It picks up at the moment the picture stopped (rewrite gives hls.js the spot), so nothing's heard twice or missed. That's as close to
+      // the stream's edge as the picture was, too close for a page whose timers iOS slows and for asking the relay as seldom as it does: it
+      // eases back to its cushion (pace). Where the picture has no moment to give (a start still on its way), hls.js starts 6.5 s back.
+      this.from = P.hls?.playingDate?.getTime() || 0;
+      this.easing = true;
       const h = this.hls = new window.Hls({ ...LOADING, pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12,
         backBufferLength: 10 });   // what's been heard isn't kept: hours away would fill memory iOS takes back by dropping the page
@@ -1975,7 +1999,106 @@ const BG = {
     const p = aBG.play(); if (p) p.catch(() => {});
     return true;
   },
+  // Away, a sound that picked up where the picture stopped eases back to its cushion, playing a little slower than the stream (unheard: the pitch
+  // is kept) until it's that far behind, and at speed from there.
+  easing: false,
+  pace() {
+    if (!this.easing) return;
+    const d = P.feed === 'live' ? this.hls?.playingDate : null;
+    if (!d) return;
+    if ((Date.now() - d) / 1000 >= CUSHION) this.easing = false;
+    const r = this.easing && document.hidden ? 0.95 : 1;
+    if (aBG.playbackRate !== r) aBG.playbackRate = r;
+  },
+  lag() {   // how far behind the stream the sound is, or null
+    if (P.feed === 'live') { const d = this.hls?.playingDate; return d ? (Date.now() - d) / 1000 : null; }
+    return P.feed === 'cdn' && P.start > 0 ? Date.now() / 1000 - P.start - aBG.currentTime : null;
+  },
+  // Coming back with the sound going, it plays on while the picture loads, muted and held on a frame just ahead of it, and the picture takes over
+  // the moment the sound reaches that frame: nothing quiet, nothing heard twice or missed. Jerry, 2026-11-13: "if switch between background and
+  // foreground could be smoother would be amazing, i do it all the time multitasking"; it had been a second or two of quiet under a spinner, then
+  // the stream several seconds on. Should the picture not be there in 8 s, the sound stops and the picture starts as it can, as before (giveBack).
+  back: null,
+  handBack() {
+    const v = P.active(), live = P.feed === 'live';
+    if (!v || aBG.paused || !this.wanted || this.held || P.ad || P.cover || P.userPaused) return false;
+    if (live ? !(this.hls && P.hls?.levels.length) : !(P.feed === 'vod' || P.feed === 'cdn') || v.error || !aBG.currentTime) return false;
+    const b = this.back = { since: Date.now(), v, h: P.hls, lead: live ? 1.2 : 1, aimed: 0, timer: 0 };
+    v.muted = true;
+    aBG.playbackRate = 1;   // easing back is for while you're away
+    this.aim(b);
+    if (live) {
+      P.quietUntil = Date.now() + 10e3;   // its loading isn't a bad connection
+      P.resumedAt = performance.now();
+      // With a fresh list it aims closer: all that's left is loading the one segment.
+      b.h.once(window.Hls.Events.LEVEL_UPDATED, () => { if (this.back === b) { b.lead = 0.6; this.aim(b); } });
+      b.h.startLoad(v.currentTime);
+    }
+    b.timer = setInterval(() => this.step(b), 20);
+    UI.playIcon();
+    return true;
+  },
+  heardAt(b) { return P.feed === 'live' ? posAt(b.h, this.hls?.playingDate?.getTime()) : aBG.currentTime; },   // where the sound is, on the picture's clock
+  aim(b) {
+    const at = this.heardAt(b);
+    if (at == null) return;
+    b.aimed = Date.now();
+    b.v.currentTime = at + b.lead;
+  },
+  step(b) {
+    if (this.back !== b) return clearInterval(b.timer);
+    const v = b.v, now = Date.now();
+    if (P.active() !== v || (P.feed === 'live' && P.hls !== b.h)) return this.giveBack(b, 'the picture started over');
+    if (aBG.paused || !this.wanted) return this.giveBack(b, 'the sound stopped');
+    if (now - b.since > 8e3) return this.giveBack(b, 'the picture took too long');
+    if (b.rolled != null) {   // started, still muted, as the sound reached it: once it's moving, the sound's handed over
+      if (v.paused) b.rolled = null;
+      else if (v.currentTime !== b.rolled && v.readyState >= 3) return this.takeOver(b);
+      return;
+    }
+    const at = this.heardAt(b);
+    if (at == null) return;
+    const ahead = v.currentTime - at, ready = v.readyState >= 3 && holds(v, v.currentTime);
+    if (ready && ((ahead <= 0.05 && ahead > -0.12) || aBG.readyState < 3)) {   // there (or the sound's stuck: no use waiting on it)
+      b.rolled = v.currentTime;
+      const p = v.play(); if (p) p.catch(() => {});
+      return;
+    }
+    if (ready && ahead <= -0.12 && holds(v, at + 0.1)) { v.currentTime = at + 0.1; return; }   // the sound got past it, with more loaded on
+    if (ahead <= -0.12 && now - b.aimed > 400) { b.lead = Math.min(b.lead * 1.5, 4); this.aim(b); }   // past it with nothing there yet: further on
+    UI.spin(v.readyState < 2 && now - b.since > 1000);   // nothing to show yet, a moment on
+  },
+  takeOver(b) {   // the picture's going, in step with the sound: it takes the sound over
+    clearInterval(b.timer); this.back = null;
+    const v = b.v;
+    this.carry = false;
+    this.stop(true);   // the sound stops and the picture's unmuted, in the one go
+    // A picture no tap has played with sound isn't let unmuted: WebKit pauses it there and then (updateShouldPlay). Muted with the button
+    // then, as P.play has it: what's playing is on screen, and the button is a tap away.
+    if (v.paused && !Sound.muted) { v.muted = true; UI.unmute(true); Sound.icon(true); const p = v.play(); if (p) p.catch(() => UI.big(true)); }
+    P.moved = Date.now();
+    UI.spin(false); UI.playIcon();
+    Away.add(`back in step, the picture in ${((Date.now() - b.since) / 1000).toFixed(1)} s`);
+  },
+  giveBack(b, why) {   // the plain way: the sound stops, and the picture starts as it can
+    clearInterval(b.timer); this.back = null;
+    Away.add(`back: ${why}`);
+    this.carry = false;
+    if (P.active() !== b.v || (P.feed === 'live' && P.hls !== b.h)) { this.stop(true); P.play(P.active()); UI.playIcon(); return; }   // a new start that plays by itself
+    this.stop();
+  },
+  // Gone again before the picture took over: the sound just carries on, and the picture rests as it does whenever you leave.
+  stayAway() {
+    const b = this.back;
+    clearInterval(b.timer); this.back = null;
+    this.carry = true; this.heard = Date.now();
+    b.v.pause();
+    P.rest();
+    Away.add('gone again before the picture was back');
+  },
   stop(silent) {
+    if (this.back) { clearInterval(this.back.timer); this.back = null; }
+    this.easing = false; this.from = 0;
     if (!this.on) return;
     this.on = this.wanted = false;
     const at = aBG.currentTime;
@@ -2126,6 +2249,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { Pages.see(); Pages.tell('here'); }
   if ($('watch').hidden) return;
   if (!document.hidden) {
+    if (BG.on && BG.handBack()) return P.refreshIfDue();   // the sound plays on till the picture takes over
     BG.carry = false;
     P.refreshIfDue();   // the look at the channel that waited for you
     if (BG.on) return BG.stop();
@@ -2138,6 +2262,7 @@ document.addEventListener('visibilitychange', () => {
   // left), or one held through an ad break, whose sound comes back with the stream, or one still on its way. One still
   // muted because it started by itself has none
   const v = P.active();
+  if (BG.back) BG.stayAway();   // back and gone again before the picture was: the sound you're hearing just goes on
   // or a channel you've just tapped, still asking Twitch about it (no player yet), whose sound comes on once its player has started
   const starting = !v && P.login && !P.vod && P.user?.stream !== null && Date.now() - P.openedAt < 20e3 && !P.quietStart;
   if (!Sound.muted && !P.userPaused && ((v && !v.muted && (!v.paused || performance.now() - P.pausedAt < 2000 || P.ad || !P.started)) || starting)) {
@@ -2245,7 +2370,8 @@ const Sound = {
   level: store.get('volume', 1),     // iPhone ignores this: its buttons set the volume
   set(m) {
     this.muted = m; store.set('muted', m);
-    vL.muted = vC.muted = m;
+    if (BG.back) aBG.muted = m;   // the sound's still what you hear, and the picture takes over with this
+    else vL.muted = vC.muted = m;
     this.icon(m);
     if (!m) { UI.unmute(false); P.quietStart = false; }
   },
@@ -2429,6 +2555,7 @@ vC.addEventListener('timeupdate', () => {
 aBG.addEventListener('timeupdate', () => {
   if (!BG.on) return;
   if (!aBG.paused && BG.wanted) BG.heard = Date.now();
+  BG.pace();
   if (P.feed === 'vod') { savePlace(aBG.currentTime); if (aBG.currentTime > 1) BG.at = aBG.currentTime; }
 });
 // On the Duo's inner screen held on its side, a picture watched for 2 minutes with nothing touched goes to fullscreen by itself (Jerry,
@@ -3866,7 +3993,7 @@ const UI = {
     if (on !== $('watch').classList.contains('full')) Away.add(on ? 'fullscreen in the page' : 'fullscreen in the page closed');
     $('watch').classList.toggle('full', on); setIcon($('bFull'), on || pageFull() ? 'unfull' : 'full');
   },
-  playIcon() { const v = P.active(); setIcon($('bPlay'), v && !v.paused ? 'pause' : 'play'); },
+  playIcon() { const v = P.active(); setIcon($('bPlay'), (v && !v.paused) || BG.back ? 'pause' : 'play'); },
   feed() {
     $('bLat').classList.toggle('cdn', P.feed === 'cdn');
     $('bLat').hidden = P.feed === 'vod' || !P.feed;
@@ -3921,6 +4048,13 @@ function togglePlay() {
   const v = P.active();
   if (!v) return;
   P.pausedAway = false;
+  if (BG.back) {   // the picture still on its way back in, with the sound going: that's a pause
+    BG.carry = false; BG.stop(true);
+    P.userPaused = true; v.pause(); UI.spin(false);
+    if (Pill.hiding) v.muted = true;
+    UI.playIcon(); hud(true);
+    return;
+  }
   if (v.paused) {
     // a player still loading jumps to the edge now; one rested after a long pause does that itself as it starts up again (resume)
     if (P.feed === 'live') { if (P.hls?.loadingEnabled) P.toLiveEdge(); } else if (P.feed === 'cdn') P.cdnSeek();
@@ -3935,7 +4069,7 @@ function togglePlay() {
 $('bPlay').onclick = togglePlay;
 $('bigPlay').onclick = () => { UI.big(false); unlock(); P.userPaused = false; P.play(P.active() || vL); };
 // what you hear, which a browser's autoplay rules can have muted. Only coming off mute starts up the other players: with sound on, iPhone lets one video play at a time
-$('bMute').onclick = () => { const m = !(P.active()?.muted ?? Sound.muted); if (!m) unlock(); Sound.set(m); };
+$('bMute').onclick = () => { const m = !(BG.back ? aBG.muted : P.active()?.muted ?? Sound.muted); if (!m) unlock(); Sound.set(m); };
 $('vol').addEventListener('input', e => { Sound.setLevel(+e.target.value, true); hud(true); });
 $('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); };
 $('bBack').onclick = $('bBack2').onclick = () => back();

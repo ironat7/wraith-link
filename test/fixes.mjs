@@ -1,4 +1,4 @@
-// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery handover.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
 import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE } from './lib.mjs';
@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery', 'handover'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -43,7 +43,7 @@ async function open({ iphone = false, init, initArg, w = 900, h = 1000, touch = 
   });
   return { c, page, ads, done: async () => { ok('no page errors', page.errors.length === 0, page.errors.join(' | ')); await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close(); } };
 }
-const playing = (page, ms = 25000) => page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 1 && v.readyState >= 3; }, null, { timeout: ms }).catch(() => {});
+const playing = (page, ms = 25000) => page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 1 && v.readyState >= 3 && !wraith.BG.on; }, null, { timeout: ms }).catch(() => {});   // the picture, with the sound handed back to it
 const st = page => page.evaluate(() => { const P = wraith.P, v = P.active(); return { feed: P.feed, ad: P.ad, cover: P.cover, type: P.playerType, paused: v?.paused, t: +(v?.currentTime || 0).toFixed(1), h: v?.videoHeight, lat: +(P.latency() || 0).toFixed(1), hls: !!P.hls, spin: !document.getElementById('spin').hidden, banner: !document.getElementById('banner').hidden, msg: !document.getElementById('msgbox').hidden, retries: P.retries, tried: [...P.dodged], errs: P.errs }; });
 const vis = (page, hidden) => page.evaluate(h => { Object.defineProperty(document, 'hidden', { configurable: true, get: () => h }); Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => h ? 'hidden' : 'visible' }); document.dispatchEvent(new Event('visibilitychange')); }, hidden);
 
@@ -105,7 +105,7 @@ const toCdn = async (page, from) => { await page.waitForFunction(() => wraith.P.
 const levels = (page, ms) => page.waitForFunction(() => wraith.P.hls?.levels.length, null, { timeout: ms }).catch(never);
 const backPlays = async (page, name) => {
   await vis(page, false);
-  await page.waitForFunction(() => { const v = wraith.P.active(); return !v.paused && v.readyState >= 3; }, null, { timeout: 15000 }).catch(never);
+  await page.waitForFunction(() => { const v = wraith.P.active(); return !v.paused && v.readyState >= 3 && !wraith.BG.on; }, null, { timeout: 15000 }).catch(never);   // the sound handed back
   const s = await snd(page);
   ok(name, !s.on && s.paused && !s.src && !s.vPaused && !s.msg, JSON.stringify(s));
 };
@@ -3877,6 +3877,150 @@ if (want('return')) {
       await offlineCard(page);
       const s = await page.evaluate(() => { const P = wraith.P; P.feed = null; P.pausedAway = P.userPaused = true; P.wake(); return { away: P.pausedAway, paused: P.userPaused }; });
       ok('coming back while a restart is still on its way clears the hold', !s.away && !s.paused, JSON.stringify(s));
+      await done();
+    })(),
+  ]);
+}
+
+if (want('handover')) {
+  // Leaving and coming back, as heard (Jerry, 2026-11-13: "if switch between background and foreground could be smoother would be amazing, i
+  // do it all the time multitasking"). On a stream made here, with Twitch staged and the relay taking about as long as Apps Script.
+  const madeHere = async () => {
+    const c = await browser.newContext({ viewport: { width: 390, height: 844 }, userAgent: IPHONE, hasTouch: true, isMobile: true });
+    const page = await c.newPage();
+    page.errors = []; page.on('pageerror', e => page.errors.push(e.message));
+    await page.addInitScript(() => { window.WebSocket = class { close() {} send() {} }; });
+    const user = { id: '1', login: 'staged', displayName: 'Staged', profileImageURL: null, broadcastSettings: { title: '' }, stream: { id: '1', createdAt: ago(3600), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
+    await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
+      const u = route.request().url(), b = route.request().postData() || '';
+      if (u.includes('cdn.jsdelivr.net')) return route.continue().catch(never);
+      if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } } : {} }) }).catch(never);
+      return route.abort().catch(never);
+    });
+    await makeStream(page, async (route, u, body) => { await sleep(400 + Math.random() * 400); return route.fulfill({ status: 200, headers, body }).catch(never); });
+    await page.goto(base + '?c=staged', { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 1 && v.readyState >= 3; }, null, { timeout: 30000 }).catch(never);
+    await sleep(2500);
+    // every 10 ms, which of the two is heard (playing, unmuted, its clock moving in the last 50 ms) and from where in the stream
+    await page.evaluate(() => {
+      const vL = document.getElementById('vLL'), a = document.getElementById('aBG');
+      let lv = -1, la = -1, mv = 0, ma = 0;
+      window.__S = [];
+      setInterval(() => {
+        const now = performance.now();
+        if (vL.currentTime !== lv) { mv = now; lv = vL.currentTime; }
+        if (a.currentTime !== la) { ma = now; la = a.currentTime; }
+        const v = !vL.paused && !vL.muted && vL.readyState >= 3 && now - mv < 50, s = !a.paused && !a.muted && a.readyState >= 3 && now - ma < 50;
+        window.__S.push({ t: now, v, s, at: v ? wraith.P.hls?.playingDate?.getTime() : s ? wraith.BG.hls?.playingDate?.getTime() : null });
+      }, 10);
+    });
+    await sleep(500);
+    const go = hidden => page.evaluate(async h => {
+      if (h) { document.getElementById('vLL').pause(); await new Promise(r => setTimeout(r, 30)); }   // iOS pauses the picture just before it says the app has left
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => h ? 'hidden' : 'visible' });
+      document.dispatchEvent(new Event('visibilitychange'));
+      return performance.now();
+    }, hidden);
+    const heard = () => page.evaluate(() => { const s = window.__S; window.__S = []; return s; });
+    // from t: the longest stretch nothing was heard, and how far the stream moved across the switch (+ skipped, − heard twice)
+    const across = (S, t, which) => {
+      let quiet = 0, run = 0;
+      for (let i = 1; i < S.length; i++) if (S[i].t >= t) { run = S[i].v || S[i].s ? 0 : run + S[i].t - S[i - 1].t; quiet = Math.max(quiet, run); }
+      const before = S.filter(x => x.t < t && (x.v || x.s)).at(-1);
+      const firstAfter = S.find(x => x.t >= t && x[which]);
+      const lastOther = firstAfter && S.filter(x => x.t < firstAfter.t && (which === 'v' ? x.s : x.v)).at(-1);
+      const from = which === 'v' ? lastOther : before;
+      return { quiet: Math.round(quiet), jump: firstAfter && from ? +((firstAfter.at - from.at) / 1000).toFixed(2) : null, after: firstAfter ? Math.round(firstAfter.t - t) : null };
+    };
+    return { page, go, heard, across, done: async () => { ok('no page errors', page.errors.length === 0, page.errors.join(' | ')); await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close(); } };
+  };
+  const bg = page => page.evaluate(() => { const a = document.getElementById('aBG'), v = document.getElementById('vLL'); return { on: wraith.BG.on, back: !!wraith.BG.back, aPaused: a.paused, aMuted: a.muted, rate: a.playbackRate, src: !!a.getAttribute('src'), vPaused: v.paused, vMuted: v.muted, loading: !!wraith.P.hls?.loadingEnabled, userPaused: wraith.P.userPaused, away: JSON.parse(localStorage.getItem('wraith.away') || '[]').slice(-3) }; });
+  await Promise.all([
+    (async () => {
+      const { page, go, heard, across, done } = await madeHere();
+      const left = await go(true);
+      await sleep(5000);
+      let s = await bg(page);
+      ok('away, the sound eases back to its cushion a little slower than the stream', s.on && !s.aPaused && s.rate === 0.95, JSON.stringify(s));
+      let S = await heard();
+      let x = across(S, left, 's');
+      ok('leaving, the sound picks up where the picture stopped', x.jump !== null && Math.abs(x.jump) < 0.25 && x.after < 2500, JSON.stringify(x));
+      const back = await go(false);
+      await sleep(200);
+      s = await bg(page);
+      ok('coming back, the sound plays on while the picture loads, muted', s.on && s.back && !s.aPaused && s.vMuted && s.rate === 1, JSON.stringify(s));
+      await page.waitForFunction(() => !wraith.BG.on, null, { timeout: 10000 }).catch(never);
+      await sleep(1000);
+      S = await heard();
+      x = across(S, back, 'v');
+      ok('and the picture takes over in step, with nothing quiet', x.quiet <= 60 && x.jump !== null && Math.abs(x.jump) < 0.15, JSON.stringify(x));
+      s = await bg(page);
+      ok('the sound’s player let go of', !s.on && !s.back && s.aPaused && !s.src && !s.vPaused && !s.vMuted, JSON.stringify(s));
+      ok('the settings sheet says so', s.away.some(l => /back in step/.test(l)), JSON.stringify(s.away));
+      // back and gone again before the picture is
+      await go(true); await page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.readyState >= 3; }, null, { timeout: 15000 }).catch(never);
+      await sleep(1500); await heard();
+      const t = await go(false); await sleep(250); await go(true); await sleep(2000);
+      S = await heard();
+      x = across(S, t, 's');
+      s = await bg(page);
+      ok('back and gone again before the picture: the sound just plays on', x.quiet <= 60 && s.on && !s.back && !s.aPaused && !s.loading, `${JSON.stringify(x)} ${JSON.stringify(s)}`);
+      await done();
+    })(),
+    (async () => {
+      // a pause while the picture is on its way, and a mute
+      const { page, go, done } = await madeHere();
+      await go(true); await page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.readyState >= 3; }, null, { timeout: 15000 }).catch(never);
+      await sleep(1500);
+      await go(false); await sleep(100);
+      await page.evaluate(() => document.getElementById('bMute').click()); await sleep(100);
+      let s = await bg(page);
+      ok('muting while the picture comes back mutes what you hear', s.back && s.aMuted, JSON.stringify(s));
+      await page.evaluate(() => document.getElementById('bMute').click());
+      await page.evaluate(() => document.getElementById('bPlay').click()); await sleep(300);
+      s = await bg(page);
+      ok('and the pause button stops it all', !s.on && !s.back && s.aPaused && s.vPaused && s.userPaused, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the moment it takes over: a pause then is a pause, and a picture iOS won't unmute plays on muted with the button
+      const { page, go, done } = await madeHere();
+      const away = async () => { await go(true); await page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.readyState >= 3; }, null, { timeout: 15000 }).catch(never); await sleep(1000); };
+      await away();
+      await go(false);
+      await page.waitForFunction(() => !wraith.BG.on, null, { timeout: 10000 }).catch(never);
+      await page.evaluate(() => wraith.P.active().pause()); await sleep(700);
+      let s = await bg(page);
+      ok('a pause just as the picture takes over holds, with sound to come back to', s.vPaused && !s.vMuted, JSON.stringify(s));
+      await page.evaluate(() => wraith.P.active().play()); await sleep(1500);
+      await away();
+      // as WebKit does for a picture no tap has played with sound: unmuting it pauses it
+      await page.evaluate(() => {
+        const v = document.getElementById('vLL'), d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'muted');
+        Object.defineProperty(v, 'muted', { configurable: true, get() { return d.get.call(this); }, set(x) { d.set.call(this, x); if (!x && !this.paused) this.pause(); } });
+      });
+      await go(false);
+      await page.waitForFunction(() => !wraith.BG.on, null, { timeout: 10000 }).catch(never); await sleep(500);
+      s = await bg(page);
+      const button = await page.evaluate(() => !document.getElementById('unmute').hidden);
+      ok('a picture iOS won’t let unmuted plays on muted, with the button', !s.vPaused && s.vMuted && button, `${JSON.stringify(s)} button ${button}`);
+      await done();
+    })(),
+    (async () => {
+      // the picture's segments not coming: after 8 s, the plain way
+      const { page, go, done } = await madeHere();
+      await go(true); await page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.readyState >= 3; }, null, { timeout: 15000 }).catch(never);
+      await sleep(1500);
+      await page.route(/edge\.hls\.ttvnw\.net\/.*\.ts$/, never);   // from here the picture's segments never come
+      await go(false);
+      await sleep(4000);
+      let s = await bg(page);
+      ok('with the picture slow, the sound waits for it', s.on && s.back && !s.aPaused, JSON.stringify(s));
+      await page.waitForFunction(() => !wraith.BG.on, null, { timeout: 8000 }).catch(never);
+      s = await bg(page);
+      ok('and after 8 s it gives the picture its own start, as before', !s.on && !s.back && s.aPaused && s.away.some(l => /took too long/.test(l)), JSON.stringify(s));
+      await page.unroute(/edge\.hls\.ttvnw\.net\/.*\.ts$/, never).catch(never);
       await done();
     })(),
   ]);
