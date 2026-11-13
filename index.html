@@ -4239,10 +4239,17 @@ const Home = {
   },
 };
 
-// Browse: what's on across Twitch, by category. The language chip is a Twitch tag; most browsing is in one language.
-const STREAM = 'viewersCount type createdAt title previewImageURL(width: 440, height: 248) game { displayName } broadcaster { login displayName profileImageURL(width: 70) }';
+// Browse: what's on across Twitch, by category, most watched first, in English unless the chip says all languages.
+// Twitch will filter its list by a tag or by language, and either way it leaves streams out. On 2026-11-12 its list tagged English never
+// had 33 of the 189 tagged streams its plain list had (one with 11,000 watching), 671 rows down, and 66 of 187 a few minutes earlier,
+// different ones each time; its language filter lost as many. Everything the filtered lists had, the plain one had too. So Browse reads
+// the plain list and keeps a stream set to the language or carrying its tag (6 in 152 English streams didn't carry it, and a few in
+// other languages do). Where that keeps under 1 row in 8, a category mostly in another language say, Twitch's tagged list takes over.
+const STREAM = 'viewersCount type createdAt title language freeformTags { name } previewImageURL(width: 440, height: 248) game { displayName } broadcaster { login displayName profileImageURL(width: 70) }';
+const LANG = { English: 'EN' };   // the chip's language as Twitch's code for a stream's own setting
 const Browse = {
   game: null, cursor: null, end: false, busy: false, at: 0, key: null, run: 0, listed: new Set(),
+  thin: false, seen: 0, kept: 0,   // whether Twitch's tagged list has taken over, and how much of the plain list was in the language
   lang() { return store.get('lang', 'English'); },
   rewatch() { this.near.unobserve($('brEnd')); this.near.observe($('brEnd')); },   // watched afresh, the end of the list says again whether it's in view
   async load(force) {
@@ -4250,6 +4257,7 @@ const Browse = {
     // A list you've scrolled down stays as it is for a good while: reloading keeps only its first page.
     if (!force && key === this.key && Date.now() - this.at < (deep ? 9e5 : 60e3)) return;
     this.run++; this.key = key; this.at = Date.now(); this.cursor = null; this.end = false; this.busy = false;
+    this.thin = false; this.seen = this.kept = 0;
     $('brHead').hidden = !this.game; $('secCats').hidden = !!this.game;
     $('brLang').textContent = this.lang() === 'all' ? 'All languages' : this.lang();
     if (!this.game) this.cats();
@@ -4275,34 +4283,52 @@ const Browse = {
   async page(first) {
     if (this.busy || this.end) return;
     this.busy = true;
-    let loaded = false;
+    let loaded = false, failed = false;
     const run = this.run, game = this.game, box = $('brList'), lang = this.lang();   // the game as asked: Back clears it without a new run
-    const after = this.cursor ? `, after: ${JSON.stringify(this.cursor)}` : '';
-    const opts = `{ sort: VIEWER_COUNT${lang === 'all' ? '' : `, freeformTags: [${JSON.stringify(lang)}]`} }`;
-    const field = `streams(first: 30${after}, options: ${opts}) { edges { cursor node { ${STREAM} } } pageInfo { hasNextPage } }`;
+    const mine = s => lang === 'all' || s.language === LANG[lang] || !!s.freeformTags?.some(t => t.name?.toLowerCase() === lang.toLowerCase());
     try {
-      const d = game ? await gql(`query($g: String!) { game(name: $g) { displayName viewersCount ${field} } }`, { g: game }, TV_CID) : await gql(`query { ${field} }`, null, TV_CID);
-      if (run !== this.run) return;
-      this.at = Date.now();
-      const res = game ? d.game?.streams : d.streams;
-      if (game && d.game) { $('brTitle').textContent = d.game.displayName; $('brSub').textContent = `${count(d.game.viewersCount)} watching`; }
-      const edges = res?.edges || [];
-      if (first) { box.textContent = ''; this.listed = new Set(); }
-      // Twitch pages by place in a list that keeps re-sorting by viewers, so a channel that slipped a few places comes round again
-      for (const { node: s } of edges) if (!this.listed.has(s.broadcaster?.login) && this.listed.add(s.broadcaster?.login)) box.append(streamRow({ login: s.broadcaster?.login, name: s.broadcaster?.displayName, avatar: s.broadcaster?.profileImageURL, title: s.title,
-        game: s.game?.displayName, viewers: s.viewersCount, since: s.createdAt, thumb: s.previewImageURL, type: s.type }));
-      this.cursor = edges[edges.length - 1]?.cursor || null;
-      this.end = !res?.pageInfo?.hasNextPage || !this.cursor;
-      if (first && !edges.length) box.append(el('p', 'note', 'Nothing live here in this language.'));
-      loaded = true;
+      // About 4 rows in 7 of the plain list are English, so a go at it asks again, up to 3 times, until it has 15 rows to add.
+      for (let asks = 0, added = 0; asks < 3 && added < 15 && !this.end; asks++) {
+        const tagged = this.thin && lang !== 'all';
+        const after = this.cursor ? `, after: ${JSON.stringify(this.cursor)}` : '';
+        const opts = `{ sort: VIEWER_COUNT${tagged ? `, freeformTags: [${JSON.stringify(lang)}]` : ''} }`;
+        const field = `streams(first: 30${after}, options: ${opts}) { edges { cursor node { ${STREAM} } } pageInfo { hasNextPage } }`;
+        const d = game ? await gql(`query($g: String!) { game(name: $g) { displayName viewersCount ${field} } }`, { g: game }, TV_CID) : await gql(`query { ${field} }`, null, TV_CID);
+        if (run !== this.run) return;
+        this.at = Date.now();
+        const res = game ? d.game?.streams : d.streams;
+        if (game && d.game) { $('brTitle').textContent = d.game.displayName; $('brSub').textContent = `${count(d.game.viewersCount)} watching`; }
+        const edges = res?.edges || [];
+        if (first && !asks) { box.textContent = ''; this.listed = new Set(); }
+        for (const { node: s } of edges) {
+          const login = s?.broadcaster?.login;
+          if (!login) continue;
+          if (!tagged) this.seen++;
+          // Twitch pages by place in a list that keeps re-sorting by viewers, so a channel that slipped a few places comes round again
+          if (!mine(s) || this.listed.has(login)) continue;
+          this.listed.add(login); added++;
+          if (!tagged) this.kept++;
+          box.append(streamRow({ login, name: s.broadcaster.displayName, avatar: s.broadcaster.profileImageURL, title: s.title,
+            game: s.game?.displayName, viewers: s.viewersCount, since: s.createdAt, thumb: s.previewImageURL, type: s.type }));
+        }
+        this.cursor = edges[edges.length - 1]?.cursor || null;
+        this.end = !res?.pageInfo?.hasNextPage || !this.cursor;
+        loaded = true;
+        if (tagged || $('vBrowse').hidden) break;
+        // too few of the plain list's rows are in the language: Twitch's tagged list from its top, the rows already here passed over
+        if (!this.end && lang !== 'all' && this.seen >= 90 && this.kept * 8 < this.seen) { this.thin = true; this.cursor = null; }
+      }
+      if (this.end && !box.children.length) box.append(el('p', 'note', 'Nothing live here in this language.'));
     } catch (e) {
-      if (run === this.run && first) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
+      failed = true;
+      if (run !== this.run) {}
+      else if (first && !loaded) { box.textContent = ''; box.append(el('p', 'note', `Couldn’t reach Twitch (${e.message}).`)); }
       // a later page that failed gets another go in a while, if the end of the list is still in reach then
-      else if (run === this.run) setTimeout(() => { if (run === this.run && !this.end) this.rewatch(); }, 15e3);
+      else setTimeout(() => { if (run === this.run && !this.end) this.rewatch(); }, 15e3);
     } finally { if (run === this.run) this.busy = false; }
     // The observer below only calls when the end of the list comes into reach or goes out of it. With it still in reach after this page (a
     // tall window, few rows, a scroll landing as they went in), it would never call again: watching afresh has it say how things stand.
-    if (loaded && run === this.run) this.rewatch();
+    if (loaded && !failed && run === this.run) this.rewatch();
   },
 };
 Browse.near = new IntersectionObserver(es => { if (es[0].isIntersecting && !$('vBrowse').hidden) Browse.page(); }, { rootMargin: '600px' });

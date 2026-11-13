@@ -2416,7 +2416,7 @@ if (want('lists')) {
   const json = (route, o, status = 200) => route.fulfill({ status, headers, contentType: 'application/json', body: JSON.stringify(o) }).catch(never);
   // each page different channels, as Twitch's are (a channel turning up twice is listed once)
   let rowN = 0;
-  const rows = (n, more) => ({ streams: { edges: Array.from({ length: n }, () => { const i = rowN++; return { cursor: 'c' + i, node: { viewersCount: 1, type: 'live', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } }; }), pageInfo: { hasNextPage: more } } });
+  const rows = (n, more) => ({ streams: { edges: Array.from({ length: n }, () => { const i = rowN++; return { cursor: 'c' + i, node: { viewersCount: 1, type: 'live', language: 'EN', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } }; }), pageInfo: { hasNextPage: more } } });
   const onBrowse = async page => { await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' }); };
   await Promise.all([
     (async () => {
@@ -3196,7 +3196,7 @@ if (want('duo')) {
     })(),
     // tapping the Home tab you're on
     (async () => {
-      const rows = n => ({ streams: { edges: Array.from({ length: n }, (_, i) => ({ cursor: 'c' + i, node: { viewersCount: 1, type: 'live', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } })), pageInfo: { hasNextPage: false } } });
+      const rows = n => ({ streams: { edges: Array.from({ length: n }, (_, i) => ({ cursor: 'c' + i, node: { viewersCount: 1, type: 'live', language: 'EN', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } })), pageInfo: { hasNextPage: false } } });
       const { page, done } = await on(OPEN, { path: '', gql: b => { if (b.includes('game(name')) return { game: { displayName: 'Chess', viewersCount: 5, ...rows(30) } }; if (b.includes('streams(first')) return rows(30); } });
       await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' });
       await page.waitForFunction(() => document.querySelectorAll('#brList .row').length >= 30, null, { timeout: 10000 }).catch(never);
@@ -3531,7 +3531,7 @@ if (want('player')) {
 
 if (want('lists2')) {
   // Lists and getting around, from the 2026-11-05 review.
-  const row = (login, v) => ({ cursor: login, node: { viewersCount: v, type: 'live', createdAt: ago(60), title: login, previewImageURL: '', game: null, broadcaster: { login, displayName: login, profileImageURL: '' } } });
+  const row = (login, v) => ({ cursor: login, node: { viewersCount: v, type: 'live', language: 'EN', createdAt: ago(60), title: login, previewImageURL: '', game: null, broadcaster: { login, displayName: login, profileImageURL: '' } } });
   await Promise.all([
     (async () => {
       // Browse pages by place in a list that re-sorts: a channel turning up again isn't listed twice
@@ -3543,6 +3543,50 @@ if (want('lists2')) {
       await page.evaluate(() => wraith.Browse.page()); await sleep(800);
       const names = await page.evaluate(() => [...document.querySelectorAll('#brList [href]')].map(a => new URL(a.href).searchParams.get('c')).filter(Boolean));
       ok('Browse never lists a channel twice', names.length === new Set(names).size && names.includes('a4'), JSON.stringify(names));
+      await done();
+    })(),
+    (async () => {
+      // Twitch's list filtered by the English tag left out a sixth to a third of the tagged streams (2026-11-12), so Browse reads the
+      // plain list and keeps the language itself: a stream set to it, or carrying its tag
+      const node = (login, v, language, tags = []) => ({ cursor: login, node: { ...row(login, v).node, language, freeformTags: tags.map(name => ({ name })) } });
+      const plain = [
+        [node('en1', 900, 'EN', ['English']), node('pt1', 800, 'PT', ['Português']), node('en2', 700, 'EN'), node('ru1', 600, 'RU', ['english', 'Русский']), node('es1', 500, 'ES'), node('ja1', 400, 'JA'), node('en3', 300, 'EN', ['English']), node('de1', 200, 'DE')],
+        [node('en4', 100, 'EN'), node('fr1', 90, 'FR')],
+      ];
+      let asked = [], n = 0;
+      const gql = async b => { if (!b.includes('streams(first: 30')) return; if (!b.includes('after: ')) n = 0; asked.push(b.includes('freeformTags: [') ? 'tag' : 'plain'); n++; return { streams: { edges: plain[n - 1] || [], pageInfo: { hasNextPage: n < plain.length } } }; };
+      const { page, done } = await stage(answer, { path: '', gql });
+      const names = () => page.evaluate(() => [...document.querySelectorAll('#brList [href]')].map(a => new URL(a.href).searchParams.get('c')).filter(Boolean));
+      asked = [];
+      await page.evaluate(() => { wraith.Home.setView('browse'); });
+      await page.waitForFunction(() => document.querySelectorAll('#brList [href]').length >= 5, null, { timeout: 8000 }).catch(never); await sleep(300);
+      let got = await names();
+      ok('Browse in English: streams set to English with or without the tag, and one in another language that carries it', got.join() === 'en1,en2,ru1,en3,en4', got.join());
+      ok('from Twitch\'s plain list, asked again in the same go while it has under 15 rows to show', asked.join() === 'plain,plain', asked.join());
+      asked = [];
+      await page.evaluate(() => document.getElementById('brLang').click());
+      await page.waitForFunction(() => document.querySelectorAll('#brList [href]').length >= 10, null, { timeout: 8000 }).catch(never); await sleep(300);
+      got = await names();
+      ok('in all languages, every stream of it', got.length === 10 && got[1] === 'pt1' && asked.every(a => a === 'plain'), `${got.join()} ${asked.join()}`);
+      await done();
+    })(),
+    (async () => {
+      // where hardly any of the plain list is in the language, Twitch's tagged list takes over, without listing again what's already here
+      const node = (login, v, language, tags = []) => ({ cursor: login, node: { ...row(login, v).node, language, freeformTags: tags.map(name => ({ name })) } });
+      let asked = [], n = 0;
+      const gql = async b => {
+        if (!b.includes('streams(first: 30')) return;
+        if (b.includes('freeformTags: [')) { asked.push(b.includes('after: ') ? 'tag+' : 'tag'); return { streams: { edges: [node('en1', 5000, 'EN', ['English']), node('en8', 40, 'EN', ['English']), node('en9', 30, 'KO', ['English'])], pageInfo: { hasNextPage: false } } }; }
+        asked.push('plain'); const p = n++;
+        return { streams: { edges: Array.from({ length: 30 }, (_, i) => p === 0 && i === 0 ? node('en1', 5000, 'EN', ['English']) : node(`ko${p}_${i}`, 4000 - p * 30 - i, 'KO')), pageInfo: { hasNextPage: true } } };
+      };
+      const { page, done } = await stage(answer, { path: '', gql });
+      asked = []; n = 0;
+      await page.evaluate(() => { wraith.Home.setView('browse'); });
+      await page.waitForFunction(() => document.querySelectorAll('#brList [href]').length >= 3, null, { timeout: 10000 }).catch(never); await sleep(500);
+      const got = await page.evaluate(() => [...document.querySelectorAll('#brList [href]')].map(a => new URL(a.href).searchParams.get('c')).filter(Boolean));
+      ok('a list with 1 stream in 90 in English goes over to Twitch\'s tagged list, from its top', asked.join() === 'plain,plain,plain,tag', asked.join());
+      ok('and adds what that has, the one already listed not twice', got.join() === 'en1,en8,en9', got.join());
       await done();
     })(),
     (async () => {
