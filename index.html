@@ -619,9 +619,12 @@ html[data-strip] #watch:not(.kb) .rpb, html[data-strip] #watch:not(.kb) .ac { --
 const buildOf = s => { let h = 7; for (let i = 0; i < s.length; i += 3) h = Math.imul(h, 31) + s.charCodeAt(i) | 0; return (h >>> 0).toString(36); };
 const BUILD = buildOf(document.currentScript?.textContent || '');
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
-// "Wraith relay" Apps Script. Twitch's playlist servers turn away browsers on other
+// "Wraith relay 2" Apps Script. Twitch's playlist servers turn away browsers on other
 // sites, so playlists come through it; the video itself loads straight from Twitch's CDN.
-const RELAY = 'https://script.google.com/macros/s/AKfycbyXQaL8s2_Vo-DTpCZhQCaPvHPF6hSbW4W3-RcmzgicJVtYTP9rCJfzdP5gViglpEIJZA/exec';
+// The first project, "Wraith relay", went bad on 2026-11-12: from about 13:20 Google sat on 3 to 7 calls in 10 to it and never ran them,
+// for ten hours and counting, while the same code in a project made that night answered 24 of 24 in the same minutes. A new address
+// for the old project sat on as many, so if this one goes the same way, it's a new project it wants, not a new deployment.
+const RELAY = 'https://script.google.com/macros/s/AKfycbyhCHjVig1unp9uDzYnZnRamWEoW05su6fPSVnk3t5qxqlwkIVtBGSVVCoDCmAMOPp-1A/exec';
 // Twitch's TV app. Its device sign-in (a code you approve on Twitch) works from any page with no registered
 // app, and asking as it gets past the integrity check that stops the web client paging through lists.
 const TV_CID = 'ue6666qo983tsx6so1t0vnawi233wa';
@@ -891,7 +894,7 @@ const newStats = () => ({ aborted: false, loaded: 0, retry: 0, total: 0, chunkCo
 // hls.js playlist loader that goes through the relay. Apps Script now and then sits on a request
 // for seconds, so one still out after 1.5 s gets a twin and whichever answers first wins. Some it never
 // answers at all (2026-11-12: 3 in 10 for an afternoon, with Google's and Twitch's own sites answering in 0.1 s,
-// and the calls it sat on never reached the script). With one twin, 1 playlist in 11 had both asks sat on and
+// and the calls it sat on never reached the script; it was that one script project, see RELAY). With one twin, 1 playlist in 11 had both asks sat on and
 // the picture stood for the 8 s the timeout takes, so there's another each 1.5 s, up to four asks out.
 class RelayLoader {
   constructor() { this.stats = newStats(); this.context = null; this.callbacks = null; this.ctrl = null; this.timers = []; }
