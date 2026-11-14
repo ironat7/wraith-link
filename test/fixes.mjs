@@ -4829,13 +4829,13 @@ if (want('log')) {
       // state under a sound that's going, and WebKit taking it back a second later for a sound it still counts as playing. The page stops
       // the sound itself at that first change.
       const change = () => page.evaluate(() => navigator.audioSession.dispatchEvent(new Event('statechange')));
-      await away(); await sleep(1500);
+      await away();   // heard for a second and a bit: he's at the mic that soon
       n = got.length;
       await change(); await sleep(1500);
       s = await state();
       ok('the audio session changing under a sound that’s going stops the sound, and holds nothing', s.on && !s.wanted && !s.held && s.paused, JSON.stringify(s));
       let said = all(got.slice(n));
-      ok('written with how the sound stood, and sent at once', /audio session changed, the sound going, its clock moved \d\.\d s before/.test(said) && /stopped the sound: its audio session changed under it/.test(said), said.replace(/\n/g, ' | '));
+      ok('written with how the sound stood, and sent at once', /audio session changed, the sound going \d\.\d s, its clock moved \d\.\d s before/.test(said) && /stopped the sound: its audio session changed under it/.test(said), said.replace(/\n/g, ' | '));
       const relayAsks = () => page.evaluate(() => wraith.BG.hls?.loadingEnabled);
       ok('and it stops asking for its playlist', !(await relayAsks()));
       await change(); await sleep(200);   // the session changing again with the sound stopped is nothing to it
@@ -4850,7 +4850,13 @@ if (want('log')) {
       await change(); await sleep(300);   // its own start can make one
       s = await state();
       ok('nor does one as the sound starts', s.on && s.wanted && !s.paused, JSON.stringify(s));
-      await sleep(1200);
+      // nor one just after Control Center's play brings a stopped sound back, which is that play's own
+      await sleep(1200); await change(); await sleep(300);
+      await cc(page, 'play'); await sounding(page); await sleep(600);
+      await change(); await sleep(300);
+      s = await state();
+      ok('nor one just after Control Center’s play has brought the sound back', s.on && s.wanted && !s.paused, JSON.stringify(s));
+      await sleep(2200);
       n = got.length;
       await cc(page, 'pause'); await sleep(400);
       s = await state();

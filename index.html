@@ -2159,7 +2159,12 @@ const BG = {
   // make, nor in front, where the picture taking over makes one. WebKit keeps the state itself behind a flag on 27.2; where it's given,
   // "active" is no loss.
   lost(now) {
-    if (!this.on || !this.wanted || aBG.paused || !document.hidden || this.back || !this.told || now - this.toldAt < 2000) return;
+    // How long after the sound is first heard a change still counts as its own start: 0.8 s, and 2.5 s where Control Center's play brought
+    // it back (that change came after "sound heard", the same second: 22:30:47). It was 2 s for both, and the phone showed what that
+    // cost: his mic takes the session 1 to 3 s after the sound is heard (he's that quick to the button), so two tries in three the change
+    // was let pass, WebKit took the session back 2 to 3 s on, and the sound was only stopped at that second change, the recording already
+    // dead (22:30:37 then :40, 22:31:12 then :14; Jerry: "semi works, need two taps, still much better").
+    if (!this.on || !this.wanted || aBG.paused || !document.hidden || this.back || !this.told || now - this.toldAt < (this.again ? 2500 : 800)) return;
     try { if (navigator.audioSession.state === 'active') return; } catch {}
     Away.add('stopped the sound: its audio session changed under it, and iOS hadn’t paused it', true);
     this.hush();
@@ -2180,7 +2185,7 @@ const BG = {
     if (!this.ios || this.on || !v || Sound.muted || P.userPaused || !this.may()) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
     this.on = this.wanted = true; this.held = false;
-    this.since = Date.now(); this.told = false; this.moved = 0;   // for the record: when it was asked for, whether it's been heard, when it last moved
+    this.since = Date.now(); this.told = false; this.moved = 0; this.again = false;   // for the record: when it was asked for, whether it's been heard, when it last moved
     // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
     leaveNative(v);
     aBG.muted = false; aBG.playbackRate = 1;
@@ -2257,7 +2262,7 @@ const BG = {
   },
   // Back to what's current after a stop, on the one that's playing: live once its playlist has reloaded.
   resume() {
-    this.held = false; this.wanted = this.carry = true; this.heard = this.since = Date.now(); this.told = false; this.moved = 0;
+    this.held = false; this.wanted = this.carry = true; this.heard = this.since = Date.now(); this.told = false; this.moved = 0; this.again = true;
     const h = this.hls;
     if (h) {
       h.once(window.Hls.Events.LEVEL_UPDATED, () => {
@@ -2553,7 +2558,7 @@ const audioSays = () => {
 try {
   navigator.audioSession?.addEventListener?.('statechange', () => {
     const now = sessionAt = Date.now(), going = BG.on && !aBG.paused;
-    Away.add(`audio session ${navigator.audioSession.state || 'changed'}${BG.on ? `, the sound ${going ? 'going' : 'paused'}${clockSays()}` : ''}`, going);
+    Away.add(`audio session ${navigator.audioSession.state || 'changed'}${BG.on ? `, the sound ${going ? `going${BG.told ? ` ${((now - BG.toldAt) / 1000).toFixed(1)} s` : ''}` : 'paused'}${clockSays()}` : ''}`, going);
     BG.lost(now);   // taken for another app with no pause here: the page stops its sound itself
   });
 } catch {}
