@@ -11,6 +11,8 @@ var ALLOW = /^https:\/\/(([a-z0-9-]+\.)*ttvnw\.net\/|[a-z0-9]+\.cloudfront\.net\
 function doGet(e) {
   var p = (e && e.parameter) || {};
   if (p.stats) return reply_(200, stats_());
+  if (p.logs) return reply_(200, logs_(String(p.logs)));
+  if (p.log) keep_(p);
   var seated = !p.who || seat_(p.who, p.take);
   if (p.ping) return note_(p, reply_(seated ? 200 : 409, 'pong'));
   if (!seated) return note_(p, reply_(409, 'another page is playing'), 409);
@@ -74,6 +76,40 @@ function stats_() {
         kinds: s.kinds, pings: s.pings || 0, takes: s.takes || 0, refused: s.refused || 0, lastOdd: s.last || 0, calledAs: s.ns || [], playlists: s.us || {},
         first: new Date(s.t0).toISOString(), lastSeen: Math.round((now - s.t1) / 1000) + ' s ago' };
     }).filter(Boolean).sort(function (a, b) { return parseInt(a.lastSeen, 10) - parseInt(b.lastSeen, 10); }), null, 1);
+  } catch (err) {
+    return String(err);
+  }
+}
+
+// The phone's own record of leaving, coming back and what iOS did to its sound (Log in index.html, the lines of the settings sheet's "Away"),
+// kept so it can be read from the PC days later without a screenshot: ?logs=<key>. What iOS does to a page out of sight can't be seen from
+// anywhere else, and the sheet keeps 24 lines. Twelve chunks of 8 kB, the oldest written over, each batch under the time it came in (UTC), the
+// page and its build. Reading takes the key, which whoever reads first names (done from the PC as this was deployed, and kept there): the
+// lines say when Wraith was opened and on what, which is nobody else's to read.
+function keep_(p) {
+  try {
+    var lock = LockService.getScriptLock();
+    if (!lock.tryLock(2000)) return;
+    try {
+      var props = PropertiesService.getScriptProperties(), n = +props.getProperty('logN') || 0, cur = props.getProperty('log' + n) || '';
+      var text = '# ' + new Date().toISOString().slice(0, 19) + 'Z ' + String(p.pg || p.who || '-').slice(0, 8) + ' ' + String(p.b || '').slice(0, 10) + '\n' + String(p.log).slice(0, 2400) + '\n';
+      if (cur.length + text.length > 8000) { n = (n + 1) % 12; cur = ''; }
+      var put = { logN: String(n) };
+      put['log' + n] = cur + text;
+      props.setProperties(put);
+    } finally {
+      lock.releaseLock();
+    }
+  } catch (err) {}
+}
+function logs_(key) {
+  try {
+    var props = PropertiesService.getScriptProperties(), all = props.getProperties();
+    if (!all.logKey && key.length >= 24) { props.setProperty('logKey', key.slice(0, 64)); all.logKey = key.slice(0, 64); }
+    if (!all.logKey || all.logKey !== key) return 'not without the key';
+    var n = +all.logN || 0, out = '';
+    for (var i = 1; i <= 12; i++) out += all['log' + ((n + i) % 12)] || '';
+    return out;
   } catch (err) {
     return String(err);
   }

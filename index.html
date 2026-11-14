@@ -2101,7 +2101,7 @@ const BG = {
     Away.add('sound gave up');
     this.hush();
   },
-  hush() { this.wanted = this.carry = false; aBG.pause(); this.hls?.stopLoad(); },   // stopped: no relay polling while paused
+  hush() { this.wanted = this.carry = false; this.moved = 0; aBG.pause(); this.hls?.stopLoad(); },   // stopped: no relay polling while paused
   // Whether a player that's been waiting on something is still the one, and still wanted: too long quiet meanwhile, it gives up (lapse).
   still(h) {
     if (this.hls !== h || !this.wanted) return false;
@@ -2118,6 +2118,7 @@ const BG = {
     if (!this.ios || this.on || !v || Sound.muted || P.userPaused || !this.may()) return;
     if (P.feed === 'live' ? !(P.audioUrl && P.hls && window.Hls) : P.feed === 'cdn' ? !P.base : !P.vodAudio?.length) return;
     this.on = this.wanted = true; this.held = false;
+    this.since = Date.now(); this.told = false; this.moved = 0;   // for the record: when it was asked for, whether it's been heard, when it last moved
     // iOS gives Control Center to a video in its fullscreen player, muted or not, and from here on that one's paused
     leaveNative(v);
     aBG.muted = false; aBG.playbackRate = 1;
@@ -2192,7 +2193,7 @@ const BG = {
   },
   // Back to what's current after a stop, on the one that's playing: live once its playlist has reloaded.
   resume() {
-    this.held = false; this.wanted = this.carry = true; this.heard = Date.now();
+    this.held = false; this.wanted = this.carry = true; this.heard = this.since = Date.now(); this.told = false; this.moved = 0;
     const h = this.hls;
     if (h) {
       h.once(window.Hls.Events.LEVEL_UPDATED, () => {
@@ -2344,16 +2345,17 @@ aBG.addEventListener('error', () => {
 // plays it again once that app stops, unless it's paused again now, and a play from here would take the sound back off that app.
 aBG.addEventListener('pause', () => {
   if (!BG.on || !BG.wanted || aBG.ended || aBG.error) return;
-  Away.add('iOS paused the sound');
+  Away.add(`iOS paused the sound, ${Math.round((Date.now() - BG.since) / 1000)} s in${audioSays()}`, true);
   BG.hush();
 });
 aBG.addEventListener('play', () => {
   if (!BG.on || BG.wanted) return;
-  Away.add('stopped a restart');
+  Away.add('stopped a restart' + audioSays(), true);
   aBG.pause();
 });
 aBG.addEventListener('playing', () => {
   if (!BG.on) return;
+  if (!BG.told) { BG.told = true; Away.add(`sound heard ${((Date.now() - BG.since) / 1000).toFixed(1)} s on`); }   // "sound on" is only the asking
   BG.claim();
   setTimeout(() => { if (BG.on) BG.claim(); }, 2000);   // and again, in case it wasn't ready for the first
 });
@@ -2447,12 +2449,47 @@ const Pages = {
 };
 if (Pages.ch) Pages.ch.onmessage = e => Pages.heard(e.data);
 // What each page did about leaving and coming back. The settings sheet shows it, so a screenshot says what iOS did.
-let saidHidden = document.hidden;
-const Away = {
-  add(what) {
-    if (ios) store.set('away', [...store.get('away', []), `${new Date().toTimeString().slice(0, 8)} ${Pages.id} ${what}`].slice(-24));
+// The same lines go on to the relay (Log), where the PC can read days of them (?logs=<key>): what iOS does to the sound with the app away
+// can't be seen from anywhere else, and the sheet's lines are long gone by the time anyone asks (Jerry, 2026-11-13: dictating in another app
+// stopped working after the sound had been going behind it, "even force quit and there's no sound", and nothing here said what had happened).
+// Only the phone sends (a page that sits), and only while it's running anyway: in front, or away with its sound's player up. Out of sight
+// with nothing to hear, the lines wait in the page's storage for the next time, as nothing asks anything then. They go as from a page that
+// doesn't sit (pg), so the seat is left alone, and a send that fails waits for the next line rather than trying again by itself.
+const Log = {
+  t: 0, sentAt: 0, busy: false,
+  add(line, now) { store.set('logOut', [...store.get('logOut', []), line].slice(-60)); this.soon(now); },
+  may() { return Pages.seated && Pages.shown && !Pages.idle() && (!document.hidden || BG.on); },
+  // 10 s apart at the least, but for what iOS has just done to the sound (now): the page may be frozen within seconds of it
+  soon(now) { clearTimeout(this.t); if (this.may()) this.t = setTimeout(() => this.send(), now ? 300 : Math.max(1500, 10e3 - (Date.now() - this.sentAt))); },
+  async send() {
+    const out = store.get('logOut', []);
+    if (!out.length || this.busy || !this.may()) return;
+    let n = 0, size = 0;
+    while (n < out.length && n < 25 && size + out[n].length < 1800) size += out[n++].length + 1;
+    this.busy = true; this.sentAt = Date.now();
+    let sent = false;
+    try {
+      const r = await fetch(`${RELAY}?ping=1&pg=${Pages.id}&b=${BUILD}&log=${encodeURIComponent(out.slice(0, n).join('\n'))}`, { cache: 'no-store', keepalive: true, signal: AbortSignal.timeout(15e3) });
+      sent = r.ok && (await r.text()).startsWith('200');
+    } catch {}
+    this.busy = false;
+    if (!sent) return;
+    store.set('logOut', store.get('logOut', []).slice(n));
+    if (store.get('logOut', []).length) this.soon();
   },
 };
+let saidHidden = document.hidden;
+const Away = {
+  add(what, now) {   // now: it goes to the relay at once
+    if (!ios) return;
+    const line = `${new Date().toTimeString().slice(0, 8)} ${Pages.id} ${String(what).slice(0, 160)}`;
+    store.set('away', [...store.get('away', []), line].slice(-24));
+    Log.add(line, now);
+  },
+};
+// The phone's audio session, where WebKit says (navigator.audioSession, its state behind a flag on some versions): '' where it doesn't.
+const audioSays = () => { try { const s = navigator.audioSession?.state; return s ? `, audio session ${s}` : ''; } catch { return ''; } };
+try { navigator.audioSession?.addEventListener?.('statechange', () => Away.add(`audio session ${navigator.audioSession.state}`)); } catch {}
 document.addEventListener('visibilitychange', () => {
   Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}${Awake.leaving()}` : 'back');
   saidHidden = document.hidden;
@@ -2562,9 +2599,11 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
     P.taken = false;
     if (document.hidden && !BG.on) { P.userPaused = false; BG.carry = true; BG.heard = Date.now(); BG.start(); if (BG.on) return; }
     if (BG.on) {
-      if (!aBG.paused) return hold();   // iOS is showing something else as paused: its button still has to stop what you hear
+      // iOS is showing something else as paused: its button still has to stop what you hear. That's only so with something to hear: a sound
+      // iOS took without pausing it here (the page frozen first) reads as playing too, and then play has to play.
+      if (!aBG.paused && Date.now() - BG.heard < 2500) return hold();
       BG.resume();
-      aBG.play().catch(() => {});
+      aBG.play().catch(e => Away.add(`the sound wouldn’t play (${e.name})`));
     } else if (P.active()?.paused) togglePlay();
   });
   const pause = () => {
@@ -2765,7 +2804,12 @@ vC.addEventListener('timeupdate', () => {
 });
 aBG.addEventListener('timeupdate', () => {
   if (!BG.on) return;
-  if (!aBG.paused && BG.wanted) BG.heard = Date.now();
+  if (!aBG.paused && BG.wanted) {
+    // nothing heard for a while with no pause to say why: iOS froze the page, or took the sound without telling it
+    const now = Date.now();
+    if (BG.moved && now - BG.moved > 4000) Away.add(`sound stood still ${Math.round((now - BG.moved) / 1000)} s${audioSays()}`);
+    BG.heard = BG.moved = now;
+  }
   BG.pace();
   if (P.feed === 'vod') { savePlace(aBG.currentTime); if (aBG.currentTime > 1) BG.at = aBG.currentTime; }
 });
@@ -2863,6 +2907,8 @@ setInterval(() => {
   const slept = Date.now() - lastTick;
   lastTick = Date.now();
   if (slept > 60e3 && document.hidden) Away.add(`woke out of sight, after ${Math.round(slept / 60e3)} min frozen`);
+  // with the sound's player up, a shorter one too: iOS freezes a page whose sound it has taken, and says nothing to it
+  else if (slept > 5e3 && BG.on) Away.add(`frozen ${Math.round(slept / 1000)} s, the sound ${BG.wanted ? (aBG.paused ? 'wanted but paused' : 'on') : 'stopped'}${audioSays()}`);
   if (BG.on && BG.wanted && !BG.going()) BG.lapse();
   if (document.hidden !== saidHidden) {   // iOS doesn't always say the app left or came back (WebKit 207256)
     Away.add('iOS didn’t say');

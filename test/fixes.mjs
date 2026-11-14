@@ -8,7 +8,7 @@ const which = process.argv[2] || 'all', want = s => which === 'all' || which ===
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery', 'handover', 'kick'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery', 'handover', 'kick', 'log'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -4074,7 +4074,9 @@ if (want('kick')) {
       return route.abort().catch(never);
     });
     await makeStream(page, async (route, u, body) => {
-      if (u) { S.relay++; (S.urls ||= []).push(u.replace(/\?.*/, '').slice(-40)); } else { S.pings++; if (S.seatTaken) body = '409\nanother page is playing'; }
+      if (u) { S.relay++; (S.urls ||= []).push(u.replace(/\?.*/, '').slice(-40)); }
+      else if (new URL(route.request().url()).searchParams.get('log')) S.logs = (S.logs || 0) + 1;   // the phone's record on its way (Log), which asks nothing about the seat
+      else { S.pings++; if (S.seatTaken) body = '409\nanother page is playing'; }
       await sleep(300); return route.fulfill({ status: 200, headers, body }).catch(never);
     });
     await page.goto(base + path, { waitUntil: 'domcontentloaded' });
@@ -4626,6 +4628,105 @@ if (want('battery')) {
       await page.evaluate(() => { wraith.Pages.seenAt = Date.now() - 31 * 60e3; }); await sleep(4500);
       const shown = await page.evaluate(() => document.getElementById('sheetBody').textContent);
       ok('one that runs out with nobody about for half an hour isn’t replaced, and says so', codes === 2 && /That code ran out/.test(shown), `${codes} ${shown.slice(0, 80)}`);
+      await done();
+    })(),
+  ]);
+}
+
+if (want('log')) {
+  // The phone's record of leaving, coming back and what iOS did to its sound goes on to the relay, to be read from the PC (Jerry, 2026-11-13:
+  // dictating in another app stopped working after the sound had been going behind it, with nothing to say what had happened on the phone).
+  const phone = () => Object.defineProperty(navigator, 'webdriver', { get: () => false });   // the page sits, as on the phone
+  const logged = (relay = answer) => { const got = []; return { got, relay: route => { const q = new URL(route.request().url()).searchParams; if (q.get('log')) got.push({ at: Date.now(), who: q.get('who'), take: q.get('take'), pg: q.get('pg'), b: q.get('b'), text: q.get('log') }); return relay(route); } }; };
+  const all = got => got.map(g => g.text).join('\n');
+  await Promise.all([
+    (async () => {
+      const { got, relay } = logged();
+      const { page, done } = await stage(relay, { init: phone });
+      await levels(page, 15000);
+      await page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 0.5; }, null, { timeout: 15000 }).catch(never);
+      await sleep(3500);
+      ok('in front, the record’s lines go to the relay within a few seconds', got.length >= 1 && /loaded \?c=staged/.test(all(got)), all(got).replace(/\n/g, ' | '));
+      ok('as from a page that doesn’t sit, with its build: the seat is left alone', got.every(g => g.pg && !g.who && !g.take && g.b), JSON.stringify(got.map(g => [g.pg, g.who, g.take, g.b])));
+      // away with the sound on: the page is running anyway
+      let n = got.length;
+      await vis(page, true); await sounding(page);
+      await page.waitForFunction(() => /sound heard/.test(localStorage.getItem('wraith.away') || ''), null, { timeout: 8000 }).catch(never);
+      await sleep(11000);
+      ok('away with the sound going, what’s written goes too, with when the sound was asked for and when it was heard', /sound on/.test(all(got.slice(n))) && /sound heard \d+\.\d s on/.test(all(got.slice(n))), all(got.slice(n)).replace(/\n/g, ' | '));
+      // iOS takes the sound (the mic in another app): that line goes at once, as the page is frozen seconds later
+      n = got.length;
+      const t = Date.now();
+      await page.evaluate(() => document.getElementById('aBG').pause());
+      await page.waitForFunction(() => /iOS paused the sound/.test(localStorage.getItem('wraith.away') || ''), null, { timeout: 3000 }).catch(never);
+      await sleep(1500);
+      const first = got.slice(n).find(g => /iOS paused the sound, \d+ s in/.test(g.text));
+      ok('the sound taken from outside is written with how long it had been going, and sent within a second', !!first && first.at - t < 1500, `${first ? first.at - t : 'not'} ms: ${all(got.slice(n)).replace(/\n/g, ' | ')}`);
+      await sleep(600);
+      ok('and nothing’s left waiting', await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.logOut') || '[]').length === 0));
+      await done();
+    })(),
+    (async () => {
+      // out of sight with nothing to hear the page asks nothing of anyone, this included: the lines wait for the return
+      const { got, relay } = logged();
+      const { page, done } = await stage(relay, { init: phone });
+      await levels(page, 15000);
+      await sleep(3500);
+      await page.evaluate(() => document.getElementById('bMute').click());
+      await sleep(11000);   // past the spacing, so the next would go at once if anything let it
+      const n = got.length, t = Date.now();
+      await vis(page, true); await sleep(5000);
+      ok('away with the sound off, nothing’s sent', got.slice(n).length === 0, all(got.slice(n)));
+      const waiting = await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.logOut') || '[]'));
+      ok('the lines wait on the phone', waiting.some(l => / left/.test(l)), waiting.join(' | '));
+      await vis(page, false); await sleep(3500);
+      ok('and go on the return, in order', / left[\s\S]* back/.test(all(got.slice(n))), all(got.slice(n)).replace(/\n/g, ' | '));
+      await done();
+    })(),
+    (async () => {
+      // a send the relay doesn't take keeps its lines, and isn't tried again by itself
+      let down = true;
+      const { got, relay } = logged(route => down && new URL(route.request().url()).searchParams.get('log') ? route.fulfill({ status: 200, headers, body: '599\nno' }).catch(never) : answer(route));
+      const { page, done } = await stage(relay, { init: phone });
+      await levels(page, 15000);
+      await sleep(4000);
+      const tries = got.length;
+      await sleep(12000);
+      ok('a send that fails isn’t tried again by itself', tries >= 1 && got.length === tries, `${tries} then ${got.length}`);
+      const kept = await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.logOut') || '[]').length);
+      down = false;
+      await page.evaluate(() => { wraith.Pages.heard('anyone'); });   // (nothing written by that)
+      await vis(page, true); await vis(page, false); await sleep(3500);
+      ok('its lines go with the next ones', kept >= 1 && /loaded \?c=staged[\s\S]* back/.test(got.at(-1).text) && await page.evaluate(() => JSON.parse(localStorage.getItem('wraith.logOut') || '[]').length === 0), `${kept} kept; ${got.at(-1).text.replace(/\n/g, ' | ')}`);
+      await done();
+    })(),
+    (async () => {
+      // any page but the phone's sends none: a computer, a test run
+      const { got, relay } = logged();
+      const { page, done } = await stage(relay);
+      await levels(page, 15000);
+      await vis(page, true); await sleep(600); await vis(page, false);
+      await sleep(4000);
+      ok('a page that isn’t the phone’s sends no record', got.length === 0, all(got));
+      await done();
+    })(),
+    (async () => {
+      // Control Center's play, with the sound's player up and not paused: it stops a sound that's going (iOS showing something else as paused),
+      // and plays one iOS took without pausing it here
+      const { page, done } = await stage(answer, { init: phone });
+      await levels(page, 15000);
+      await page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 0.5; }, null, { timeout: 15000 }).catch(never);
+      await vis(page, true); await sounding(page); await sleep(1200);
+      await page.evaluate(() => { document.getElementById('aBG').playbackRate = 0; });   // not paused, and not moving: as with the sound taken and the page not told
+      await sleep(3200);
+      await cc(page, 'play'); await sleep(400);
+      let s = await page.evaluate(() => ({ wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
+      ok('play, with the sound up but silent for seconds, plays it', s.wanted && !s.held && !s.paused, JSON.stringify(s));
+      await page.evaluate(() => { document.getElementById('aBG').playbackRate = 1; });
+      await sounding(page); await sleep(1500);
+      await cc(page, 'play'); await sleep(400);
+      s = await page.evaluate(() => ({ wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
+      ok('and with the sound going, it still stops it', !s.wanted && s.held && s.paused, JSON.stringify(s));
       await done();
     })(),
   ]);
