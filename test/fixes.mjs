@@ -4825,17 +4825,39 @@ if (want('log')) {
       ok('and is written as iOS’s', /iOS said pause as it paused the sound/.test(all(got.slice(n))) && !/button: pause/.test(all(got.slice(n))), all(got.slice(n)).replace(/\n/g, ' | '));
       s = await back();
       ok('and back in the app the stream plays', !s.on && !s.userPaused && !s.vPaused, JSON.stringify(s));
-      await away();
+      // What the phone showed of dictating in the Claude app on iOS 27.2: no pause at all as the mic starts, only the audio session changing
+      // state under a sound that's going, and WebKit taking it back a second later for a sound it still counts as playing. The page stops
+      // the sound itself at that first change.
+      const change = () => page.evaluate(() => navigator.audioSession.dispatchEvent(new Event('statechange')));
+      await away(); await sleep(1500);
       n = got.length;
-      await page.evaluate(() => navigator.audioSession.dispatchEvent(new Event('statechange')));
-      await sleep(300);
+      await change(); await sleep(1500);
+      s = await state();
+      ok('the audio session changing under a sound that’s going stops the sound, and holds nothing', s.on && !s.wanted && !s.held && s.paused, JSON.stringify(s));
+      let said = all(got.slice(n));
+      ok('written with how the sound stood, and sent at once', /audio session changed, the sound going, its clock moved \d\.\d s before/.test(said) && /stopped the sound: its audio session changed under it/.test(said), said.replace(/\n/g, ' | '));
+      const relayAsks = () => page.evaluate(() => wraith.BG.hls?.loadingEnabled);
+      ok('and it stops asking for its playlist', !(await relayAsks()));
+      await change(); await sleep(200);   // the session changing again with the sound stopped is nothing to it
+      s = await state();
+      ok('a change with the sound stopped changes nothing', s.on && !s.wanted && !s.held && s.paused, JSON.stringify(s));
+      s = await back();
+      ok('and back in the app the stream plays', !s.on && !s.userPaused && !s.vPaused, JSON.stringify(s));
+      await change(); await sleep(300);   // in front, where the picture taking the sound over makes one
+      s = await page.evaluate(() => ({ vPaused: wraith.P.active().paused, on: wraith.BG.on }));
+      ok('in front, a change stops nothing', !s.vPaused && !s.on, JSON.stringify(s));
+      await vis(page, true); await sounding(page);
+      await change(); await sleep(300);   // its own start can make one
+      s = await state();
+      ok('nor does one as the sound starts', s.on && s.wanted && !s.paused, JSON.stringify(s));
+      await sleep(1200);
+      n = got.length;
       await cc(page, 'pause'); await sleep(400);
       s = await state();
       ok('your own pause from the lock screen, with the sound going, holds', !s.wanted && s.held && s.paused, JSON.stringify(s));
       await sleep(1500);
-      const said = all(got.slice(n));
-      ok('written as yours, with how lately the sound’s clock had moved, and sent though a send was already on its way', /button: pause, the sound going, its clock moved \d\.\d s before/.test(said), said.replace(/\n/g, ' | '));
-      ok('and a change of the audio session is written with how the sound stood, and the pause timed from it', /audio session changed, the sound going, its clock moved \d\.\d s before/.test(said) && /button: pause[^\n]*, \d+ s after the audio session changed/.test(said), said.replace(/\n/g, ' | '));
+      said = all(got.slice(n));
+      ok('written as yours, with how lately the sound’s clock had moved and how long since the audio session changed', /button: pause, the sound going, its clock moved \d\.\d s before, \d+ s after the audio session changed/.test(said), said.replace(/\n/g, ' | '));
       await vis(page, false); await sleep(1500);
       s = await page.evaluate(() => ({ on: wraith.BG.on, userPaused: wraith.P.userPaused, vPaused: wraith.P.active().paused }));
       ok('and stays paused for when you’re back', !s.on && s.userPaused && s.vPaused, JSON.stringify(s));

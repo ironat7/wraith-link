@@ -2145,6 +2145,25 @@ const BG = {
     this.hush();
   },
   hush() { this.wanted = this.carry = false; this.moved = 0; aBG.pause(); this.hls?.stopLoad(); },   // stopped: no relay polling while paused
+  // The audio session changed state under a sound that was going, with no pause from iOS: another app has taken it, and the page stops
+  // the sound itself. Jerry, 2026-11-13: dictating in the Claude app "blocks" with this sound behind it ("no words come out, it fails, but
+  // the dictation animation just shows full like sound"), still after a force quit, until YouTube had played. The phone's record of his
+  // tries that night: no pause reached the sound as his mic started. The audio session changed, and changed again a second or two later
+  // (21:55:49 and :50, :52 and :54, 21:56:05 and :06), the sound going throughout; a pause came only some of the times, 2 to 4 s in.
+  // WebKit's source has both halves. A change with no interruption is its web process hearing from its GPU process that the session is no
+  // longer active, "such as this process losing the session to another one" (RemoteAudioSession::configurationChanged), which pauses
+  // nothing; iOS 27 has new notices for a session going inactive that WebKit has yet to move to (the FIXME in AudioSessionIOS.mm). And
+  // with a player it still counts as playing, WebKit activates the session again by itself (maybeActivateAudioSession, on any player's
+  // canProduceAudioChanged), which takes it back off the app that had just been given it: his recording died a second in, and this sound
+  // came back over it. A sound that's stopped here asks for nothing back. Not for a change as the sound starts, which its own start can
+  // make, nor in front, where the picture taking over makes one. WebKit keeps the state itself behind a flag on 27.2; where it's given,
+  // "active" is no loss.
+  lost(now) {
+    if (!this.on || !this.wanted || aBG.paused || !document.hidden || this.back || !this.told || now - this.toldAt < 2000) return;
+    try { if (navigator.audioSession.state === 'active') return; } catch {}
+    Away.add('stopped the sound: its audio session changed under it, and iOS hadn’t paused it', true);
+    this.hush();
+  },
   // Whether a player that's been waiting on something is still the one, and still wanted: too long quiet meanwhile, it gives up (lapse).
   still(h) {
     if (this.hls !== h || !this.wanted) return false;
@@ -2169,11 +2188,10 @@ const BG = {
       // It starts 6.5 s back from the end of its list, hls.js's own start: a couple of seconds of the stream heard twice, and from the first
       // moment the room a page needs whose timers iOS slows and which asks the relay as seldom as this does. And it only ever plays at the
       // stream's own speed. For four hours on 2026-11-13 it started at the very moment the picture stopped and fell back to that distance
-      // by playing at 0.95×, for up to a minute. That evening, Jerry: dictating in the Claude app no longer worked once this sound was going
-      // behind it ("no words come out, it fails, but the dictation animation just shows full like sound"), on the phone's speaker, from the
-      // first try with the sound still on, on through a force quit, until YouTube had played in the background. His mic takes the sound
-      // seconds after he leaves, so always at 0.95×, and nothing else about how the sound is played had changed that day; the page does
-      // nothing when iOS takes the sound but stop (the pause listeners below). Whether the speed is what did it isn't known.
+      // by playing at 0.95×, for up to a minute. That evening Jerry found dictating in the Claude app no longer worked with this sound
+      // behind it, and the speed was the one thing about how the sound is played that had changed that day, so it came out. The phone's
+      // record then showed the same failed tries at 1× (lost, above, has what they were): the speed wasn't it. It stays out until the
+      // phone has shown dictation working, so that one thing changes at a time; it's 38cac2a's pace and its EXT-X-START to bring back.
       const h = this.hls = new window.Hls({ ...LOADING, pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12,
         backBufferLength: 10 });   // what's been heard isn't kept: hours away would fill memory iOS takes back by dropping the page
@@ -2388,7 +2406,7 @@ aBG.addEventListener('play', () => {
 });
 aBG.addEventListener('playing', () => {
   if (!BG.on) return;
-  if (!BG.told) { BG.told = true; Away.add(`sound heard ${((Date.now() - BG.since) / 1000).toFixed(1)} s on`); }   // "sound on" is only the asking
+  if (!BG.told) { BG.told = true; BG.toldAt = Date.now(); Away.add(`sound heard ${((Date.now() - BG.since) / 1000).toFixed(1)} s on`); }   // "sound on" is only the asking
   BG.claim();
   setTimeout(() => { if (BG.on) BG.claim(); }, 2000);   // and again, in case it wasn't ready for the first
 });
@@ -2534,9 +2552,9 @@ const audioSays = () => {
 };
 try {
   navigator.audioSession?.addEventListener?.('statechange', () => {
-    sessionAt = Date.now();
-    const going = BG.on && !aBG.paused;
+    const now = sessionAt = Date.now(), going = BG.on && !aBG.paused;
     Away.add(`audio session ${navigator.audioSession.state || 'changed'}${BG.on ? `, the sound ${going ? 'going' : 'paused'}${clockSays()}` : ''}`, going);
+    BG.lost(now);   // taken for another app with no pause here: the page stops its sound itself
   });
 } catch {}
 document.addEventListener('visibilitychange', () => {
