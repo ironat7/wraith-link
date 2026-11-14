@@ -1738,6 +1738,7 @@ const P = {
     if (p) p.catch(err => {
       if (err.name !== 'NotAllowedError' || v.classList.contains('off') || document.hidden) return;
       v.muted = true; UI.unmute(true); Sound.icon(true);   // browsers still allow muted autoplay
+      Away.add('started without sound: iOS wouldn’t play it with');
       v.play().catch(() => UI.big(true));
     });
   },
@@ -2345,7 +2346,7 @@ const BG = {
     this.stop(true);   // the sound stops and the picture's unmuted, in the one go
     // A picture no tap has played with sound isn't let unmuted: WebKit pauses it there and then (updateShouldPlay). Muted with the button
     // then, as P.play has it: what's playing is on screen, and the button is a tap away.
-    if (v.paused && !Sound.muted) { v.muted = true; UI.unmute(true); Sound.icon(true); const p = v.play(); if (p) p.catch(() => UI.big(true)); }
+    if (v.paused && !Sound.muted) { v.muted = true; UI.unmute(true); Sound.icon(true); Away.add('back without sound: iOS wouldn’t have the picture unmuted'); const p = v.play(); if (p) p.catch(() => UI.big(true)); }
     P.moved = Date.now();
     UI.spin(false); UI.playIcon();
     Away.add(`back in step, the picture in ${((Date.now() - b.since) / 1000).toFixed(1)} s`);
@@ -2512,15 +2513,33 @@ if (Pages.ch) Pages.ch.onmessage = e => Pages.heard(e.data);
 // Only the phone sends (a page that sits), and only while it's running anyway: in front, or away with its sound's player up. Out of sight
 // with nothing to hear, the lines wait in the page's storage for the next time, as nothing asks anything then. They go as from a page that
 // doesn't sit (pg), so the seat is left alone, and a send that fails waits for the next line rather than trying again by itself.
+// The lines wait in this page's memory too. The phone's storage can take a write back with nothing thrown: on 2026-11-14 a page loaded
+// after a force quit sent its first lines, then one line four times over six minutes and nothing it did after (Jerry: "just bugged,
+// plus muted even after force quit"), though the relay's count of its calls has it leaving and starting its sound. What a page reads
+// there is then what storage last kept: a line taken off after sending is back, and a new one is gone. So what storage hasn't kept goes
+// from here, what it still has after it went isn't sent again, and the record says so, once.
 const Log = {
   t: 0, sentAt: 0, busy: false, rush: false,   // rush: a line that should go at once came while a send was on its way
-  add(line, now) { store.set('logOut', [...store.get('logOut', []), line].slice(-60)); if (now) this.rush = true; this.soon(now); },
+  mine: [], went: new Set(), said: false,       // this page's lines not yet sent; the ones it has sent; whether storage has been found out
+  add(line, now) {
+    this.mine = [...this.mine, line].slice(-60);
+    store.set('logOut', [...store.get('logOut', []), line].slice(-60));
+    if (now) this.rush = true;
+    this.soon(now);
+  },
+  waiting() {
+    const kept = store.get('logOut', []);
+    if (!this.said && kept.some(l => this.went.has(l))) { this.said = true; Away.add('the phone’s storage isn’t keeping what’s written: a line sent and taken off is back'); return this.waiting(); }
+    const left = kept.filter(l => !this.went.has(l));
+    return [...left, ...this.mine.filter(l => !left.includes(l))];
+  },
   may() { return Pages.seated && Pages.shown && !Pages.idle() && (!document.hidden || BG.on); },
   // 10 s apart at the least, but for what iOS has just done to the sound (now): the page may be frozen within seconds of it
   soon(now) { clearTimeout(this.t); if (this.may()) this.t = setTimeout(() => this.send(), now ? 300 : Math.max(1500, 10e3 - (Date.now() - this.sentAt))); },
   async send() {
-    const out = store.get('logOut', []);
-    if (!out.length || this.busy || !this.may()) return;
+    if (this.busy || !this.may()) return;
+    const out = this.waiting();
+    if (!out.length) return;
     let n = 0, size = 0;
     while (n < out.length && n < 25 && size + out[n].length < 1800) size += out[n++].length + 1;
     this.busy = true; this.sentAt = Date.now(); this.rush = false;
@@ -2531,8 +2550,11 @@ const Log = {
     } catch {}
     this.busy = false;
     if (!sent) return;
-    store.set('logOut', store.get('logOut', []).slice(n));
-    if (store.get('logOut', []).length) this.soon(this.rush);
+    const gone = new Set(out.slice(0, n));
+    this.went = new Set([...this.went, ...gone].slice(-300));
+    this.mine = this.mine.filter(l => !gone.has(l));
+    store.set('logOut', store.get('logOut', []).filter(l => !gone.has(l)));
+    if (this.waiting().length) this.soon(this.rush);
   },
 };
 let saidHidden = document.hidden;
@@ -4462,9 +4484,9 @@ function togglePlay() {
 $('bPlay').onclick = togglePlay;
 $('bigPlay').onclick = () => { UI.big(false); unlock(); P.userPaused = false; P.play(P.active() || vL); };
 // what you hear, which a browser's autoplay rules can have muted. Only coming off mute starts up the other players: with sound on, iPhone lets one video play at a time
-$('bMute').onclick = () => { const m = !(BG.back ? aBG.muted : P.active()?.muted ?? Sound.muted); if (!m) unlock(); Sound.set(m); };
+$('bMute').onclick = () => { const m = !(BG.back ? aBG.muted : P.active()?.muted ?? Sound.muted); if (!m) unlock(); Sound.set(m); Away.add(m ? 'muted, by its button' : 'unmuted, by its button'); };
 $('vol').addEventListener('input', e => { Sound.setLevel(+e.target.value, true); hud(true); });
-$('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); };
+$('unmute').onclick = e => { e.stopPropagation(); unlock(); Sound.set(false); P.play(P.active()); Away.add('unmuted, by Tap to unmute'); };
 $('bBack').onclick = $('bBack2').onclick = () => back();
 async function follow(u, on) {
   $('bFollow').disabled = true;
@@ -5063,7 +5085,7 @@ Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
 window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake, Auto };   // for poking at playback from devtools
-Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : ''));
+Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : '') + (Sound.muted ? ', the sound saved as off' : ''));
 Pages.tell('here');
 route(false);
 })();

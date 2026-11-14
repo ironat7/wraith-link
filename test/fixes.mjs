@@ -4413,6 +4413,29 @@ if (want('log')) {
       await done();
     })(),
     (async () => {
+      // The phone's storage taking writes back with nothing thrown (2026-11-14: a page after a force quit sent one line four times and
+      // nothing it did after): what it won't keep goes from the page's memory, and what it gives back isn't sent again
+      const { got, relay } = logged();
+      const { page, done } = await stage(relay, { init: () => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        const real = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) { if (window.__lose && k === 'wraith.logOut') return; return real.call(this, k, v); };
+      } });
+      await levels(page, 15000);
+      await sleep(13000);   // the first lines gone, and past the spacing
+      const n = got.length;
+      await page.evaluate(() => { document.getElementById('bMute').click(); window.__lose = true; });   // a line in storage, which then keeps nothing more
+      await sleep(4000);
+      const first = got.slice(n).filter(g => /muted, by its button/.test(g.text)).length;
+      await page.evaluate(() => document.getElementById('bMute').click());
+      await sleep(12000);
+      const lines = all(got.slice(n)).split('\n'), twice = lines.filter((l, i) => lines.indexOf(l) !== i);
+      ok('a line storage won’t let go of is sent once', first === 1 && !twice.length, `${first} at first; twice: ${twice.join(' | ')}`);
+      ok('a line storage didn’t keep is sent all the same', lines.some(l => / unmuted, by its button/.test(l)), lines.join(' | '));
+      ok('and the record says storage isn’t keeping what’s written', lines.filter(l => /storage isn’t keeping/.test(l)).length === 1, lines.join(' | '));
+      await done();
+    })(),
+    (async () => {
       // any page but the phone's sends none: a computer, a test run
       const { got, relay } = logged();
       const { page, done } = await stage(relay);
