@@ -698,14 +698,29 @@ function bufAhead(v) {
   return 0;
 }
 const holds = (v, t) => { const b = v.buffered; for (let i = 0; i < b.length; i++) if (b.start(i) <= t && b.end(i) > t + 0.3) return true; return false; };   // loaded there, with a little to play
-// Where a moment of a live stream (Twitch's stamp, in ms) falls on an hls.js player's clock: in the segment holding it, or reckoned on from
-// the newest one listed, as Twitch's segments run back to back. The picture and the sound are stamped alike, which is how one finds the other.
-function posAt(h, when) {
-  const fr = h?.latestLevelDetails?.fragments;
-  if (!fr?.length || !Number.isFinite(when)) return null;
+// A live stream's clock against an hls.js player's. Twitch stamps each segment it lists with when it was sent. The two it only gives notice
+// of, which rewrite makes entries of, come with no stamp and no length: rewrite gives them the length of the segment before, and hls.js
+// reckons their stamps from that. On a stream whose segments aren't all one length both are wrong until Twitch lists them, and hls.js's own
+// figure for what's playing (playingDate) goes by the segment as it was when loaded. xQc's stream, 2026-11-14: one segment in twelve was
+// 1.0 to 2.8 s long, not 2. For the 2 s each that the next two played, the picture read as 0.85 s nearer the stream than it was and then
+// 1 s further, with the picture itself steady, and the speed went to 0.93× and then 1.1× to put right what wasn't wrong: three times in
+// 200 s (Jerry: "xqc stream on wraith stutters, twitch doesn't"). So both ways go by stamped segments alone, reckoned on from the
+// newest of them, as the stream's clock runs on unbroken from there. The picture and the sound are stamped alike, which is how one finds
+// the other.
+const stamped = (h, ok, first) => {   // the newest stamped segment that'll do, or the oldest
   let f = null;
-  for (const x of fr) if (x.programDateTime != null && x.programDateTime <= when) f = x;
-  f ||= fr.find(x => x.programDateTime != null);
+  for (const x of h?.latestLevelDetails?.fragments || []) if (x.rawProgramDateTime && x.programDateTime != null && ok(x)) { f = x; if (first) break; }
+  return f;
+};
+// when the moment at t on the player's clock was sent (ms), or hls.js's figure where no stamped segment is that far back yet
+function dateAt(h, t) {
+  const f = stamped(h, x => x.start <= t);
+  return f ? f.programDateTime + (t - f.start) * 1000 : h?.playingDate?.getTime() ?? null;
+}
+// where a moment of the stream (its stamp, in ms) falls on the player's clock
+function posAt(h, when) {
+  if (!Number.isFinite(when)) return null;
+  const f = stamped(h, x => x.programDateTime <= when) || stamped(h, () => true, true);
   return f ? f.start + (when - f.programDateTime) / 1000 : null;
 }
 
@@ -1784,8 +1799,8 @@ const P = {
   latency() {
     if (this.feed === 'live') {
       if (vL.readyState < 3 && Date.now() < this.quietUntil) return null;   // on its way to the live edge, with the last figure out of date
-      const d = this.hls?.playingDate;
-      return d ? (Date.now() - d.getTime()) / 1000 : null;
+      const d = dateAt(this.hls, vL.currentTime);
+      return d ? (Date.now() - d) / 1000 : null;
     }
     if (this.feed === 'cdn' && vC.readyState > 0 && Number.isFinite(this.start)) return Date.now() / 1000 - this.start - vC.currentTime;
     return null;
@@ -2283,7 +2298,7 @@ const BG = {
     return true;
   },
   lag() {   // how far behind the stream the sound is, or null
-    if (P.feed === 'live') { const d = this.hls?.playingDate; return d ? (Date.now() - d) / 1000 : null; }
+    if (P.feed === 'live') { const d = dateAt(this.hls, aBG.currentTime); return d ? (Date.now() - d) / 1000 : null; }
     return P.feed === 'cdn' && P.start > 0 ? Date.now() / 1000 - P.start - aBG.currentTime : null;
   },
   // Coming back with the sound going, it plays on while the picture loads, muted and held on a frame just ahead of it, and the picture takes over
@@ -2309,7 +2324,7 @@ const BG = {
     UI.playIcon();
     return true;
   },
-  heardAt(b) { return P.feed === 'live' ? posAt(b.h, this.hls?.playingDate?.getTime()) : aBG.currentTime; },   // where the sound is, on the picture's clock
+  heardAt(b) { return P.feed === 'live' ? posAt(b.h, dateAt(this.hls, aBG.currentTime)) : aBG.currentTime; },   // where the sound is, on the picture's clock
   aim(b) {
     const at = this.heardAt(b);
     if (at == null) return;
@@ -5084,7 +5099,7 @@ Sound.set(Sound.muted);
 Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake, Auto };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake, Auto, dateAt, posAt };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : '') + (Sound.muted ? ', the sound saved as off' : ''));
 Pages.tell('here');
 route(false);

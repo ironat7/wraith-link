@@ -3134,6 +3134,24 @@ if (want('player')) {
   // broadcast, the CDN's names with no ladder, and what the stats count.
   await Promise.all([
     (async () => {
+      // A stream whose segments aren't all one length (xQc's, 2026-11-14: Jerry, "xqc stream on wraith stutters, twitch doesn't"): the two
+      // Twitch only gives notice of are listed with the length of the one before, and stamps reckoned from that are wrong. Read from them,
+      // the picture seemed a second nearer the stream and then a second further, and the speed changed for nothing. Only Twitch's own
+      // stamps count, reckoned on from the newest.
+      const { page, done } = await stage(answer);
+      await levels(page, 15000);
+      const got = await page.evaluate(() => {
+        const seg = (start, at, own) => ({ start, programDateTime: at, rawProgramDateTime: own ? 'stamped' : null });
+        // listed: one of 2 s, then one of 1 s. Notice of two more, taken as 1 s each: really 2 s, so the second's start and stamp are both out
+        const h = { playingDate: new Date(5), latestLevelDetails: { fragments: [seg(10, 1000000, true), seg(12, 1002000, true), seg(13, 1003000, false), seg(14, 1004700, false)] } };
+        return { on: wraith.dateAt(h, 14.5), at: wraith.posAt(h, 1004500), early: wraith.dateAt(h, 5), before: wraith.posAt(h, 999000), none: wraith.dateAt({ playingDate: new Date(7) }, 3), nowhere: wraith.posAt({}, 1) };
+      });
+      ok('what’s playing is timed from the newest segment Twitch stamped, not from one it only gave notice of', got.on === 1004500, JSON.stringify(got));
+      ok('and a moment of the stream is found the same way', got.at === 14.5, JSON.stringify(got));
+      ok('before any stamped segment, the player’s own figure and the oldest stamp serve', got.early === 5 && got.before === 9 && got.none === 7 && got.nowhere === null, JSON.stringify(got));
+      await done();
+    })(),
+    (async () => {
       // usher refusing the first session is a stale token as often as a sub-only stream: a fresh token gets asked first
       let refused = 0;
       const { page, done } = await stage(route => relayOf(route).includes('usher') && !refused++ ? said(route, '403\nForbidden') : answer(route));
