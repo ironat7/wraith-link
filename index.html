@@ -2489,8 +2489,8 @@ if (Pages.ch) Pages.ch.onmessage = e => Pages.heard(e.data);
 // with nothing to hear, the lines wait in the page's storage for the next time, as nothing asks anything then. They go as from a page that
 // doesn't sit (pg), so the seat is left alone, and a send that fails waits for the next line rather than trying again by itself.
 const Log = {
-  t: 0, sentAt: 0, busy: false,
-  add(line, now) { store.set('logOut', [...store.get('logOut', []), line].slice(-60)); this.soon(now); },
+  t: 0, sentAt: 0, busy: false, rush: false,   // rush: a line that should go at once came while a send was on its way
+  add(line, now) { store.set('logOut', [...store.get('logOut', []), line].slice(-60)); if (now) this.rush = true; this.soon(now); },
   may() { return Pages.seated && Pages.shown && !Pages.idle() && (!document.hidden || BG.on); },
   // 10 s apart at the least, but for what iOS has just done to the sound (now): the page may be frozen within seconds of it
   soon(now) { clearTimeout(this.t); if (this.may()) this.t = setTimeout(() => this.send(), now ? 300 : Math.max(1500, 10e3 - (Date.now() - this.sentAt))); },
@@ -2499,7 +2499,7 @@ const Log = {
     if (!out.length || this.busy || !this.may()) return;
     let n = 0, size = 0;
     while (n < out.length && n < 25 && size + out[n].length < 1800) size += out[n++].length + 1;
-    this.busy = true; this.sentAt = Date.now();
+    this.busy = true; this.sentAt = Date.now(); this.rush = false;
     let sent = false;
     try {
       const r = await fetch(`${RELAY}?ping=1&pg=${Pages.id}&b=${BUILD}&log=${encodeURIComponent(out.slice(0, n).join('\n'))}`, { cache: 'no-store', keepalive: true, signal: AbortSignal.timeout(15e3) });
@@ -2508,7 +2508,7 @@ const Log = {
     this.busy = false;
     if (!sent) return;
     store.set('logOut', store.get('logOut', []).slice(n));
-    if (store.get('logOut', []).length) this.soon();
+    if (store.get('logOut', []).length) this.soon(this.rush);
   },
 };
 let saidHidden = document.hidden;
@@ -2520,9 +2520,25 @@ const Away = {
     Log.add(line, now);
   },
 };
-// The phone's audio session, where WebKit says (navigator.audioSession, its state behind a flag on some versions): '' where it doesn't.
-const audioSays = () => { try { const s = navigator.audioSession?.state; return s ? `, audio session ${s}` : ''; } catch { return ''; } };
-try { navigator.audioSession?.addEventListener?.('statechange', () => Away.add(`audio session ${navigator.audioSession.state}`)); } catch {}
+// The phone's audio session, as far as WebKit says (navigator.audioSession). On iOS 27.2 its state is behind a flag but the event for a
+// change of it still comes (the phone's record, 2026-11-13: "audio session undefined" as a stream started, a second after a pause, and
+// 3 s before iOS said pause with the sound going), so what's written is that it changed, with how the sound stood, and other lines say
+// how long before them that was.
+let sessionAt = 0;
+const clockSays = () => BG.moved ? `, its clock moved ${((Date.now() - BG.moved) / 1000).toFixed(1)} s before` : '';
+const audioSays = () => {
+  try {
+    const s = navigator.audioSession?.state;
+    return s ? `, audio session ${s}` : sessionAt && Date.now() - sessionAt < 60e3 ? `, ${Math.round((Date.now() - sessionAt) / 1000)} s after the audio session changed` : '';
+  } catch { return ''; }
+};
+try {
+  navigator.audioSession?.addEventListener?.('statechange', () => {
+    sessionAt = Date.now();
+    const going = BG.on && !aBG.paused;
+    Away.add(`audio session ${navigator.audioSession.state || 'changed'}${BG.on ? `, the sound ${going ? 'going' : 'paused'}${clockSays()}` : ''}`, going);
+  });
+} catch {}
 document.addEventListener('visibilitychange', () => {
   Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}${Awake.leaving()}` : 'back');
   saidHidden = document.hidden;
@@ -2639,18 +2655,38 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
       aBG.play().catch(e => Away.add(`the sound wouldn’t play (${e.name})`));
     } else if (P.active()?.paused) togglePlay();
   });
-  // Your button isn't all that calls this. From WebKit's source (MediaSession::suspendPlayback, 305995@main, January 2026): as iOS takes
-  // the sound for another app, WebKit pauses the page's players and then calls its pause handler too, "as if the user hit the pause key";
-  // the player last started is at the head of its list, so the sound is already paused by then. Taken as your button, that held the stream
-  // paused for when you came back from dictating a message, which only a pause of your own should. So a pause that finds the sound already
-  // stopped is iOS's: the sound's own pause listener has it from there, and nothing's held. Whether iOS 27 does call it is for the record
-  // to say: the line below goes to the relay with the rest.
+  // Your button isn't all that calls this. The phone's record, 2026-11-13: dictating in the Claude app with the sound going behind it
+  // called it both times, 9 s after leaving and a minute after the next leave, a second before the audio session changed the first time
+  // and 3 s after it the second, the sound not paused as it came. WebKit's source has one way that happens (MediaSession::suspendPlayback,
+  // 305995@main, January 2026): as iOS takes the sound for another app, WebKit pauses the page's players and calls its pause handler, "as if
+  // the user hit the pause key". Taken as your button, that held the stream paused for when you came back from dictating a message, which
+  // only a pause of your own should. So it waits one turn of the page's loop before stopping anything: a sound that's paused by then without
+  // the page having paused it was paused by iOS, whichever of the two WebKit does first, and that holds nothing (the sound's own pause
+  // listener has it from there). Still going, it's taken as your button. The record says which, with how lately the sound's clock had
+  // moved and how long since the audio session changed: what iOS does there can't be seen any other way.
+  const beat = fn => {   // the next turn, by a message: timers are slowed out of sight
+    let done = false;
+    const run = () => { if (!done) { done = true; fn(); } };
+    try { const c = new MessageChannel(); c.port1.onmessage = () => { c.port1.close(); run(); }; c.port2.postMessage(0); } catch {}
+    setTimeout(run, 250);
+  };
   const pause = () => {
-    const taken = BG.on && aBG.paused;
-    Away.add(taken ? 'iOS said pause, with the sound already stopped' : 'button: pause', BG.on);
-    if (taken) return;
-    if (BG.on) hold();
-    else if (P.active() && !P.active().paused) togglePlay();
+    if (!BG.on) { Away.add('button: pause'); if (P.active() && !P.active().paused) togglePlay(); return; }
+    const how = `${clockSays()}${audioSays()}`;
+    if (!BG.wanted) return Away.add(`iOS said pause, the sound already stopped${how}`, true);   // nothing left to stop, and what's held stays as it is
+    if (aBG.paused) {
+      // paused under the page with its clock moving seconds ago: iOS just did that. Paused because it never got going (its copy not there
+      // yet, a retry on its way), it's your button, and that stops the asking.
+      if (BG.moved && Date.now() - BG.moved < 10e3 && !aBG.error) return Away.add(`iOS said pause, the sound already paused${how}`, true);
+      Away.add(`button: pause, the sound not going yet${how}`, true);
+      return hold();
+    }
+    beat(() => {
+      if (!BG.on) return;
+      if (aBG.paused && !aBG.error) return Away.add(`iOS said pause as it paused the sound${how}`, true);
+      Away.add(`button: pause, the sound going${how}`, true);
+      hold();
+    });
   };
   Remote.set('pause', pause);
   Remote.set('stop', pause);

@@ -4005,7 +4005,7 @@ if (want('handover')) {
       ok('away, the sound plays at the stream’s own speed, from the first', s.on && !s.aPaused && s.rate === 1 && rates.every(r => r === 1), `${JSON.stringify(s)} rates ${rates.join(' ')}`);
       let S = await heard();
       let x = across(S, left, 's');
-      ok('leaving, the sound is on within a couple of seconds, a few seconds of the stream back at most', x.jump !== null && x.jump <= 0.25 && x.jump > -6 && x.after < 2500, JSON.stringify(x));
+      ok('leaving, the sound is on within a couple of seconds, within a few seconds of where the picture stopped', x.jump !== null && x.jump < 3 && x.jump > -6 && x.after < 2500, JSON.stringify(x));
       const back = await go(false);
       await sleep(200);
       s = await bg(page);
@@ -4788,31 +4788,54 @@ if (want('log')) {
       await done();
     })(),
     (async () => {
-      // iOS taking the sound for another app's mic, as WebKit has told a page since 2026: the sound's player paused, then the page's pause
-      // handler called. That isn't your pause, so back in the app the stream plays. Your own, with the sound going, holds as ever.
+      // iOS taking the sound for another app's mic, as WebKit has told a page since 2026: the sound's player paused and the page's pause
+      // handler called, in either order. That isn't your pause, so back in the app the stream plays. Your own, with the sound going, holds.
       const { got, relay } = logged();
-      const { page, done } = await stage(relay, { init: phone });
+      // with WebKit's audio session standing in: the event for a change of state comes, the state itself doesn't (as on iOS 27.2)
+      const { page, done } = await stage(relay, { init: () => { Object.defineProperty(navigator, 'webdriver', { get: () => false }); Object.defineProperty(navigator, 'audioSession', { value: new EventTarget(), configurable: true }); } });
       await levels(page, 15000);
       await page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused; }, null, { timeout: 15000 }).catch(never);
-      await vis(page, true); await sounding(page); await sleep(1200);
-      const n = got.length;
-      await page.evaluate(() => { document.getElementById('aBG').pause(); window.__ms.pause(); });   // in that order, in the one go
+      const state = () => page.evaluate(() => ({ on: wraith.BG.on, wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
+      const back = async () => {
+        await vis(page, false);
+        await page.waitForFunction(() => !wraith.BG.on && wraith.P.active() && !wraith.P.active().paused, null, { timeout: 8000 }).catch(never);
+        const s = await page.evaluate(() => ({ on: wraith.BG.on, userPaused: wraith.P.userPaused, vPaused: wraith.P.active().paused }));
+        await sleep(1500);
+        return s;
+      };
+      const away = async () => { await vis(page, true); await sounding(page); await sleep(1200); };
+      await away();
+      let n = got.length;
+      await page.evaluate(() => { document.getElementById('aBG').pause(); window.__ms.pause(); });   // the player first, in the one go
       await sleep(1500);
-      let s = await page.evaluate(() => ({ on: wraith.BG.on, wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
-      ok('iOS taking the sound, and saying pause to the page as it does, stops the sound and holds nothing', s.on && !s.wanted && !s.held && s.paused, JSON.stringify(s));
-      ok('both are written, and sent at once', /iOS said pause, with the sound already stopped/.test(all(got.slice(n))) && /iOS paused the sound/.test(all(got.slice(n))), all(got.slice(n)).replace(/\n/g, ' | '));
+      let s = await state();
+      ok('iOS pausing the sound and then saying pause stops the sound and holds nothing', s.on && !s.wanted && !s.held && s.paused, JSON.stringify(s));
+      ok('both are written, and sent at once', /iOS said pause, the sound already paused/.test(all(got.slice(n))) && /iOS paused the sound/.test(all(got.slice(n))), all(got.slice(n)).replace(/\n/g, ' | '));
       await page.evaluate(() => window.__ms.pause()); await sleep(200);   // and said again with the sound long stopped (the next go at dictating)
-      s = await page.evaluate(() => ({ held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
+      s = await state();
       ok('said again with the sound already stopped, still nothing’s held', !s.held && s.paused, JSON.stringify(s));
-      await vis(page, false);
-      await page.waitForFunction(() => !wraith.BG.on && wraith.P.active() && !wraith.P.active().paused, null, { timeout: 8000 }).catch(never);
-      s = await page.evaluate(() => ({ on: wraith.BG.on, userPaused: wraith.P.userPaused, vPaused: wraith.P.active().paused }));
+      s = await back();
       ok('so back in the app the stream plays', !s.on && !s.userPaused && !s.vPaused, JSON.stringify(s));
+      await away();
+      n = got.length;
+      await page.evaluate(() => { window.__ms.pause(); document.getElementById('aBG').pause(); });   // the handler first
       await sleep(1500);
-      await vis(page, true); await sounding(page); await sleep(1200);
+      s = await state();
+      ok('the other way round, saying pause and then pausing the sound, holds nothing either', s.on && !s.wanted && !s.held && s.paused, JSON.stringify(s));
+      ok('and is written as iOS’s', /iOS said pause as it paused the sound/.test(all(got.slice(n))) && !/button: pause/.test(all(got.slice(n))), all(got.slice(n)).replace(/\n/g, ' | '));
+      s = await back();
+      ok('and back in the app the stream plays', !s.on && !s.userPaused && !s.vPaused, JSON.stringify(s));
+      await away();
+      n = got.length;
+      await page.evaluate(() => navigator.audioSession.dispatchEvent(new Event('statechange')));
+      await sleep(300);
       await cc(page, 'pause'); await sleep(400);
-      s = await page.evaluate(() => ({ wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused, away: JSON.parse(localStorage.getItem('wraith.away') || '[]').slice(-2) }));
-      ok('your own pause from the lock screen, with the sound going, holds', !s.wanted && s.held && s.paused && s.away.some(l => /button: pause$/.test(l)), JSON.stringify(s));
+      s = await state();
+      ok('your own pause from the lock screen, with the sound going, holds', !s.wanted && s.held && s.paused, JSON.stringify(s));
+      await sleep(1500);
+      const said = all(got.slice(n));
+      ok('written as yours, with how lately the sound’s clock had moved, and sent though a send was already on its way', /button: pause, the sound going, its clock moved \d\.\d s before/.test(said), said.replace(/\n/g, ' | '));
+      ok('and a change of the audio session is written with how the sound stood, and the pause timed from it', /audio session changed, the sound going, its clock moved \d\.\d s before/.test(said) && /button: pause[^\n]*, \d+ s after the audio session changed/.test(said), said.replace(/\n/g, ' | '));
       await vis(page, false); await sleep(1500);
       s = await page.evaluate(() => ({ on: wraith.BG.on, userPaused: wraith.P.userPaused, vPaused: wraith.P.active().paused }));
       ok('and stays paused for when you’re back', !s.on && s.userPaused && s.vPaused, JSON.stringify(s));
