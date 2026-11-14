@@ -2362,7 +2362,7 @@ if (want('screen')) {
       ok('a picture going on a page that’s had no tap says to tap once to keep the screen on', await toast() === HINT, await toast());
       await vis(page, true); await sleep(200);
       let l = await left();
-      ok('leaving, the Away log says the picture was going with no lock, and why', /left with the picture going, no screen lock \(refused: Permission was denied\), not touched since the page loaded$/.test(l), l);
+      ok('leaving, the Away log says the picture was going with no lock, and why', /left with the picture going, no screen lock \(refused: Permission was denied\), in front \d+ s, not touched since the page loaded$/.test(l), l);
       await unToast();
       await vis(page, false); await going();
       await page.waitForFunction(h => !document.getElementById('toast').hidden && document.getElementById('toast').textContent === h, HINT, { timeout: 5000 }).catch(never);
@@ -2379,7 +2379,130 @@ if (want('screen')) {
       await page.evaluate(() => wraith.P.active().pause());   // as iOS does, just before it says the app has left
       await vis(page, true); await sleep(200);
       l = await left();
-      ok('and leaving, the Away log says the lock was held, and when the screen was last touched', /left with the picture going, the screen lock held since \d\d:\d\d, last touched \d+ s before$/.test(l), l);
+      ok('and leaving, the Away log says the lock was held, how long the page had been in front, and when the screen was last touched', /left with the picture going, the screen lock held since \d\d:\d\d, in front \d+ s, last touched \d+ s before$/.test(l), l);
+      await done();
+    })(),
+    (async () => {
+      // Jerry, 2026-11-13: "Screen keeps going to sleep. This has been the longest problem." The phone's record had the lock held each time,
+      // and the screen dimming about 3 minutes into iOS's own player. WebKit tells iOS to keep the screen on once, as the first hold is
+      // taken, so the page lets go and takes it again (the stream's own hold with it, by calling it a looping video for a moment): as iOS's
+      // player opens, every so often while it's up, as it closes and as the screen changes shape. In the page itself it's left alone.
+      const webkit = () => {
+        window.__held = window.__asks = window.__rel = window.__gaps = 0; window.__loops = [];
+        Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: { request: async () => {
+          window.__asks++;
+          if (window.__refuse) throw new DOMException('Permission was denied', 'NotAllowedError');
+          window.__held++;
+          const s = { release: async () => { if (s.gone) return; s.gone = true; window.__held--; window.__rel++; s.heard?.(); }, addEventListener(t, f) { s.heard = f; } };
+          return s;
+        } } });
+        delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen;
+        HTMLVideoElement.prototype.webkitEnterFullscreen = function () { window.__fs = this; this.dispatchEvent(new Event('webkitbeginfullscreen')); };
+        HTMLVideoElement.prototype.webkitExitFullscreen = function () { window.__fs = null; this.dispatchEvent(new Event('webkitendfullscreen')); };
+        Object.defineProperty(HTMLVideoElement.prototype, 'webkitDisplayingFullscreen', { configurable: true, get() { return window.__fs === this; } });
+      };
+      const { page, done } = await stage(answer, { init: webkit });
+      const n = () => page.evaluate(() => ({ asks: window.__asks, rel: window.__rel, held: window.__held, loops: window.__loops.join(), gaps: window.__gaps, since: wraith.Awake.since, renewed: wraith.Awake.renewed }));
+      const going = () => page.evaluate(() => { const v = wraith.P.active(); v.play().catch(() => {}); v.dispatchEvent(new Event('playing')); });
+      const lines = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]'));
+      const toast = () => page.evaluate(() => { const t = document.getElementById('toast'); return t.hidden ? '' : t.textContent; });
+      await levels(page, 15000);
+      await page.evaluate(() => {
+        const v = wraith.P.active();
+        wraith.Awake.every = 1e9;   // the clock comes later: first what opening that player does by itself
+        new MutationObserver(() => window.__loops.push(v.loop)).observe(v, { attributes: true, attributeFilter: ['loop'] });
+        // whether the page ever counts the lock as gone while it's only being renewed
+        setInterval(() => { if (window.__watch && !wraith.Awake.held()) window.__gaps++; }, 10);
+      });
+      await page.mouse.click(5, 600); await sleep(100);
+      await going(); await sleep(300);
+      let a = await n();
+      ok('a picture going holds the screen lock', a.held === 1, JSON.stringify(a));
+      await sleep(3000);
+      let b = await n();
+      ok('in the page itself the lock is left alone', b.asks === a.asks && b.rel === a.rel && b.loops === '' && b.held === 1, JSON.stringify([a, b]));
+      // iOS's player opens: half a second on, the lock is let go and taken again, and the stream's own hold with it
+      await page.evaluate(() => { window.__watch = true; wraith.P.active().webkitEnterFullscreen(); });
+      await sleep(1000);
+      b = await n();
+      ok('as iOS’s player opens, the lock is let go and taken again', b.rel === a.rel + 1 && b.asks === a.asks + 1 && b.held === 1, JSON.stringify([a, b]));
+      ok('with the stream’s own hold let go for that moment, by way of loop, and put back', b.loops === 'true,false' && await page.evaluate(() => !wraith.P.active().loop), b.loops);
+      ok('counted as held all the while, from when it was first held', b.gaps === 0 && b.since === a.since && b.renewed === 1, JSON.stringify(b));
+      await sleep(1700);
+      b = await n();
+      ok('and once more when that player has settled', b.rel === a.rel + 2 && b.asks === a.asks + 2 && b.held === 1 && b.loops === 'true,false,true,false', JSON.stringify([a, b]));
+      await page.evaluate(() => { wraith.Awake.every = 1200; });
+      await sleep(4300);
+      b = await n();
+      ok('then every so often while that player is up', b.rel >= a.rel + 4 && b.held === 1 && b.gaps === 0, JSON.stringify([a, b]));
+      const say = await page.evaluate(() => wraith.Awake.say());
+      ok('the settings sheet says when it was last renewed', /^Screen: kept on by the lock since \d\d:\d\d, renewed \d+ s ago$/.test(say), say);
+      // paused, nothing is held and nothing renewed
+      await page.evaluate(() => { window.__watch = false; wraith.P.active().pause(); }); await sleep(300);
+      const paused = await n();
+      await sleep(2800);
+      b = await n();
+      ok('paused, nothing is held or asked for', paused.held === 0 && b.asks === paused.asks && b.held === 0, JSON.stringify([paused, b]));
+      await going();
+      // leaving from iOS's player, as iOS does it: the picture paused, then the app gone
+      await page.waitForFunction(() => wraith.Awake.renewed >= 1, null, { timeout: 6000 }).catch(never);
+      await sleep(400);
+      await page.evaluate(() => wraith.P.active().pause());
+      await vis(page, true); await sleep(300);
+      let l = (await lines()).filter(x => / left/.test(x)).at(-1) || '';
+      ok('leaving, the record says when the lock was last renewed and how long the picture had been in front and in iOS’s player',
+        /left from fullscreen with the picture going, the screen lock held since \d\d:\d\d, renewed \d+ s before, in front \d+ s, in fullscreen \d+ s, last touched \d+ s before$/.test(l), l);
+      ok('and how long that player had been up as it closed', (await lines()).some(x => /fullscreen closed after \d+ s$/.test(x)), (await lines()).slice(-4).join(' | '));
+      const gone = await n();
+      await sleep(2800);
+      ok('out of sight, nothing is asked for', (await n()).asks === gone.asks, JSON.stringify([gone, await n()]));
+      await vis(page, false); await going(); await sleep(400);
+      a = await n();
+      ok('back in front, the lock is held afresh', a.held === 1 && a.renewed === 0, JSON.stringify(a));
+      // that player closing, and the screen changing shape, renew it too
+      await page.evaluate(() => { const v = wraith.P.active(); v.webkitEnterFullscreen(); wraith.Awake.every = 1e9; }); await sleep(2600);
+      a = await n();
+      await page.evaluate(() => wraith.P.active().webkitExitFullscreen()); await sleep(1000);
+      b = await n();
+      ok('as iOS’s player closes, it’s renewed', b.asks === a.asks + 1 && b.held === 1, JSON.stringify([a, b]));
+      await sleep(1600);
+      a = await n();
+      await page.evaluate(() => window.dispatchEvent(new Event('resize'))); await sleep(1100);
+      b = await n();
+      ok('and as the screen changes shape', b.asks === a.asks + 1 && b.held === 1, JSON.stringify([a, b]));
+      // iOS saying no to the asking again: it's a lock that's gone, as any other, and it says to tap
+      await page.evaluate(() => { window.__refuse = true; window.dispatchEvent(new Event('resize')); });
+      await page.waitForFunction(() => wraith.Awake.refused, null, { timeout: 5000 }).catch(never);
+      await sleep(300);
+      b = await n();
+      ok('refused on renewing, nothing is held, the record says so and the page says to tap', b.held === 0 && await page.evaluate(() => !wraith.Awake.held()) && (await lines()).some(x => x.includes('screen lock refused: Permission was denied')) && await toast() === 'Tap the screen once to keep it from sleeping', `${JSON.stringify(b)} ${await toast()}`);
+      await page.evaluate(() => { window.__refuse = false; });
+      await page.mouse.click(5, 600); await sleep(300);
+      ok('and a tap gets it back', (await n()).held === 1, JSON.stringify(await n()));
+      await done();
+    })(),
+    (async () => {
+      // A page that was stopped in front, with nothing said about leaving, says so: that's the screen going off under it (iOS's player
+      // keeps a page from hearing the app has left). The record had nothing for it until 2026-11-13.
+      const { page, done } = await stage(answer, { init: () => {
+        const real = Date.now.bind(Date); window.__skew = 0; Date.now = () => real() + window.__skew;
+        HTMLVideoElement.prototype.webkitEnterFullscreen = function () { window.__fs = this; this.dispatchEvent(new Event('webkitbeginfullscreen')); };
+        HTMLVideoElement.prototype.webkitExitFullscreen = function () { window.__fs = null; this.dispatchEvent(new Event('webkitendfullscreen')); };
+        Object.defineProperty(HTMLVideoElement.prototype, 'webkitDisplayingFullscreen', { configurable: true, get() { return window.__fs === this; } });
+      } });
+      const lines = () => page.evaluate(() => JSON.parse(localStorage.getItem('wraith.away') || '[]'));
+      await levels(page, 15000);
+      await page.mouse.click(5, 600); await sleep(1300);
+      ok('a page that’s kept running says nothing of the kind', !(await lines()).some(x => /frozen/.test(x)), (await lines()).join(' | '));
+      await page.evaluate(() => { window.__skew += 40e3; });
+      await page.waitForFunction(() => /frozen/.test(localStorage.getItem('wraith.away') || ''), null, { timeout: 4000 }).catch(never);
+      let l = (await lines()).filter(x => /frozen/.test(x)).at(-1) || '';
+      ok('stopped 40 s in front, it says so, with how the picture stood and when it was last touched', /frozen 4\d s in front, the picture going, last touched 4\d s before$/.test(l), l);
+      await page.evaluate(() => wraith.P.active().webkitEnterFullscreen()); await sleep(1200);
+      await page.evaluate(() => { window.__skew += 200e3; });
+      await page.waitForFunction(() => /frozen 3 min/.test(localStorage.getItem('wraith.away') || ''), null, { timeout: 4000 }).catch(never);
+      l = (await lines()).filter(x => /frozen/.test(x)).at(-1) || '';
+      ok('and in iOS’s player, that too', /frozen 3 min in front, in fullscreen, the picture going, last touched \d+ min before$/.test(l), l);
       await done();
     })(),
     (async () => {

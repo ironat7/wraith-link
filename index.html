@@ -1339,6 +1339,9 @@ const P = {
       abrEwmaDefaultEstimate: 8e6,
       startFragPrefetch: true,
       preserveManualLevelOnError: true,   // a failed load on Source shouldn't quietly switch to Auto
+      // the picture is called a looping one for a moment each time the screen's hold is renewed (Awake.renew), and a looping video that
+      // goes up a quality as it loads has hls.js throw out all it had loaded before that segment, what's playing with it
+      loopBackBufferFlush: false,
     });
     hls.on(Hls.Events.MANIFEST_PARSED, () => this.onManifest());
     hls.on(Hls.Events.ERROR, (_, d) => this.onError(d));
@@ -2539,7 +2542,7 @@ let saidHidden = document.hidden;
 const Away = {
   add(what, now) {   // now: it goes to the relay at once
     if (!ios) return;
-    const line = `${new Date().toTimeString().slice(0, 8)} ${Pages.id} ${String(what).slice(0, 160)}`;
+    const line = `${new Date().toTimeString().slice(0, 8)} ${Pages.id} ${String(what).slice(0, 200)}`;
     store.set('away', [...store.get('away', []), line].slice(-24));
     Log.add(line, now);
   },
@@ -2565,6 +2568,7 @@ try {
 } catch {}
 document.addEventListener('visibilitychange', () => {
   Away.add(document.hidden ? `left${P.active()?.webkitDisplayingFullscreen ? ' from fullscreen' : ''}${Awake.leaving()}` : 'back');
+  if (!document.hidden) frontAt = Date.now();
   saidHidden = document.hidden;
   Pill.sync();   // the lock screen's details and buttons back before any sound starts, or off again in front
   if (!document.hidden) { Pages.see(); Pages.tell('here'); }
@@ -2749,12 +2753,31 @@ const Sound = {
 // Only while the picture is going, though: one that hasn't moved for a minute (no network, a copy that's stopped, a stream frozen at the
 // source) lets the screen sleep by iOS's own clock, as iOS does for a stuck picture with sound. A muted one that nobody has touched for half
 // an hour pauses (P.nobodyHere), which lets go of it too.
+// Jerry, 2026-11-13: "Screen keeps going to sleep. This has been the longest problem. Incredibly annoying." The phone's own record that
+// night had the lock held at every leaving, and three times he'd closed iOS's fullscreen player or left it about 3 minutes after last
+// touching anything (185, 176 and 195 s), with the relay's history showing the page awake and asking right through each: the screen
+// dimming on iOS's own clock under a lock the page still held. A Home Screen app's page runs in a view service, where WebKit can't keep
+// the screen on itself: it tells the app that hosts it to, once, as the first hold on the screen is taken (ScreenSleepDisabler's
+// updateState, setScreenWakeLockHandler, _webView:setShouldKeepScreenAwake:), and says nothing more while any hold is left, this lock or
+// an unmuted picture's own. So whatever drops it on iOS's side stays dropped, with every hold here still in place. Now the page lets go
+// of both for a moment and takes them back (renew), which has WebKit tell iOS off and then on again: as iOS's player opens, every 15 s
+// while it's up, as it closes, and as the screen changes shape. In the page itself the hold is left alone between those, as nothing has
+// shown it lost there, and letting go of one that works is a risk taken for nothing. The picture's own hold is let go by calling it a
+// looping one for that moment, which holds nothing (HTMLMediaElement::shouldDisableSleep) and changes nothing about a stream. Whether
+// iOS's player then leaves the screen on isn't known: a sound-and-picture video of iOS's own can't run beside the stream to hold it
+// instead (one at a time, WebKit's ConcurrentPlaybackNotPermitted), so past this there's only what iOS does with the word it's given.
+// The "left" line says when the lock was last renewed and how long the picture had been in front and in iOS's player, and a page that
+// finds it was frozen in front says so.
+const howLong = ms => ms < 120e3 ? `${Math.round(ms / 1e3)} s` : `${Math.round(ms / 60e3)} min`;
+let frontAt = document.hidden ? 0 : Date.now();   // since when this page has been in front
 const Awake = {
   lock: null, asking: 0, granted: false, refused: '', since: 0, offAt: 0, lost: 0, hinted: false,
+  renewing: false, renewedAt: 0, renewed: 0, every: 15e3,
   wanted() { const v = P.active(); return !!v && !v.paused && !document.hidden && !P.stuck(); },
+  held() { return !!this.lock || this.renewing; },   // let go of for a moment only to be taken again is still held
   onTap() { if (this.granted) this.sync(true); else this.ask(true); },   // a tap or a key: iOS only counts it for the lock a few seconds
-  async ask(tap) {
-    if (this.lock || !navigator.wakeLock) return;
+  async ask(tap, renewal) {
+    if (this.lock || !navigator.wakeLock || (this.renewing && !renewal)) return;
     const waited = this.asking ? Date.now() - this.asking : 0;
     if (waited && waited < 5e3 && !tap) return;   // WebKit asks iOS before it answers
     if (waited >= 5e3) Away.add('screen lock: no answer in 5 s');
@@ -2762,7 +2785,8 @@ const Awake = {
     try {
       const l = await navigator.wakeLock.request('screen');
       if (this.lock) { l.release().catch(() => {}); return; }   // an earlier ask's answer got here first
-      this.lock = l; this.granted = true; this.since = Date.now();
+      this.lock = l; this.granted = true; this.renewedAt = Date.now();
+      if (renewal) this.renewed++; else { this.since = this.renewedAt; this.renewed = 0; }
       if (this.refused) { this.refused = ''; Away.add('screen lock granted'); }
       l.addEventListener('release', () => {   // by iOS, if it's still the one held
         if (this.lock !== l) return;
@@ -2783,20 +2807,40 @@ const Awake = {
     const l = this.lock; this.lock = null;
     if (l) { this.offAt = Date.now(); l.release().catch(() => {}); }
   },
+  // Off and on again, so iOS is told afresh (see above). The lock goes, then the stream's own hold with it for 150 ms, long enough to be
+  // two separate words to the app that hosts the page; then both come back. Only for a lock that's held, with the picture going in front.
+  async renew() {
+    const l = this.lock, v = P.active();
+    if (!ios || !l || this.renewing || !this.wanted()) return;
+    this.renewing = true; this.lock = null;
+    const own = v === vL && !v.loop;
+    const over = setTimeout(() => { this.renewing = false; }, 4000);   // an answer that never comes isn't a lock held
+    try {
+      await l.release().catch(() => {});
+      if (own) v.loop = true;
+      await new Promise(r => setTimeout(r, 150));
+    } finally { if (own) v.loop = false; }
+    if (this.wanted()) await this.ask(true, true);
+    clearTimeout(over); this.renewing = false;
+    if (!this.lock) { this.offAt = Date.now(); this.sync(); }   // the picture stopped meanwhile, or iOS said no: as for any lock that's gone
+  },
+  tick() { const v = P.active(); if (this.lock && v && nativeFull(v) && Date.now() - this.renewedAt >= this.every) this.renew(); },   // while iOS's player is up
+  soon() { for (const ms of [500, 2000]) setTimeout(() => this.renew(), ms); },   // once iOS's player has finished opening or closing
   // For the Away log as the app leaves: whether a picture was going, and whether the lock was held for it (iOS pauses the picture, which
   // lets go of the lock, just before it says the app has left). A screen that slept with the lock held was iOS's doing.
   leaving() {
-    const v = P.active();
+    const v = P.active(), now = Date.now();
     if (!v || (v.paused && performance.now() - P.pausedAt > 2000)) return '';
-    const ago = ms => ms < 120e3 ? `${Math.round(ms / 1e3)} s` : `${Math.round(ms / 60e3)} min`;
-    const how = this.lock || Date.now() - this.offAt < 2500 ? `the screen lock held since ${new Date(this.since).toTimeString().slice(0, 5)}`
+    const how = this.held() || now - this.offAt < 2500 ? `the screen lock held since ${new Date(this.since).toTimeString().slice(0, 5)}${this.renewed ? `, renewed ${howLong(now - this.renewedAt)} before` : ''}`
       : `no screen lock${this.refused ? ` (refused: ${this.refused})` : this.asking ? ' (asked, no answer)' : ''}`;
-    return ` with the picture going, ${how}, ${Pages.touchedAt ? `last touched ${ago(Date.now() - Pages.touchedAt)} before` : 'not touched since the page loaded'}`;
+    // how long it had been in front, and in iOS's player: a screen that sleeps does it a set time after the last touch, and by where
+    const there = `${frontAt ? `, in front ${howLong(now - frontAt)}` : ''}${v.fullAt && nativeFull(v) ? `, in fullscreen ${howLong(now - v.fullAt)}` : ''}`;
+    return ` with the picture going, ${how}${there}, ${Pages.touchedAt ? `last touched ${howLong(now - Pages.touchedAt)} before` : 'not touched since the page loaded'}`;
   },
   say() {   // for the settings sheet
     const v = P.active(), going = v && !v.paused && !document.hidden, own = going && v === vC && !v.muted && !P.stuck() ? ', and iOS’s own player keeps it on with the sound' : '';
     if (!navigator.wakeLock) return `Screen: this phone has no screen lock${own}`;
-    if (this.lock) return `Screen: kept on by the lock since ${new Date(this.since).toTimeString().slice(0, 5)}${this.lost ? ` (iOS took it back ${this.lost}×)` : ''}${own}`;
+    if (this.held()) return `Screen: kept on by the lock since ${new Date(this.since).toTimeString().slice(0, 5)}${this.renewed ? `, renewed ${howLong(Date.now() - this.renewedAt)} ago` : ''}${this.lost ? ` (iOS took it back ${this.lost}×)` : ''}${own}`;
     if (this.asking) return `Screen: lock asked for ${Math.round((Date.now() - this.asking) / 1e3)} s ago, no answer${own}`;
     const idle = !going ? ' (nothing playing)' : P.stuck() ? ' (the picture hasn’t moved for a minute)' : '';
     return `Screen: no lock${this.refused ? ` (refused: ${this.refused}, a tap gets it)` : idle}${own}`;
@@ -2830,7 +2874,7 @@ let screenAt = 0, inView = null;
 // WebKit work the page's size out again by changing the viewport's interactive-widget and viewport-fit.
 window.addEventListener('resize', () => {
   clearTimeout(screenAt);
-  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${innerWidth}×${innerHeight}`); }, 500);
+  screenAt = setTimeout(() => { if (P.feed) Away.add(`screen ${innerWidth}×${innerHeight}`); Awake.renew(); }, 500);   // a fold or a turn: the screen's hold is told to iOS afresh
 });
 new IntersectionObserver(es => {
   inView = es[es.length - 1].isIntersecting;
@@ -2838,8 +2882,9 @@ new IntersectionObserver(es => {
 }, { scrollMargin: '100%' }).observe(vL);
 
 for (const v of [vL, vC]) {
-  v.addEventListener('webkitbeginfullscreen', () => { v.inFull = true; Away.add('fullscreen'); });
-  v.addEventListener('webkitendfullscreen', () => { v.inFull = false; Away.add('fullscreen closed'); });
+  // iOS's player opening or closing is one of the times the screen's hold is told to iOS afresh (Awake.renew)
+  v.addEventListener('webkitbeginfullscreen', () => { v.inFull = true; v.fullAt = Date.now(); Away.add('fullscreen'); Awake.soon(); });
+  v.addEventListener('webkitendfullscreen', () => { v.inFull = false; Away.add(`fullscreen closed${v.fullAt ? ` after ${howLong(Date.now() - v.fullAt)}` : ''}`); v.fullAt = 0; v.fullEnded = Date.now(); Awake.soon(); });
   v.addEventListener('timeupdate', () => P.tick());
   v.addEventListener('playing', () => {
     if (P.active() === v) {
@@ -2946,7 +2991,7 @@ const Auto = {
     const v = P.active(), w = $('watch');
     return this.on && !!v && !v.paused && !v.ended && P.started && !P.quietStart && !BG.on && this.inner() && Pages.inFront()
       && !w.hidden && !w.classList.contains('kb') && !w.classList.contains('full') && !nativeFull(v)
-      && (!navigator.wakeLock || !!Awake.lock)
+      && (!navigator.wakeLock || Awake.held())
       && $('sheet').hidden && $('msgbox').hidden && $('unmute').hidden && !document.activeElement?.matches?.('input, textarea');
   },
   tick() {
@@ -2983,7 +3028,7 @@ const Auto = {
     const full = nativeFull(v);
     store.set('beat', [Pages.id, now, `${P.feed} ${v.paused ? (P.userPaused ? 'paused by you' : P.taken ? 'stopped from outside' : 'paused') : P.stuck() ? 'not moving' : 'going'}`
       + `${full ? ` in fullscreen${this.took === v ? ' by itself' : ''}` : $('watch').classList.contains('full') ? ' filling the page' : ''}${document.hidden ? ', hidden' : ''}`
-      + `${Awake.lock ? '' : ', no screen lock'}, ${P.latency() == null ? '' : `${P.latency().toFixed(0)} s behind, `}${bufAhead(v).toFixed(1)} s loaded, ${innerWidth}×${innerHeight}, touched ${Math.round((now - Pages.touchedAt) / 1e3)} s before`]);
+      + `${Awake.held() ? '' : ', no screen lock'}, ${P.latency() == null ? '' : `${P.latency().toFixed(0)} s behind, `}${bufAhead(v).toFixed(1)} s loaded, ${innerWidth}×${innerHeight}, touched ${Math.round((now - Pages.touchedAt) / 1e3)} s before`]);
   },
   learn(now = Date.now(), log = store.get('away', []), beat = store.get('beat', null)) {
     if (!beat || beat[0] === Pages.id || now - beat[1] > 180e3 || now < beat[1]) return null;
@@ -3009,6 +3054,13 @@ setInterval(() => {
   if (slept > 60e3 && document.hidden) Away.add(`woke out of sight, after ${Math.round(slept / 60e3)} min frozen`);
   // with the sound's player up, a shorter one too: iOS freezes a page whose sound it has taken, and says nothing to it
   else if (slept > 5e3 && BG.on) Away.add(`frozen ${Math.round(slept / 1000)} s, the sound ${BG.wanted ? (aBG.paused ? 'wanted but paused' : 'on') : 'stopped'}${audioSays()}`);
+  // and in front, with nothing said about leaving: the screen went off under the page (iOS's own player keeps a page from hearing that
+  // the app has left, and stops the picture as the phone locks). The record had no line for it until 2026-11-13.
+  else if (slept > 8e3 && !document.hidden && P.feed) {
+    const v = P.active();
+    const full = v && (nativeFull(v) || Date.now() - (v.fullEnded || 0) < 3000);   // or closed by iOS as the page woke
+    Away.add(`frozen ${howLong(slept)} in front${full ? ', in fullscreen' : ''}${v ? `, the picture ${v.paused ? 'stopped' : 'going'}` : ''}${Pages.touchedAt ? `, last touched ${howLong(Date.now() - Pages.touchedAt)} before` : ''}`, true);
+  }
   if (BG.on && BG.wanted && !BG.going()) BG.lapse();
   if (document.hidden !== saidHidden) {   // iOS doesn't always say the app left or came back (WebKit 207256)
     Away.add('iOS didn’t say');
@@ -3019,7 +3071,7 @@ setInterval(() => {
     Away.add('closed: nothing going, and untouched for 2 hours');
     depth = 0; history.replaceState({ depth }, '', location.pathname); route(false);
   }
-  if (P.feed && Awake.granted) Awake.sync();
+  if (P.feed && Awake.granted) { Awake.sync(); Awake.tick(); }
   P.checkFull();
   Auto.tick();
   // nothing else of this page's asks the relay. Out of sight that's only for sound that's going: with none, the page is doing nothing
