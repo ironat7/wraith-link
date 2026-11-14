@@ -4829,7 +4829,7 @@ if (want('log')) {
       // state under a sound that's going, and WebKit taking it back a second later for a sound it still counts as playing. The page stops
       // the sound itself at that first change.
       const change = () => page.evaluate(() => navigator.audioSession.dispatchEvent(new Event('statechange')));
-      await away();   // heard for a second and a bit: he's at the mic that soon
+      await away(); await sleep(1500);   // heard for over 2 s
       n = got.length;
       await change(); await sleep(1500);
       s = await state();
@@ -4851,7 +4851,7 @@ if (want('log')) {
       s = await state();
       ok('nor does one as the sound starts', s.on && s.wanted && !s.paused, JSON.stringify(s));
       // nor one just after Control Center's play brings a stopped sound back, which is that play's own
-      await sleep(1200); await change(); await sleep(300);
+      await sleep(2500); await change(); await sleep(300);
       await cc(page, 'play'); await sounding(page); await sleep(600);
       await change(); await sleep(300);
       s = await state();

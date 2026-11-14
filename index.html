@@ -2159,12 +2159,13 @@ const BG = {
   // make, nor in front, where the picture taking over makes one. WebKit keeps the state itself behind a flag on 27.2; where it's given,
   // "active" is no loss.
   lost(now) {
-    // How long after the sound is first heard a change still counts as its own start: 0.8 s, and 2.5 s where Control Center's play brought
-    // it back (that change came after "sound heard", the same second: 22:30:47). It was 2 s for both, and the phone showed what that
-    // cost: his mic takes the session 1 to 3 s after the sound is heard (he's that quick to the button), so two tries in three the change
-    // was let pass, WebKit took the session back 2 to 3 s on, and the sound was only stopped at that second change, the recording already
-    // dead (22:30:37 then :40, 22:31:12 then :14; Jerry: "semi works, need two taps, still much better").
-    if (!this.on || !this.wanted || aBG.paused || !document.hidden || this.back || !this.told || now - this.toldAt < (this.again ? 2500 : 800)) return;
+    // How long after the sound is first heard a change still counts as its own start: 2 s, and 2.5 s where Control Center's play brought
+    // it back (that change came after "sound heard", the same second: 22:30:47). A mic that takes the session inside those 2 s is let
+    // pass, WebKit takes the session back 2 to 3 s on, and the sound is only stopped at that second change, the recording already dead:
+    // two tries in three on the phone (22:30:37 then :40, 22:31:12 then :14; Jerry: "semi works, need two taps, still much better").
+    // It was 0.8 s for an hour to catch those, and went back: he was only that quick to the button "bc that was only testing", "grace
+    // period is fine", and the longer wait is the surer one against stopping a sound for its own start.
+    if (!this.on || !this.wanted || aBG.paused || !document.hidden || this.back || !this.told || now - this.toldAt < (this.again ? 2500 : 2000)) return;
     try { if (navigator.audioSession.state === 'active') return; } catch {}
     Away.add('stopped the sound: its audio session changed under it, and iOS hadn’t paused it', true);
     this.hush();
