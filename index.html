@@ -2884,7 +2884,8 @@ setInterval(() => {
   // chat dozed then stayed dozed, as nothing woke it short of leaving and coming back. So it takes a while of it to doze, and waking is
   // looked at here too.
   idleFor = idle ? idleFor + 1 : 0;
-  if (idleFor >= Chat.dozeAfter && (Chat.ws || Chat.kickT)) Chat.doze(); else if (!idle && !Chat.timer) Chat.wake();
+  if (idleFor >= Chat.dozeAfter && (Chat.ws || Chat.kickT || (Chat.kick && Chat.timer))) Chat.doze(); else if (!idle && !Chat.timer) Chat.wake();
+  else if (Chat.kick && !Chat.kickT && !idle && Chat.readable()) Chat.kickPoll();   // Kick's chat is back in view: it's asked for again
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
@@ -2915,8 +2916,11 @@ function parseIrc(line) {
   return m;
 }
 // A line of Kick's chat in the shape of one of Twitch's, for Chat to draw. Kick writes its emotes into the text as [emote:id:name]: here they
-// become the name, with its place given as Twitch's tags give theirs, under an id emoteUrl sends to Kick. Its everyday badges (the levels) stay out.
-// Kick times a line to the second; frac (0–1) is where in that second it goes.
+// become the name, with its place given as Twitch's tags give theirs, under an id emoteUrl sends to Kick. Kick times a line to the second;
+// frac (0–1) is where in that second it goes.
+// Kick's badges stay out. They're levels and collectibles (mods and subscribers aren't among them), and Kick serves each picture as it was
+// uploaded: of 8 in two minutes of xQc's chat, one was a 3087×3087 PNG of 2.5 MB, on 11 lines in 119, and the 8 came to 4.6 MB, for
+// pictures drawn 18 px high (2026-11-13). Each would be fetched and decoded whole, on a phone.
 function kickLine(k, frac = 0) {
   const s = k.sender || {}, raw = k.content || '', at = {};
   let text = '', n = 0, last = 0;
@@ -2928,7 +2932,6 @@ function kickLine(k, frac = 0) {
   }
   text += raw.slice(last);
   return { cmd: 'PRIVMSG', prefix: s.slug || '', text,
-    kbadges: (s.identity?.badges_v2 || []).filter(b => b.image_url && b.name !== 'level').map(b => b.image_url),
     tags: { id: 'k' + k.id, 'tmi-sent-ts': String((Date.parse(k.created_at) || Date.now()) + Math.round(frac * 1000)), 'display-name': s.username || s.slug || '', login: s.slug || '',
       color: s.identity?.color || '', 'user-id': 'kick' + (s.id || ''), emotes: Object.entries(at).map(([id, r]) => `${id}:${r.join(',')}`).join('/') } };
 }
@@ -2975,9 +2978,14 @@ const Chat = {
   // in a busy one. Asked for the lines from a time on (start_time, as Kick's own past broadcasts ask for theirs), it answers fresh with the 5 s from
   // then (2026-11-13). So after the list, this asks every 2 s from a second before the last ask, and the lines both answers have count once.
   // Read only: saying anything there would take a Kick sign-in.
+  // Each ask is a request, where Twitch's socket costs nothing while it's quiet, so it only asks while chat can be read (Jerry, 2026-11-13:
+  // "no new battery drainers?"): not with the app away, nor under a fullscreen picture, nor behind the Videos tab. It stops at its next
+  // turn, and the tick starts it again; back within 20 s it goes on from where it was, later from Kick's latest list.
+  readable() { const v = P.active(); return !document.hidden && !!this.box.offsetParent && !$('watch').classList.contains('full') && !(v && nativeFull(v)); },
   async kickPoll() {
     const run = ++this.kickRun, room = this.kick, now = Date.now();
     clearTimeout(this.kickT);
+    if (!this.readable()) { this.kickT = 0; return; }
     this.kickT = -1;   // asking
     const from = this.kickFrom, latest = !from || now - from > 20e3;   // opening, or back after a while: the list rather than catching up
     const sec = t => Math.floor(t / 1000) * 1000;
@@ -3272,7 +3280,6 @@ const Chat = {
       const src = b && (this.badges.get(b) || this.gbadges?.get(b));
       if (src) d.append(pic(src, 'bd'));
     }
-    for (const src of m.kbadges || []) d.append(pic(src, 'bd'));   // Kick's come as pictures
     const action = text.startsWith('\x01ACTION ') && text.endsWith('\x01');
     if (action) { text = text.slice(8, -1); d.classList.add('me'); }
     const name = t['display-name'] || login;

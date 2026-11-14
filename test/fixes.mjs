@@ -4028,11 +4028,19 @@ if (want('handover')) {
 
 if (want('kick')) {
   // xQc on Kick (Jerry, 2026-11-13: "is it possible to implement kick for xqc only"). Kick's API, its playlists and its chat staged here.
-  const kickHere = async ({ twitch = false, kick = true, path = '?c=xqc' } = {}) => {
+  const kickHere = async ({ twitch = false, kick = true, path = '?c=xqc', init } = {}) => {
     const c = await browser.newContext({ viewport: { width: 390, height: 844 }, userAgent: IPHONE, hasTouch: true, isMobile: true });
     const page = await c.newPage();
     page.errors = []; page.on('pageerror', e => page.errors.push(e.message));
-    const S = { twitch, kick, relay: 0, chatAsks: 0 };
+    const S = { twitch, kick, relay: 0, chatAsks: 0, pings: 0, net: [] };
+    // everything the page asks of the network, by kind, for what runs when nobody's looking
+    const kindOf = u => /script\.google/.test(u) ? (new URL(u).searchParams.get('u') ? 'relay' : 'ping')
+      : /playlist\.live-video\.net/.test(u) ? `kick list ${u.match(/(\w+)\.m3u8/)[1]}` : /edge\.hls\.live-video\.net/.test(u) ? `kick seg ${u.match(/net\/(\w+)\//)[1]}`
+      : /edge\.hls\.ttvnw/.test(u) ? `twitch seg ${u.match(/net\/(\w+)\//)[1]}` : /kick\.com\/api\/v2\/channels\/668\/messages/.test(u) ? 'kick chat' : /kick\.com\/api/.test(u) ? 'kick channel'
+      : /gql\.twitch/.test(u) ? 'twitch api' : /jsdelivr|^http:\/\/127\.0\.0\.1|^data:|^blob:/.test(u) ? null : `other ${u.slice(8, 40)}`;
+    page.on('request', r => { const k = kindOf(r.url()); if (k) S.net.push([Date.now(), k]); });
+    S.since = t => { const n = {}; for (const [at, k] of S.net) if (at > t) n[k] = (n[k] || 0) + 1; return n; };
+    if (init) await page.addInitScript(init);
     await page.addInitScript(() => {
       window.sockets = []; window.WebSocket = class { constructor(u) { window.sockets.push(u); } close() {} send() {} };
       window.buffers = [];   // each SourceBuffer's type, as the players make them
@@ -4065,7 +4073,10 @@ if (want('kick')) {
       if (/kick\.com\/api\/v2\/channels\/xqc$/.test(u)) return json(channel());
       return route.abort().catch(never);
     });
-    await makeStream(page, async (route, u, body) => { if (u) { S.relay++; (S.urls ||= []).push(u.replace(/\?.*/, '').slice(-40)); } await sleep(300); return route.fulfill({ status: 200, headers, body }).catch(never); });
+    await makeStream(page, async (route, u, body) => {
+      if (u) { S.relay++; (S.urls ||= []).push(u.replace(/\?.*/, '').slice(-40)); } else { S.pings++; if (S.seatTaken) body = '409\nanother page is playing'; }
+      await sleep(300); return route.fulfill({ status: 200, headers, body }).catch(never);
+    });
     await page.goto(base + path, { waitUntil: 'domcontentloaded' });
     return { page, S, done: async () => { ok('no page errors', page.errors.length === 0, page.errors.join(' | ')); await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close(); } };
   };
@@ -4086,8 +4097,10 @@ if (want('kick')) {
       ok('only Kick’s top playlist goes through the relay; its renditions’ come straight from Kick', S.relay === 1 && page.kickLists > 0, `${S.relay} relay calls (${S.urls}), ${page.kickLists} straight ${JSON.stringify(await page.evaluate(() => wraith.P.errs))}`);
       await page.waitForFunction(() => document.querySelector('#chat .m img[src*="files.kick.com/emotes/37226"]'), null, { timeout: 10000 }).catch(never);
       const chat = await page.evaluate(() => ({ lines: [...document.querySelectorAll('#chat .m')].map(n => n.textContent), emote: !!document.querySelector('#chat .m img[src*="files.kick.com/emotes/37226"]'),
-        og: document.querySelectorAll('#chat .m img[src*="og.png"]').length, level: document.querySelectorAll('#chat .m img[src*="level.png"]').length, say: !document.getElementById('sayTx').hidden, signin: !document.getElementById('signin').hidden }));
-      ok('Kick’s chat shows, in order, with its emotes and badges, less the level ones', chat.emote && chat.og === 2 && chat.level === 0 && chat.lines.findIndex(l => /first line/.test(l)) < chat.lines.findIndex(l => /second/.test(l)), JSON.stringify(chat));
+        badges: document.querySelectorAll('#chat .m img[src*="ext.cdn.kick.com"]').length, say: !document.getElementById('sayTx').hidden, signin: !document.getElementById('signin').hidden }));
+      ok('Kick’s chat shows, in order, with its emotes', chat.emote && chat.lines.findIndex(l => /first line/.test(l)) < chat.lines.findIndex(l => /second/.test(l)), JSON.stringify(chat));
+      // Kick serves a badge's picture as it was uploaded: one in xQc's chat was 3087×3087 and 2.5 MB, for 18 px (2026-11-13)
+      ok('and none of Kick’s badge pictures, which come at any size', chat.badges === 0 && !S.net.some(([, k]) => /ext\.cdn\.kick/.test(k)), `${chat.badges} drawn, asked: ${S.net.filter(([, k]) => /ext\.cdn\.kick/.test(k)).length}`);
       ok('and it’s to read only', !chat.say && !chat.signin, JSON.stringify(chat));
       const sockets = await page.evaluate(() => window.sockets);
       ok('Twitch’s chat isn’t opened on the way (it showed for a moment, and its history could land in Kick’s)', !sockets.length && !S.twitchHistory, `${JSON.stringify(sockets)} ${S.twitchHistory || 0} history asks`);
@@ -4156,6 +4169,148 @@ if (want('kick')) {
       ok('the home screen lists xQc as live on Kick', /KICK/.test(row) && /On Kick/.test(row), row);
       await done();
     })(),
+  ]);
+  // Nothing of Kick's runs the battery down unseen (Jerry, 2026-11-13: "no new battery drainers?"). Everything a page on Kick asks of the
+  // network, by kind (S.since), in each state where nobody's watching or reading.
+  const sum = (n, re) => Object.entries(n).filter(([k]) => re.test(k)).reduce((a, [, c]) => a + c, 0);
+  const asked = async (S, ms) => { const t = Date.now(); await sleep(ms); return S.since(t); };
+  const soundFrom = (page, re) => page.waitForFunction(r => { const a = document.getElementById('aBG'); return wraith.BG.on && new RegExp(r).test(wraith.BG.hls?.url || '') && !a.paused && a.readyState >= 3 && a.currentTime > 0; }, re, { timeout: 20000 }).then(() => true).catch(() => false);
+  const hiddenFromStart = () => { window.__hidden = true; Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__hidden }); Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => window.__hidden ? 'hidden' : 'visible' }); };
+  await Promise.all([
+    (async () => {
+      // in front: chat out of view, then the picture paused
+      const { page, S, done } = await kickHere({ init: () => Object.defineProperty(HTMLVideoElement.prototype, 'webkitDisplayingFullscreen', { configurable: true, get() { return window.__fs === this; } }) });
+      await picture(page);
+      S.talk(400, 500);   // a chat that doesn't stop, so there's always something to ask for
+      const chatBack = async () => { const t = Date.now(); await page.waitForFunction(() => wraith.Chat.kickT, null, { timeout: 4000 }).catch(never); await sleep(2500); return S.since(t)['kick chat'] || 0; };
+      let n = await asked(S, 6000);
+      ok('watching Kick, the picture, its list and chat are asked for, and nothing else: not the relay, not a picture for each line of chat', sum(n, /^kick seg chunked/) >= 2 && sum(n, /^kick list chunked/) >= 2 && n['kick chat'] >= 2 && Object.keys(n).every(k => /^kick (seg chunked|list chunked|chat)$/.test(k)), JSON.stringify(n));
+      await page.evaluate(() => { window.__fs = document.getElementById('vLL'); }); await sleep(2500);
+      n = await asked(S, 5000);
+      ok('under iOS’s fullscreen player, where chat can’t be read, Kick’s chat isn’t asked for', !n['kick chat'] && sum(n, /^kick seg chunked/) >= 2, JSON.stringify(n));
+      await page.evaluate(() => { window.__fs = null; });
+      ok('and it’s asked for again once chat’s back', await chatBack() >= 1);
+      await page.evaluate(() => document.querySelector('.tabs [data-pane="vods"]').click()); await sleep(2500);
+      n = await asked(S, 4000);
+      ok('nor behind the Videos tab', !n['kick chat'], JSON.stringify(n));
+      await page.evaluate(() => document.getElementById('bChanX').click());
+      ok('and again once chat’s back', await chatBack() >= 1);
+      await page.evaluate(() => { wraith.P.restAfter = 500; document.getElementById('bPlay').click(); });
+      await page.waitForFunction(() => wraith.P.active().paused && !wraith.P.hls.loadingEnabled, null, { timeout: 6000 }).catch(never);
+      await sleep(1500);   // what was already on its way
+      n = await asked(S, 6000);
+      ok('paused, nothing of the picture is asked for, and chat is still there to read', !sum(n, /^kick (seg|list)/) && !n.relay && n['kick chat'] >= 2, JSON.stringify(n));
+      await page.evaluate(() => document.getElementById('bPlay').click());
+      await picture(page);
+      n = await asked(S, 4000);
+      ok('and playing again brings the picture back', sum(n, /^kick seg chunked/) >= 1, JSON.stringify(n));
+      await done();
+    })(),
+    (async () => {
+      // away: with the sound on, with it off, and in front with nobody about
+      const { page, S, done } = await kickHere();
+      await picture(page);
+      S.talk(400, 500);
+      await go(page, true);
+      await soundFrom(page, '160p30');
+      await sleep(3000);   // what was on its way as it left
+      let n = await asked(S, 12000);
+      let others = Object.keys(n).filter(k => !/^kick (seg|list) 160p30$/.test(k));
+      ok('away with the sound on, only Kick’s smallest rendition is asked for: no chat, no picture, no relay, nobody’s API', others.length === 0 && n['kick seg 160p30'] >= 4, JSON.stringify(n));
+      ok('a segment every 2 s, and its list no more often than that while it eases back from where the picture was', n['kick list 160p30'] <= 8 && n['kick seg 160p30'] <= 8, JSON.stringify(n));
+      // a minute on it has eased back to its cushion (here, moved back to it): the list is then asked for as the listed seconds run low
+      await page.evaluate(() => { const a = document.getElementById('aBG'); a.currentTime = Math.max(a.buffered.start(0), a.currentTime - 3.2); }); await sleep(2500);
+      n = await asked(S, 12000);
+      ok('and once it has, about every 4 s, as Twitch’s is', !(await page.evaluate(() => wraith.BG.easing)) && n['kick list 160p30'] <= 4 && n['kick seg 160p30'] >= 4, JSON.stringify(n));
+      let t = Date.now();
+      await page.evaluate(() => wraith.P.refresh()); await sleep(800);
+      n = S.since(t); others = Object.keys(n).filter(k => !/^kick (seg|list) 160p30$/.test(k));
+      ok('the minute’s look at the channel, with its sound going, asks Kick once and nobody else', n['kick channel'] === 1 && others.length === 1, JSON.stringify(n));
+      await go(page, false);
+      await picture(page);
+      n = await asked(S, 3500);
+      ok('back, the picture and chat are asked for again', n['kick chat'] >= 1 && sum(n, /^kick seg chunked/) >= 1, JSON.stringify(n));
+      await page.evaluate(() => document.getElementById('bMute').click());
+      await go(page, true); await sleep(2500);
+      n = await asked(S, 8000);
+      ok('away with the sound off, a page on Kick asks nothing of anyone', Object.keys(n).length === 0, JSON.stringify(n));
+      t = Date.now();
+      await page.evaluate(() => wraith.P.refresh()); await sleep(800);
+      ok('not even the minute’s look at the channel', Object.keys(S.since(t)).length === 0, JSON.stringify(S.since(t)));
+      await go(page, false);
+      await page.evaluate(() => document.getElementById('vLL').play());   // iOS plays again what it paused itself
+      await picture(page);
+      ok('(and it plays again coming back)', await page.evaluate(() => !wraith.P.active().paused && wraith.P.src === 'kick'));
+      await page.evaluate(() => { wraith.Chat.dozeAfter = 1; wraith.P.restAfter = 500; wraith.Pages.seenAt = Date.now() - 31 * 60e3; });
+      await page.waitForFunction(() => wraith.P.userPaused, null, { timeout: 5000 }).catch(never);
+      await sleep(3000);
+      n = await asked(S, 6000);
+      const s = await page.evaluate(() => ({ paused: wraith.P.userPaused, chat: !!wraith.Chat.timer, kickT: wraith.Chat.kickT, loading: wraith.P.hls?.loadingEnabled }));
+      ok('muted with nobody about for half an hour, it pauses and asks nothing: no picture, no chat', s.paused && !s.chat && !s.kickT && !s.loading && Object.keys(n).length === 0, `${JSON.stringify(s)} ${JSON.stringify(n)}`);
+      t = Date.now();
+      await page.evaluate(() => { wraith.P.refresh(); wraith.P.lookLive(); }); await sleep(800);
+      ok('nor do its looks at the channel', Object.keys(S.since(t)).length === 0, JSON.stringify(S.since(t)));
+      await page.evaluate(() => document.getElementById('bigPlay').click());
+      await picture(page);
+      n = await asked(S, 3500);
+      ok('and a tap brings the picture and chat back', n['kick chat'] >= 1 && sum(n, /^kick seg chunked/) >= 1, JSON.stringify(n));
+      await done();
+    })(),
+    (async () => {
+      // The seat. None of Kick's playlists go through the relay to say whose page this is, so a page on Kick asks about it by itself, and
+      // one that's lost it stops: a page iOS keeps going out of reach would otherwise play Kick for as long as the phone's on.
+      const { page, S, done } = await kickHere({ init: () => Object.defineProperty(navigator, 'webdriver', { get: () => false }) });
+      await picture(page);
+      ok('(the page sits in the seat, as on the phone)', await page.evaluate(() => wraith.Pages.seated));
+      const pings = S.pings;
+      await page.evaluate(() => { wraith.Pages.ticks = 29; }); await sleep(1800);
+      ok('playing Kick, the page asks the relay whose the seat is, once every 30 s', S.pings === pings + 1, `${S.pings - pings} pings`);
+      S.seatTaken = true;
+      await page.evaluate(() => { wraith.Pages.ticks = 29; });
+      await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 5000 }).catch(never);
+      const s = await page.evaluate(() => ({ msg: document.getElementById('msgbox').textContent, hls: !!wraith.P.hls, chat: !!wraith.Chat.kickT || !!wraith.Chat.timer, bg: wraith.BG.on }));
+      ok('and one that’s lost the seat stops: its picture and its chat', /another window/i.test(s.msg) && !s.hls && !s.chat && !s.bg, JSON.stringify(s));
+      await sleep(2500);
+      const n = await asked(S, 4000);
+      ok('and asks nothing more', Object.keys(n).length === 0, JSON.stringify(n));
+      await done();
+    })(),
+    (async () => {
+      // the stream you're listening to ends while the app's away, with the other still live: the sound moves over, and nothing else starts up out of sight
+      const { page, S, done } = await kickHere({ twitch: true, init: () => localStorage.setItem('wraith.src.xqc', '"kick"') });
+      await picture(page);
+      ok('(live on both with Kick picked: Kick)', (await where(page)).src === 'kick');
+      await page.evaluate(() => { wraith.Chat.napAfter = 300; });
+      const state = () => page.evaluate(() => ({ src: wraith.P.src, loading: !!wraith.P.hls?.loadingEnabled, vPaused: document.getElementById('vLL').paused, ws: !!wraith.Chat.ws, kickT: wraith.Chat.kickT, timer: !!wraith.Chat.timer }));
+      await go(page, true);
+      await soundFrom(page, '160p30');
+      S.kick = false;
+      await page.evaluate(async () => { await wraith.P.refreshKick(); await wraith.P.refreshKick(); });
+      const moved = await soundFrom(page, 'audio_only');
+      await sleep(3000);
+      let n = await asked(S, 10000), s = await state();
+      ok('Kick ending while away, the sound goes on from Twitch', moved && s.src === 'twitch', JSON.stringify(s));
+      ok('with nothing else running out of sight: no picture, no chat, nothing of Kick’s', !sum(n, /^twitch seg (?!audio_only)/) && !sum(n, /^kick/) && s.vPaused && !s.loading && !s.ws && !s.timer, `${JSON.stringify(n)} ${JSON.stringify(s)}`);
+      S.kick = true; S.twitch = false;
+      await page.evaluate(async () => { await wraith.P.refresh(); await wraith.P.refresh(); });
+      const back = await soundFrom(page, '160p30');
+      await sleep(3000);
+      n = await asked(S, 10000); s = await state();
+      const others = Object.keys(n).filter(k => !/^kick (seg|list) 160p30$|^kick channel$/.test(k));   // (the channel: the second look, 20 s after the first, that the test brought forward)
+      ok('Twitch ending while away, the sound goes on from Kick', back && s.src === 'kick', JSON.stringify(s));
+      ok('again with nothing else: no picture, no chat, no relay', others.length === 0 && (n['kick channel'] || 0) <= 1 && s.vPaused && !s.loading && !s.kickT && !s.timer, `${JSON.stringify(n)} ${JSON.stringify(s)}`);
+      await done();
+    })(),
+    ...['?c=xqc', ''].map(path => (async () => {
+      // a page iOS loads out of sight asks nothing of Kick either, till it's looked at
+      const { page, S, done } = await kickHere({ path, init: hiddenFromStart });
+      await sleep(2500);
+      ok(`xQc’s ${path ? 'channel' : 'row on the home screen'} loaded out of sight asks nothing of Kick, Twitch or the relay`, S.net.length === 0, JSON.stringify(S.since(0)));
+      await page.evaluate(() => { window.__hidden = false; document.dispatchEvent(new Event('visibilitychange')); });
+      await sleep(2500);
+      ok('and once it’s looked at, it asks Kick', S.since(0)['kick channel'] >= 1, JSON.stringify(S.since(0)));
+      await done();
+    })()),
   ]);
 }
 
