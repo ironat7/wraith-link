@@ -1194,6 +1194,7 @@ const nothingOpen = () => ({
   cap: 0, capWait: 180e3, lastStall: 0, stalls: [],   // renditions below the pick that buffering has forced, for this stream only
   choked: [],                        // stalls with seconds still loaded and frames being dropped: the device, not the connection (tooMuch)
   rate: 'normal', liveT: TARGET.live, calm: Date.now(),   // speed; current live target, and since when playback has been smooth
+  aheads: [], obs: null,             // what's been loaded ahead of the live picture these last seconds (low); the minute's count for the record (note)
   cdnT: TARGET.cdn, cdnDry: 0, sought: 0,   // the CDN feed's target for this stream, when it last ran dry, and when the page last moved it
   retries: 0, fixes: 0, began: 0,    // restarts and media recoveries in a row with nothing to show; when the live player last started
   quietUntil: 0,                     // stalls before this are the player starting up, not the network
@@ -1346,7 +1347,7 @@ const P = {
       ...LOADING,
       pLoader: RelayLoader,
       progressive: true,              // play upcoming segments while Twitch is still sending them
-      liveSyncDuration: 4,
+      liveSyncDuration: 4.5,
       liveMaxLatencyDuration: 14,
       maxLiveSyncPlaybackRate: 1,     // the rate controller in tick() does catch-up instead
       liveDurationInfinity: true,
@@ -1719,7 +1720,7 @@ const P = {
 
   toLiveEdge() {
     const p = this.hls?.liveSyncPosition;
-    if (Number.isFinite(p) && p > vL.currentTime + 1) { this.quietUntil = Date.now() + 6000; vL.currentTime = p; }   // the jump's own buffering isn't a bad connection
+    if (Number.isFinite(p) && p > vL.currentTime + 1) { this.quietUntil = Date.now() + 6000; this.aheads = []; vL.currentTime = p; }   // the jump's own buffering isn't a bad connection
   },
 
   show(which) {
@@ -1818,14 +1819,30 @@ const P = {
     return Math.max(least, l == null ? 0 : Math.max(0, l - 2.5) * 1000);
   },
 
-  // Speed up a little when behind, slow down when the buffer runs thin. Discrete steps with
-  // hysteresis: a continuously varying rate makes the audio pitch wander.
+  // The live picture plays at the stream's own speed, as Twitch's player does. Measured side by side on xQc's stream on 2026-11-14, in
+  // Chrome through a VPN, after Jerry: "xqc stream on wraith stutters, twitch doesn't", "I asked if the algorithm and the logic of ours is
+  // as good as Twitch's". Twitch's (player core 1.59) never left 1×: 200 s with no stall, 1.2 to 2.8 s behind with 1.0 to 2.5 s loaded;
+  // a 3 s cut in the network ran what was loaded down to 0.45 s, filled it again within a second and showed nothing; an 8 s cut stalled it,
+  // and it came back at the newest picture, still at 1×. This page steered by how far behind the stamps said it was, with 0.93× and 1.1×:
+  // 14 s at 0.93× after a start that came in close or after the stream's source hiccuped, 11 s at 1.1× after every return from another
+  // app (the picture joins the sound, which plays further back), and at each cut it started its player over, 5 s with no picture. At 60
+  // frames a second either speed is frames shown unevenly, and that's the stutter. So: never slower than the stream. A cushion that's too
+  // thin stalls once, and the stall is the cushion from then on, as nothing plays it away again. Faster only to spend what's spare: when
+  // the picture is over 4 s further behind than aimed for (a return from another app lands 1 to 3 s over, three tries, and plays on from
+  // there at 1×: catching that up took 23 s at 1.05× two times in three) and the least that's been loaded ahead these last seconds is
+  // still over a second, and then at 1.05×, until it's within 2.5 s or the cushion is used up (liveRate). Nothing pulls a start in to the aim any more, so it starts half a second further back (newHls). The CDN's copy keeps its own steps (cdnRate).
   tick() {
     const v = this.active(), now = Date.now();
     if (now - this.labelled > 900 && !document.hidden) { this.labelled = now; UI.lat(); }
     if (!v || this.feed === 'vod') return;
     this.watch(v, now);
     if (v.paused) return this.rest();
+    const live = this.feed === 'live', ahead = bufAhead(v);
+    if (live) {
+      const a = this.aheads;
+      a.push([now, ahead]);
+      while (a[0][0] < now - 8000) a.shift();
+    }
     // a picked quality stays picked, whatever hls.js decides after an error
     if (this.feed === 'live' && this.q !== 'auto' && this.hls?.autoLevelEnabled) this.applyQuality(true);
     if (v.readyState < 3) {   // stalled: hop the hole a cut-out ad leaves if picture is buffered past it
@@ -1833,7 +1850,7 @@ const P = {
       for (let i = 0; i < b.length; i++) if (b.start(i) > v.currentTime + 0.1) { v.currentTime = b.start(i) + 0.05; break; }
       return;
     }
-    const lat = this.latency(), live = this.feed === 'live', T = live ? this.liveT : this.cdnT;
+    const lat = this.latency(), T = live ? this.liveT : this.cdnT;
     if (lat == null) return;
     if (lat > T + 10) {
       if (live) return this.toLiveEdge();
@@ -1847,14 +1864,31 @@ const P = {
       this.applyQuality(true);
       if (!this.cap) UI.toast('Back to the quality you picked');
     }
-    // A device that didn't keep up at 1× isn't asked for 1.1× (66 frames a second of a 60 it was dropping): what it's behind by, it takes
+    // A device that didn't keep up at 1× isn't asked for more (63 frames a second of a 60 it was dropping): what it's behind by, it takes
     // in one step, once it has gone a few seconds without choking.
     const strained = live && (this.heavy || now - this.chokedAt < 120e3);
     if (live) this.frames(v, now);
     if (strained && lat > T + 2 && now - this.chokedAt > 8e3 && now > this.quietUntil) return this.toLiveEdge();
-    const ahead = bufAhead(v), s = this.rate = live ? this.liveRate(lat, T, ahead) : this.cdnRate(lat, T, ahead);
-    const r = s === 'fast' ? (strained ? 1 : 1.1) : s === 'slow' ? 0.93 : 1;
-    if (v.playbackRate !== r) v.playbackRate = r;
+    const s = this.rate = live ? this.liveRate(lat, T, this.low(now)) : this.cdnRate(lat, T, ahead);
+    const r = s === 'fast' ? (strained ? 1 : live ? 1.05 : 1.1) : s === 'slow' ? 0.93 : 1;
+    if (v.playbackRate !== r) { v.playbackRate = r; if (this.obs) this.obs.speeds++; }
+    if (live) this.note(v, now, ahead, lat);
+  },
+  // The least that's been loaded ahead of the live picture over the last 8 s, or nothing until it's been watched for 6: what's loaded
+  // comes and goes with each segment, and it's the least of it that's the cushion.
+  low(now) { const a = this.aheads; return a.length && now - a[0][0] > 6000 ? Math.min(...a.map(x => x[1])) : 0; },
+  // For the record, which is all that can be seen of the phone from anywhere else: how the picture went, a minute at a time. The first
+  // minute of watching always, then only a minute with a stall, a change of speed or frames dropped in it.
+  note(v, now, ahead, lat) {
+    const q = v.getVideoPlaybackQuality?.() || {}, fresh = first => ({ since: now, at: now, stalls: 0, speeds: 0, least: ahead, sum: 0, n: 0, first, f: q.totalVideoFrames || 0, d: q.droppedVideoFrames || 0 });
+    let o = this.obs;
+    if (!o || now - o.at > 3000 || document.hidden) o = this.obs = fresh(!o || o.first);   // not watched in between: the minute starts over
+    o.at = now; o.least = Math.min(o.least, ahead); o.sum += ahead; o.n++;
+    if (now - o.since < 60e3) return;
+    const frames = (q.totalVideoFrames || 0) - o.f, drop = frames > 0 ? ((q.droppedVideoFrames || 0) - o.d) / frames : 0;
+    if (o.first || o.stalls || o.speeds || drop > 0.02) Away.add(`picture ${v.videoHeight}p: ${o.stalls} stalls, ${o.speeds} speed changes, ${o.least.toFixed(1)} s loaded at the least and ${(o.sum / o.n).toFixed(1)} mostly, ${lat.toFixed(1)} s behind`
+      + `, ${Math.round(drop * 100)}% of ${frames} frames dropped`);
+    this.obs = fresh(false);
   },
 
   // What the picture's player loads follows the picture. Left alone, a paused live stream goes on loading as fast as a playing one: hls.js
@@ -1885,13 +1919,10 @@ const P = {
   },
   dropBuffer() { this.hls.trigger(window.Hls.Events.BUFFER_FLUSHING, { startOffset: 0, endOffset: Infinity, type: null }); },
 
-  // Slows down when the buffer runs thin, or when it starts closer than the target (no cushion).
-  liveRate(lat, T, ahead) {
-    const s = this.rate;
-    if ((ahead < 0.5 && lat < T + 4) || lat < T - 0.5) return 'slow';
-    if (s === 'slow') return (ahead > 1.2 || lat > T + 0.8) && lat >= T - 0.1 ? 'normal' : s;
-    if (lat > T + 0.6) return ahead > 1 ? 'fast' : 'normal';   // however far behind, speeding up needs something to speed through
-    return s === 'fast' && lat < T + 0.15 ? 'normal' : s;
+  // Never slow (tick has why). Fast only with cushion to spare, by the least that's been loaded lately (low), and only from well behind.
+  liveRate(lat, T, low) {
+    if (this.rate === 'fast') return lat < T + 2.5 || low < 0.8 ? 'normal' : 'fast';
+    return lat > T + 4 && low > 1.2 ? 'fast' : 'normal';
   },
 
   // The CDN adds 10 s at a time, so what's loaded swings by that much whatever the speed, and catching up can only
@@ -2815,9 +2846,11 @@ for (const ev of ['touchend', 'click']) document.addEventListener(ev, () => {
 // typing is you being there too, sending with the keyboard's own key included, which no tap goes with, and a key counts for the lock as a tap does
 document.addEventListener('keydown', () => { Awake.onTap(); Pages.see(); }, { capture: true, passive: true });
 
-// A network change leaves connections hanging: with little left in the buffer, start clean rather than wait them out.
+// A network change leaves connections hanging: with little left in the buffer, the loading starts over rather than wait them out. Only
+// the loading: starting the player over took the picture away for 5 s after a 3 s cut that Twitch's player came through with nothing to
+// see (tick). A picture that still isn't moving 10 s on starts over as ever (watch).
 window.addEventListener('online', () => {
-  if (P.feed === 'live' && P.hls && !BG.on && !vL.paused && bufAhead(vL) < 1) { P.retries = 0; P.restart(); }
+  if (P.feed === 'live' && P.hls?.levels.length && !BG.on && !vL.paused && bufAhead(vL) < 1) { P.retries = 0; P.quietUntil = Date.now() + 6000; P.hls.stopLoad(); P.hls.startLoad(vL.currentTime); }
   // on the CDN only because low latency failed: with the network back, it gets another go now rather than in 3 minutes
   else if (P.feed === 'cdn' && P.pref === 'live' && !P.subOnly && !P.relayGone && !P.cover && !BG.on && !document.hidden) { P.retries = 0; P.playLive(); }
   if (!document.hidden && !$('home').hidden) Home.load(true);
@@ -2884,6 +2917,7 @@ for (const v of [vL, vC]) {
   v.addEventListener('waiting', () => {
     if (P.active() !== v) return;
     UI.spin(true);
+    if (v === vL && P.obs) P.obs.stalls++;
     if (v === vL && v.currentTime > 3) P.noteStall();
     if (v === vC) P.noteDry();
   });
@@ -4701,11 +4735,20 @@ const Sheet = {
 $('scrim').onclick = () => Sheet.close();
 
 // ── home ────────────────────────────────────────────
+// A channel stays in Recent for two days from when it was last opened (Jerry, 2026-11-14: "recents should expire/clear in say 2 days").
+// Ones kept from before that carry no time, and get their two days from the first look at the list.
 const Recent = {
-  list() { return store.get('recent', []); },
+  keep: 2 * 864e5,
+  list() {
+    const all = store.get('recent', []), now = Date.now(), kept = all.filter(x => !x.t || now - x.t < this.keep);
+    if (kept.length === all.length && kept.every(x => x.t)) return kept;
+    const timed = kept.map(x => x.t ? x : { ...x, t: now });
+    store.set('recent', timed);
+    return timed;
+  },
   add(u) {
     if (Home.roster().includes(u.login)) return;
-    store.set('recent', [{ l: u.login, n: u.displayName, p: u.profileImageURL }, ...this.list().filter(x => x.l !== u.login)].slice(0, 12));
+    store.set('recent', [{ l: u.login, n: u.displayName, p: u.profileImageURL, t: Date.now() }, ...this.list().filter(x => x.l !== u.login)].slice(0, 12));
   },
   remove(l) { store.set('recent', this.list().filter(x => x.l !== l)); Home.renderRecent(); },
 };
@@ -5099,7 +5142,7 @@ Sound.set(Sound.muted);
 Me.save(Me.acct);
 Pages.whenSeen(() => { Update.check(); Me.check(); Me.sync(); });
 setInterval(() => { if (Me.acct && !document.hidden && !Pages.idle() && Date.now() - (Me.at.check || 0) > 3600e3) Me.check(); }, 60e3);
-window.wraith = { P, Chat, Home, BG, Pages, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake, Auto, dateAt, posAt };   // for poking at playback from devtools
+window.wraith = { P, Chat, Home, BG, Pages, Recent, Talk, Me, Replay, Browse, Search, SignIn, UI, Sheet, Card, Picker, Update, BUILD, relayGet, Quota, Pill, Awake, Auto, dateAt, posAt };   // for poking at playback from devtools
 Away.add('loaded ' + (location.search || 'home') + (document.hidden ? ' out of sight' : '') + (Sound.muted ? ', the sound saved as off' : ''));
 Pages.tell('here');
 route(false);

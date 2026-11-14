@@ -1654,9 +1654,31 @@ if (want('cdn')) {
     (async () => {
       const { page, done } = await stage(answer);
       await levels(page, 15000);
-      const r = await page.evaluate(() => { const P = wraith.P; P.rate = 'normal'; return { far: P.liveRate(12, 2, 0.2), plenty: P.liveRate(12, 2, 3), thin: P.liveRate(3.1, 2, 0.8), close: P.liveRate(3, 2, 0.2) }; });
-      ok('far behind with nothing buffered doesn’t speed up', r.far === 'normal' && r.thin === 'normal', JSON.stringify(r));
-      ok('with something buffered it does, and on a thin buffer close by it slows', r.plenty === 'fast' && r.close === 'slow', JSON.stringify(r));
+      // The live picture at the stream's own speed, as Twitch's player keeps it (Jerry, 2026-11-14: "xqc stream on wraith stutters, twitch
+      // doesn't"): never slow, and fast only from well behind with cushion to spare, by the least that's been loaded lately
+      const r = await page.evaluate(() => { const P = wraith.P, at = (rate, ...a) => { P.rate = rate; return P.liveRate(...a); };
+        return { far: at('normal', 12, 2, 0.2), plenty: at('normal', 7, 2, 3), back: at('normal', 5, 2, 3.5), near: at('normal', 0.8, 2, 0.1), thin: at('normal', 2, 2, 0),
+          on: at('fast', 5, 2, 2), spent: at('fast', 5, 2, 0.6), there: at('fast', 4.4, 2, 2) }; });
+      ok('far behind with nothing to spare doesn’t speed up', r.far === 'normal', JSON.stringify(r));
+      ok('over 4 s past the aim with a cushion to spare, it does', r.plenty === 'fast', JSON.stringify(r));
+      ok('where a return from another app lands, it plays on as it is', r.back === 'normal', JSON.stringify(r));
+      ok('nearer than the aim, or with nothing loaded, it never slows', r.near === 'normal' && r.thin === 'normal', JSON.stringify(r));
+      ok('and speeding stops within 2.5 s of the aim, or when the cushion’s spent', r.on === 'fast' && r.spent === 'normal' && r.there === 'normal', JSON.stringify(r));
+      // the least loaded ahead over the last seconds, once it's been watched for 6
+      const low = await page.evaluate(() => { const P = wraith.P, now = Date.now(); P.aheads = [[now - 3000, 2], [now, 2.2]]; const young = P.low(now); P.aheads = [[now - 7000, 2], [now - 4000, 0.4], [now, 2.2]]; return { young, old: P.low(now) }; });
+      ok('the cushion is the least that’s been loaded lately, and nothing until it’s been watched a while', low.young === 0 && low.old === 0.4, JSON.stringify(low));
+      // for the record: the first minute, then a minute only with something in it
+      const said = await page.evaluate(() => { const P = wraith.P, v = document.getElementById('vLL'), now = Date.now(), lines = () => JSON.parse(localStorage.getItem('wraith.away') || '[]').filter(l => / picture /.test(l));
+        Object.defineProperty(v, 'videoHeight', { configurable: true, get: () => 1080 });
+        v.getVideoPlaybackQuality = () => ({ totalVideoFrames: 3600, droppedVideoFrames: 0 });
+        P.obs = null; P.note(v, now, 1.4, 2.1); P.obs.since = now - 61e3; P.obs.stalls = 2; P.note(v, now + 1, 0.3, 2.3);
+        const first = lines().at(-1), n = lines().length;
+        P.obs.since = now - 61e3; P.note(v, now + 2, 1.5, 2.3);
+        const quiet = lines().length - n;
+        P.obs.since = now - 61e3; P.obs.speeds = 1; P.note(v, now + 3, 1.5, 2.3);
+        return { first, quiet, third: lines().at(-1) }; });
+      ok('the record has the first minute of the picture: stalls, changes of speed, what was loaded, how far behind, frames dropped', / picture 1080p: 2 stalls, 0 speed changes, 0\.3 s loaded at the least and \d\.\d mostly, 2\.3 s behind, 0% of \d+ frames dropped$/.test(said.first || ''), JSON.stringify(said));
+      ok('a minute with nothing in it isn’t written, and one with a change of speed is', said.quiet === 0 && / 0 stalls, 1 speed changes/.test(said.third || ''), JSON.stringify(said));
       await done();
     })(),
     (async () => {
@@ -2218,6 +2240,23 @@ if (want('lists')) {
   const rows = (n, more) => ({ streams: { edges: Array.from({ length: n }, () => { const i = rowN++; return { cursor: 'c' + i, node: { viewersCount: 1, type: 'live', language: 'EN', createdAt: ago(60), title: 't', previewImageURL: null, game: null, broadcaster: { login: 'u' + i, displayName: 'U' + i, profileImageURL: null } } }; }), pageInfo: { hasNextPage: more } } });
   const onBrowse = async page => { await page.evaluate(() => { localStorage.setItem('wraith.homeView', '"browse"'); }); await page.reload({ waitUntil: 'domcontentloaded' }); };
   await Promise.all([
+    (async () => {
+      // Jerry, 2026-11-14: "recents should expire/clear in say 2 days". From when each was last opened
+      const { page, done } = await stage(answer, { w: 390 });
+      await levels(page, 15000);
+      const r = await page.evaluate(() => {
+        const R = wraith.Recent, day = 864e5, now = Date.now(), who = () => R.list().map(x => x.l).join(' ');
+        localStorage.setItem('wraith.recent', JSON.stringify([{ l: 'today', n: 'Today', p: null, t: now - 3600e3 }, { l: 'yesterday', n: 'Y', p: null, t: now - 1.9 * day }, { l: 'old', n: 'O', p: null, t: now - 2.1 * day }, { l: 'undated', n: 'U', p: null }]));
+        const first = who(), kept = JSON.parse(localStorage.getItem('wraith.recent'));
+        R.add({ login: 'yesterday', displayName: 'Y', profileImageURL: null });
+        const again = JSON.parse(localStorage.getItem('wraith.recent'))[0];
+        return { first, stored: kept.map(x => x.l).join(' '), stamped: now - kept.find(x => x.l === 'undated').t < 5000, again: again.l, fresh: now - again.t < 5000 };
+      });
+      ok('a channel last opened over two days ago is gone from Recent, and from what’s kept', r.first === 'today yesterday undated' && r.stored === r.first, JSON.stringify(r));
+      ok('one kept from before there were times gets its two days from now', r.stamped, JSON.stringify(r));
+      ok('opening one again starts its two days over', r.again === 'yesterday' && r.fresh, JSON.stringify(r));
+      await done();
+    })(),
     (async () => {
       // chat keeps pace with the picture only while there's a picture to keep pace with
       const { page, done } = await stage(answer, { w: 390 });
@@ -3217,13 +3256,13 @@ if (want('player')) {
       const s1 = await see();
       await stall(); await sleep(900);
       const s2 = await see();
-      ok('one stall with seconds loaded and frames dropping: no more cushion, and no playing fast to catch up', s0.load === 'chunked' && s1.ahead >= 2 && s1.rate === 1.1 && s2.T === s1.T && s2.rate === 1 && s2.load === 'chunked' && !s2.heavy, JSON.stringify({ s0, s1, s2 }));
+      ok('one stall with seconds loaded and frames dropping: no more cushion, and no playing fast to catch up', s0.load === 'chunked' && s1.ahead >= 2 && s2.T === s1.T && s2.rate === 1 && s2.load === 'chunked' && !s2.heavy, JSON.stringify({ s0, s1, s2 }));
       await stall(); await sleep(300);
       const s3 = await see();
       ok('a second within the minute rules that rendition out, at once, and says so', s3.load === '720p60' && s3.heavy === '1080p60' && s3.cap === 0 && s3.T === s1.T && /can’t keep up with 1080p60/.test(s3.toast), JSON.stringify(s3));
       await sleep(11000);
       const s4 = await see();
-      ok('what it was behind by is taken in one step, never at 1.1×', s4.lat < s4.T + 2 && s4.rate !== 1.1 && s4.load === '720p60', JSON.stringify(s4));
+      ok('what it was behind by is taken in one step, never by playing fast', s4.lat < s4.T + 2 && s4.rate === 1 && s4.load === '720p60', JSON.stringify(s4));
       await page.evaluate(() => wraith.P.open('staged')); await sleep(500); await up();
       const s5 = await see();
       ok('the next stream starts below it too', s5.load === '720p60' && s5.heavy === '1080p60', JSON.stringify(s5));
