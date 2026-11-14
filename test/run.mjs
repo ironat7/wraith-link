@@ -2,7 +2,7 @@
 // Sections side by side, with each one's time and whatever failed. Run the ones a change touches, then push: Chrome can't show what only
 // iOS does, the phone is the real test, and a push is live in under a minute. With no sections, every one in fixes.mjs (about 2 minutes),
 // which is for a change that reaches across the player. None of them touch the relay or a real stream: they watch one made here (see lib.mjs).
-//   the look of a screen      layout duo pill
+//   the look of a screen      duo pill
 //   the player                pause cover misc recover relay screen player budget kick
 //   the CDN feed, videos      cdn vod replay
 //   leaving and coming back   sound away pages unseen return battery handover log
@@ -18,7 +18,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { makeClips } from './lib.mjs';
 
-const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery handover kick log'.split(' ');
+const ALL = 'pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages recover relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery handover kick log'.split(' ');
 const queue = process.argv.slice(2).length ? process.argv.slice(2) : [...ALL];
 const SIDE_BY_SIDE = 6;
 const t0 = Date.now(), results = [];

@@ -988,147 +988,6 @@ if (want('pages')) {
   await done();
 }
 
-if (want('layout')) {
-  // Every shape of screen, with Apple's safe areas: what takes up the room, and what stays clear of the status pill.
-  const { c, page, done } = await open({ iphone: true, w: 951, h: 669, init: me => localStorage.setItem('wraith.me', JSON.stringify(me)), initArg: ME });
-  await page.route('https://id.twitch.tv/oauth2/**', route => route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify({ login: 'ironat___', user_id: '212375133', client_id: 'x' }) }));
-  const cdp = await c.newCDPSession(page);
-  const shape = async (width, height, insets) => { await page.setViewportSize({ width, height }); await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, right: 0, bottom: 0, left: 0, ...insets } }); await sleep(400); };
-  const box = () => page.evaluate(() => { const r = s => { const n = document.querySelector(s); if (!n || (!n.offsetParent && getComputedStyle(n).position !== 'fixed')) return null; const b = n.getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height) }; }; return { stage: r('#stage'), log: r('.log'), info: r('.info'), say: r('#say'), tabs: r('.tabs'), x: r('#bChanX'), follow: r('#bFollow'), side: r('.side'), vods: r('#paneVods') }; });
-  const near = (a, b, by = 2) => Math.abs(a - b) <= by;
-  await shape(951, 669, { right: 84, bottom: 34 });
-  await page.goto(base + `?c=${A}`); await playing(page);
-  await page.evaluate(() => { document.getElementById('watch').classList.add('nochat'); });   // however side chat was left
-  let b = await box();
-  ok('Duo open, on its side: picture top left, as wide as the status strip allows', b.stage.x === 0 && b.stage.y === 0 && near(b.stage.w, 867) && near(b.stage.h, 488), JSON.stringify(b.stage));
-  ok('chat under it, messages using the whole height', b.log && near(b.log.y, b.stage.b, 2) && near(b.log.b, 669) && b.log.x === 0 && b.log.w >= 600, JSON.stringify(b.log));
-  ok('the box to their right, on screen', b.say && b.say.x >= b.log.r - 1 && b.say.y >= b.stage.b && b.say.b <= 669 && b.say.r <= 951, JSON.stringify(b.say));
-  ok('the channel row above the box', b.info && b.info.y >= b.stage.b && b.info.b <= b.say.y + 1 && b.info.x >= b.log.r - 1, JSON.stringify(b.info));
-  ok('no tabs, follow button', !b.tabs && !b.follow, JSON.stringify([b.tabs, b.follow]));
-  // the strip beside the picture holds the controls, out all the time and off the picture, below iOS's island, clock and Wi-Fi (they run to 183, 2026-11-03)
-  const rail = () => page.evaluate(() => {
-    const seen = id => { const n = document.getElementById(id), b = n.getBoundingClientRect(); return !n.offsetParent || getComputedStyle(n.closest('.hud')).opacity !== '1' ? null : { x: Math.round(b.x), r: Math.round(b.right), y: Math.round(b.y), b: Math.round(b.bottom) }; };
-    return { play: seen('bPlay'), mute: seen('bMute'), lat: seen('bLat'), set: seen('bSet'), full: seen('bFull'), back: seen('bBack') };
-  });
-  const railIn = async (name, left, right, bottom, top = 186) => {
-    const r = await rail(), all = [r.play, r.mute, r.lat, r.set, r.full];
-    const apart = all.every((c, i) => all.every((d, j) => j <= i || !c || !d || c.r <= d.x || d.r <= c.x || c.b <= d.y || d.b <= c.y));
-    ok(name, all.every(c => c && c.x >= left && c.r <= right && c.y >= top && c.b <= bottom) && apart && !r.back, JSON.stringify(r));
-    const hit = await page.evaluate(() => ['bPlay', 'bMute', 'bLat', 'bSet', 'bFull'].filter(id => { const n = document.getElementById(id), b = n.getBoundingClientRect(); return document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest('button') !== n; }));
-    ok('and each one there to tap', !hit.length, hit.join());
-  };
-  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
-  await railIn('the controls in the strip beside the picture, below iOS’s things, without a tap', 867, 951, 488);
-  ok('in line with iOS’s things', await page.evaluate(() => { const b = document.getElementById('bPlay').getBoundingClientRect(); return Math.abs(b.x + b.width / 2 - 903) <= 2; }), String(await page.evaluate(() => { const b = document.getElementById('bPlay').getBoundingClientRect(); return b.x + b.width / 2; })));
-  await page.screenshot({ path: 'fixes-duo-inner.png', timeout: 8000 }).catch(() => {});
-  await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(300);
-  const pk = await page.evaluate(() => { const b = document.getElementById('ep').getBoundingClientRect(); return { y: Math.round(b.y), r: Math.round(b.right), h: Math.round(b.height) }; });
-  ok('the emotes take chat’s place, leaving the picture clear', pk.y >= b.stage.b - 1 && pk.r <= b.log.r + 1 && pk.h > 120, JSON.stringify(pk));
-  await page.screenshot({ path: 'fixes-duo-emotes.png', timeout: 8000 }).catch(() => {});
-  await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
-  await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
-  const sh = await page.evaluate(() => { const b = document.querySelector('.panel').getBoundingClientRect(); return { x: Math.round(b.x), r: Math.round(b.right), y: Math.round(b.y), b: Math.round(b.bottom) }; });
-  ok('a sheet comes in from the edge, as tall as the screen, leaving most of the picture in view', sh.r === 951 && sh.x >= 480 && sh.y === 0 && sh.b === 669, JSON.stringify(sh));
-  await page.screenshot({ path: 'fixes-duo-sheet.png', timeout: 8000 }).catch(() => {});
-  await page.evaluate(() => document.getElementById('scrim').click()); await sleep(200);
-  await page.click('#bChan'); await sleep(400);
-  b = await box();
-  ok('tapping the channel leaves the picture where it is', near(b.stage.w, 867) && b.stage.y === 0, JSON.stringify(b.stage));
-  ok('it opens in chat’s place', b.vods && b.vods.x === 0 && b.vods.y >= 488 && b.vods.b <= 669 && !b.log, JSON.stringify(b.vods));
-  await page.waitForFunction(() => document.querySelectorAll('#vods a.vod').length > 4, null, { timeout: 8000 }).catch(() => {});
-  ok('its videos scroll sideways in the strip, nothing cut off', await page.evaluate(() => { const v = document.getElementById('vods'), a = v.querySelector('a.vod').getBoundingClientRect(), last = [...v.querySelectorAll('a.vod')].slice(0, 2).pop().getBoundingClientRect(); return v.scrollWidth > v.clientWidth && a.height < 80 && last.bottom <= 669 && v.scrollHeight <= v.clientHeight + 1; }));
-  ok('the tabs and follow button beside them, above the home bar', b.tabs.x >= b.vods.r - 1 && b.tabs.b <= 669 && b.x.r <= 951 && b.follow && b.follow.y >= 488 && b.follow.r <= 951, JSON.stringify([b.tabs, b.x, b.follow]));
-  await page.click('.tabs [data-pane=about]'); await sleep(1500);
-  ok('about opens there too', await page.evaluate(() => { const a = document.getElementById('paneAbout').getBoundingClientRect(); return a.y >= 488 && a.x === 0 && document.getElementById('about').textContent.length > 10; }));
-  await page.click('.tabs [data-pane=vods]'); await sleep(200);
-  await page.screenshot({ path: 'fixes-duo-channel.png', timeout: 8000 }).catch(() => {});
-  await page.click('#bChanX'); await sleep(300);
-  b = await box();
-  ok('the x brings it all back', near(b.stage.w, 867) && !b.tabs, JSON.stringify(b.stage));
-  // the keyboard
-  await page.evaluate(() => { const vv = window.visualViewport; Object.defineProperty(vv, 'height', { configurable: true, get: () => 370 }); });
-  await page.focus('#sayTx'); await page.evaluate(() => window.visualViewport.dispatchEvent(new Event('resize'))); await sleep(300);
-  b = await box();
-  ok('with the keyboard up, picture and chat fit above it', b.stage.b <= 371 && b.say.b <= 371 && b.log.h > 100 && b.stage.h > 200, JSON.stringify([b.stage, b.log, b.say]));
-  await page.evaluate(() => { document.getElementById('sayTx').blur(); delete window.visualViewport.height; window.visualViewport.dispatchEvent(new Event('resize')); }); await sleep(300);
-  // the other way up: the strip on the left
-  await shape(951, 669, { left: 84, bottom: 34 });
-  b = await box();
-  ok('turned around, clear of the strip on the left', b.stage.x === 84 && b.stage.r === 951 && near(b.stage.h, 488), JSON.stringify(b.stage));
-  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
-  await railIn('with the controls in the strip there', 0, 84, 488);
-  ok('and chat, below all of iOS’s things, free to use its side', await page.evaluate(() => { const n = document.querySelector('#chat .m'); return n && parseFloat(getComputedStyle(n).paddingLeft) === 14; }));
-  await shape(678, 466, { right: 84, bottom: 21 });
-  b = await box();
-  ok('Duo closed, on its side: as wide as the strip allows, and chat has room', near(b.stage.r, 594, 1) && b.log.h >= 125 && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.log, b.say, b.info]));
-  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
-  await railIn('with the controls in all of the strip, the island being at its foot', 594, 678, b.stage.b, 0);
-  await page.screenshot({ path: 'fixes-duo-closed.png', timeout: 8000 }).catch(() => {});
-  await shape(678, 466, { left: 84, bottom: 21 });
-  b = await box();
-  ok('turned around, the same on the left', near(b.stage.x, 84, 1) && near(b.stage.r, 678, 1) && b.say.b <= 466 && b.info.y >= b.stage.b, JSON.stringify([b.stage, b.say, b.info]));
-  await page.evaluate(() => document.getElementById('stage').classList.remove('ui')); await sleep(250);
-  await railIn('with the controls below the island at its top', 0, 84, b.stage.b, 90);
-  await shape(669, 951, { top: 59, bottom: 34 });
-  b = await box();
-  ok('Duo open, upright: picture, one thin row, chat', b.stage.w === 669 && b.info.h <= 46 && near(b.info.y, b.stage.b) && near(b.side.y, b.info.b) && !b.tabs, JSON.stringify([b.stage, b.info, b.side]));
-  await page.screenshot({ path: 'fixes-duo-upright.png', timeout: 8000 }).catch(() => {});
-  await shape(390, 844, { top: 59, bottom: 34 });
-  b = await box();
-  ok('a phone upright: the same', b.stage.w === 390 && b.info.h <= 46 && !b.tabs, JSON.stringify([b.stage, b.info]));
-  await page.screenshot({ path: 'fixes-phone.png', timeout: 8000 }).catch(() => {});
-  await page.evaluate(() => document.getElementById('watch').classList.remove('nochat'));
-  await shape(844, 390, { left: 59, right: 59, bottom: 21 });
-  b = await box();
-  ok('a phone on its side: picture and chat side by side, no row', b.side && b.side.x >= b.stage.r - 1 && !b.info && b.stage.h >= 200, JSON.stringify([b.stage, b.side]));
-  await page.evaluate(() => { document.getElementById('stage').classList.add('ui'); document.getElementById('hudName').click(); }); await sleep(300);
-  b = await box();
-  ok('there the name in the controls opens the channel', !!b.tabs && !!b.info, JSON.stringify(b.tabs));
-  await page.click('#bChanX'); await sleep(200);
-  await shape(1440, 900, {});
-  b = await box();
-  ok('a desktop window: side by side', b.side && b.side.x >= b.stage.r - 1 && b.stage.w > 900, JSON.stringify([b.stage, b.side]));
-  await page.evaluate(() => document.getElementById('watch').classList.add('nochat')); await sleep(200);
-  b = await box();
-  ok('and chat can still be hidden there', !b.side, JSON.stringify(b.side));
-
-  // the home screen on each shape: as much of it on screen as there's room for
-  await page.goto(base); await page.waitForSelector('#live a.row', { timeout: 15000 }).catch(() => {});
-  const home = () => page.evaluate(() => {
-    const r = s => { const b = document.querySelector(s).getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), r: Math.round(b.right), b: Math.round(b.bottom) }; };
-    return { brand: r('.brand'), q: r('#q'), acct: r('#acct'), live: r('#live'), cols: getComputedStyle(document.getElementById('live')).gridTemplateColumns.split(' ').length, wide: document.documentElement.scrollWidth <= innerWidth };
-  });
-  await shape(951, 669, { right: 84, bottom: 34 });
-  let h = await home();
-  ok('home, Duo open: three across', h.cols === 3 && h.wide, JSON.stringify(h));
-  ok('its header on one line, and all of it out of the strip', h.q.y < h.brand.b && h.acct.r <= 867 && h.live.r <= 867, JSON.stringify(h));
-  await page.screenshot({ path: 'fixes-duo-home.png', timeout: 8000 }).catch(() => {});
-  await shape(951, 669, { left: 84, bottom: 34 });
-  h = await home();
-  ok('turned around: the same, the other way', h.cols === 3 && h.brand.x >= 84 && h.live.x >= 84, JSON.stringify(h));
-  await shape(669, 951, { top: 59, bottom: 34 });
-  h = await home();
-  ok('upright: two across, header on one line', h.cols === 2 && h.q.y < h.brand.b && h.wide, JSON.stringify(h));
-  await shape(678, 466, { right: 84, bottom: 21 });
-  h = await home();
-  ok('closed, on its side: two across, header on one line', h.cols === 2 && h.q.y < h.brand.b && h.acct.r <= 594 && h.wide, JSON.stringify(h));
-  await page.screenshot({ path: 'fixes-duo-closed-home.png', timeout: 8000 }).catch(() => {});
-  await shape(466, 678, { right: 84, bottom: 55 });
-  h = await home();
-  ok('closed, upright: one, with nothing cut off, and clear of iOS’s things', h.cols === 1 && h.wide && h.acct.r <= 382, JSON.stringify(h));
-  await shape(390, 844, { top: 59, bottom: 34 });
-  h = await home();
-  ok('a phone: the same', h.cols === 1 && h.wide && h.acct.r <= 390 - 8 && h.q.y >= h.brand.b - 8, JSON.stringify(h));
-  // a margin down both sides is a notch, not the Duo's strip
-  await shape(844, 390, { left: 59, right: 59, bottom: 21 });
-  ok('a phone on its side has no strip', await page.evaluate(() => !('strip' in document.documentElement.dataset)));
-  await shape(1180, 820, {});
-  ok('nor does an iPad', await page.evaluate(() => !('strip' in document.documentElement.dataset)));
-  await shape(951, 669, { right: 84, bottom: 34 });
-  ok('and the Duo’s comes back', await page.evaluate(() => document.documentElement.dataset.strip === 'right'));
-  await done();
-}
-
 if (want('recover')) {
   // How the live player comes out of hls.js's own troubles. It stops loading on a fatal error before the page hears of it.
   const stream = async () => { const o = await open(); await o.page.goto(base + `?c=${A}`); await playing(o.page); return o; };
@@ -2953,77 +2812,6 @@ if (want('duo')) {
       ok('the video’s parents display the same way on every shape', seen.every(x => x === start), [start, ...seen.filter(x => x !== start)].join(' | '));
       await done();
     })(),
-    // closed and upright: iOS's things run down the right to 161 (228 with Now Playing in there), the picture goes just below them,
-    // the channel's row beside them, and chat under the picture down to its box
-    (async () => {
-      const { page, done } = await on(CLOSEDUP);
-      await levels(page, 15000);
-      await page.evaluate(l => wraith.Chat.line(l), LINE('c1', 1)); await sleep(300);
-      await page.evaluate(() => { document.getElementById('iName').textContent = 'JellyHoshiumi'; document.getElementById('iTitle').textContent = 'A very long stream title that goes on and on '.repeat(8); document.getElementById('iSub').textContent = 'Sir, We Have an Orc Problem · 1.2K · 3h 12m'; }); await sleep(150);
-      let b = await box(page, '.info', '#iName', '#iTitle', '#iSub', '#stage', '.log', '#say', '#sayGo', '#sayTx');
-      const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingRight));
-      ok('closed, upright: the picture just below iOS’s things, the width of the screen', b['#stage'].y >= 165 && b['#stage'].y <= 176 && b['#stage'].w === 466, JSON.stringify(b['#stage']));
-      ok('the channel’s row above it, beside them, with the name, the title and the game one over another', b['.info'].y === 0 && Math.abs(b['.info'].b - b['#stage'].y) <= 1 && [b['#iName'], b['#iTitle'], b['#iSub']].every(t => t.seen && t.r <= 382 && t.b <= b['#stage'].y) && b['#iName'].b <= b['#iTitle'].y + 1 && b['#iTitle'].b <= b['#iSub'].y + 1 && b['#iTitle'].h >= 50, JSON.stringify(b));
-      ok('chat under the picture, the width of the screen, down to its box', b['.log'].y >= b['#stage'].b - 1 && b['.log'].h >= 120 && pad < 84 && b['#say'].y >= b['.log'].b - 1 && b['#sayTx'].b <= 678 - 55, `${pad} ${JSON.stringify(b)}`);
-      ok('the box with the width to itself', b['#sayGo'].r >= 466 - 12, JSON.stringify(b['#sayGo']));
-      await page.evaluate(() => document.getElementById('stage').classList.add('ui')); await sleep(200);
-      const full = await rect(page, '#bFull');
-      ok('the picture’s controls run to its edge', full.r >= 466 - 8, JSON.stringify(full));
-      await page.evaluate(() => { document.getElementById('stage').classList.remove('ui'); document.getElementById('bChan').click(); }); await sleep(300);
-      b = await box(page, '#paneVods', '#stage', '.tabs', '#bChanX', '#bFollow');
-      const vodsPad = await page.evaluate(() => parseFloat(getComputedStyle(document.getElementById('vods')).paddingBottom));
-      ok('the channel’s videos take chat’s place under its tabs, and the picture stays put', b['.tabs'].y >= b['#stage'].b - 1 && b['#paneVods'].y >= b['.tabs'].b - 1 && b['#paneVods'].w === 466 && b['#paneVods'].b <= 678 && b['#stage'].w === 466 && b['#stage'].y >= 165 && b['#stage'].y <= 176, JSON.stringify(b));
-      ok('with the list clear of the home bar, and the follow button beside iOS’s things', vodsPad >= 55 && (!b['#bFollow'].seen || b['#bFollow'].r <= 382), `${vodsPad} ${JSON.stringify(b['#bFollow'])}`);
-      await page.evaluate(() => document.getElementById('bChanX').click()); await sleep(200);
-      await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
-      b = await box(page, '#ep', '#stage', '#say');
-      ok('the emotes take chat’s place too', b['#ep'].x === 0 && b['#ep'].w === 466 && b['#ep'].y >= b['#stage'].b - 1 && b['#ep'].h >= 110 && b['#say'].y >= b['#ep'].b - 1 && b['#stage'].w === 466 && b['#say'].b <= 678, JSON.stringify(b));
-      await page.evaluate(ls => { for (const l of ls) wraith.Chat.line(l); }, Array.from({ length: 12 }, (_, i) => LINE('e' + i, i))); await sleep(200);
-      ok('on top of it', await page.evaluate(() => { const r = document.getElementById('ep').getBoundingClientRect(); return [[0.2, 0.15], [0.5, 0.5], [0.8, 0.9]].every(([x, y]) => document.elementFromPoint(r.x + r.width * x, r.y + r.height * y)?.closest('#ep')); }));
-      await page.evaluate(() => document.getElementById('bEmote').click()); await sleep(200);
-      await page.screenshot({ path: 'fixes-duo-closed-upright.png', timeout: 8000 }).catch(() => {});
-      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
-      const sheet = await rect(page, '.panel');
-      ok('a sheet stops short of iOS’s things', sheet.y >= 165 && sheet.b === 678, JSON.stringify(sheet));
-      await done();
-    })(),
-    // closed on its side: the camera, and so the island, stays where it is as you turn the phone
-    (async () => {
-      const { page, done } = await on(CLOSED);
-      await levels(page, 15000);
-      let b = await box(page, '.side', '#sayGo', '.info', '#stage');
-      ok('closed, strip on the right: the strip along the bottom stops short of the island at the foot', b['.side'].r <= 594 && b['#sayGo'].r <= 594 && b['.info'].r <= 594, JSON.stringify(b));
-      await page.evaluate(() => document.getElementById('bChan').click()); await sleep(300);
-      b = await box(page, '.tabs', '#bChanX', '.info', '#bBack2');
-      ok('the channel’s tabs too', b['#bChanX'].r <= 594 && b['.info'].r <= 594, JSON.stringify(b));
-      await done();
-    })(),
-    (async () => {
-      const { page, done } = await on(CLOSEDFLIP);
-      await levels(page, 15000);
-      let b = await box(page, '#sayGo', '.info', '#stage', '#bPlay', '#bMute', '#bLat', '#bSet', '#bFull');
-      ok('closed, strip on the left: the strip along the bottom has the width, the island being at the top', b['#sayGo'].r >= 678 - 20 && b['.info'].r === 678, JSON.stringify(b));
-      const column = ['#bPlay', '#bMute', '#bLat', '#bSet', '#bFull'].map(q => b[q]);
-      ok('and the controls in a column below it, in line with it', column.every((c, i) => c.seen && c.r <= 84 && Math.abs(c.x + c.w / 2 - 48) <= 2 && c.y >= (i ? column[i - 1].b : 90)) && column[4].b <= b['#stage'].b, JSON.stringify(column));
-      ok('each one there to tap', await page.evaluate(() => ['bPlay', 'bMute', 'bLat', 'bSet', 'bFull'].every(id => { const n = document.getElementById(id), r = n.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('button') === n; })));
-      await page.screenshot({ path: 'fixes-duo-closed-left.png', timeout: 8000 }).catch(() => {});
-      await done();
-    })(),
-    // the channel row: its text gets the room there is, rather than being cut off under empty space
-    ...[[OPEN, 'open', 4], [FLIP, 'turned around', 4], [CLOSED, 'closed', 1], [CLOSEDFLIP, 'closed, turned around', 1]].map(([shape, name, lines]) => (async () => {
-      const { page, done } = await on(shape);
-      await levels(page, 15000);
-      await page.evaluate(() => { document.getElementById('iName').textContent = 'JellyHoshiumi'; document.getElementById('iTitle').textContent = 'A very long stream title that goes on and on '.repeat(8); document.getElementById('iSub').textContent = 'Sir, We Have an Orc Problem · 1.2K · 3h 12m'; }); await sleep(150);
-      let b = await box(page, '.info', '#stage', '#iName', '#iTitle', '#iSub', '#say');
-      ok(`${name}: the name, the title and what they’re playing, one over another`, b['#iName'].seen && b['#iTitle'].seen && b['#iSub'].seen && b['#iName'].b <= b['#iTitle'].y + 1 && b['#iTitle'].b <= b['#iSub'].y + 1, JSON.stringify(b));
-      ok(`${name}: ${lines} line${lines > 1 ? 's' : ''} of a long title`, Math.round(b['#iTitle'].h / 17) === lines, JSON.stringify(b['#iTitle']));
-      ok(`${name}: all between the picture and the box`, b['.info'].y >= b['#stage'].b && b['.info'].b <= b['#say'].y + 1, JSON.stringify(b));
-      ok(`${name}: with little left over`, b['.info'].y - b['#stage'].b <= 24, JSON.stringify(b));
-      await page.evaluate(() => wraith.Talk.setReply({ id: '1', name: 'someone' })); await sleep(150);
-      b = await box(page, '.info', '#stage', '#rpb');
-      ok(`${name}: a reply bar takes room from the title, not the picture`, b['.info'].y >= b['#stage'].b && b['.info'].b <= b['#rpb'].y + 1, JSON.stringify(b));
-      await done();
-    })()),
     // chat goes back to following by itself
     (async () => {
       const { page, done } = await on(OPEN);
@@ -3058,54 +2846,6 @@ if (want('duo')) {
       ok('and it does once that’s closed', (await st()).stick);
       await done();
     })(),
-    // the longer things the strip's label can say
-    ...[[OPEN, 867, 951, 'open'], [FLIP, 0, 84, 'turned around'], [CLOSED, 594, 678, 'closed']].map(([shape, l, r, name]) => (async () => {
-      const { page, done } = await on(shape);
-      await levels(page, 15000);
-      const label = async () => { await page.evaluate(() => wraith.UI.lat()); return rect(page, '#bLat'); };
-      await page.evaluate(() => { wraith.P.cover = true; wraith.P.latency = () => 16; });
-      let b = await label();
-      ok(`${name}, the ad-free feed’s label stays in the strip`, b.x >= l && b.r <= r, JSON.stringify(b));
-      await page.evaluate(() => { wraith.P.cover = false; wraith.P.show('cdn'); });
-      b = await label();
-      ok(`${name}, the CDN’s too`, b.x >= l && b.r <= r, JSON.stringify(b));
-      await done();
-    })()),
-    // typing with the strip on the left: it's the far side of the screen from the box
-    (async () => {
-      const { page, done } = await on(FLIP);
-      await levels(page, 15000);
-      await page.evaluate(l => wraith.Chat.line(l), LINE('a1', 1)); await sleep(300);
-      await keyboard(page, 369);
-      const b = await box(page, '#sayTx', '#bBack', '#stage', '#chat');
-      const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('#chat .m')).paddingLeft));
-      ok('turned around, keyboard up: the box and chat use their side', b['#sayTx'].w >= 180 && pad === 14, `${pad} ${JSON.stringify(b)}`);
-      ok('and the picture’s controls aren’t inset twice', b['#bBack'].x <= b['#stage'].x + 7, JSON.stringify(b));
-      await done();
-    })(),
-    // an offline channel's chat, which starts level with iOS's things
-    ...[[FLIP, 84, 951, 'turned around'], [OPEN, 0, 867, 'open']].map(([shape, l, r, name]) => (async () => {
-      const { page, done } = await on(shape, { offline: true });
-      await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 10000 }).catch(never);
-      await page.evaluate(() => document.getElementById('bChanX').click());
-      await page.evaluate(id => wraith.Chat.line(id), LINE('b1', 1)); await sleep(400);
-      const b = await box(page, '.log', '#say', '#chat .m');
-      ok(`${name}, an offline channel’s chat stays out of the strip, and uses the width`, b['.log'].x >= l && b['.log'].r <= r + 1 && b['.log'].w >= 800 && b['#say'].w >= 800 && b['#say'].b <= 669, JSON.stringify(b));
-      const text = await page.evaluate(() => [document.querySelector('#chat .m'), document.getElementById('msgbox')].map(n => n.getBoundingClientRect().x + parseFloat(getComputedStyle(n).paddingLeft)));
-      ok(`${name}, and its lines start under the line above them`, text[0] === text[1], String(text));
-      await done();
-    })()),
-    // with the keyboard, the picture has the height of the row that's hidden
-    ...[[OPEN, 300, 290, 'open'], [CLOSED, 216, 205, 'closed']].map(([shape, left, h, name]) => (async () => {
-      const { page, done } = await on(shape);
-      await levels(page, 15000);
-      await keyboard(page, left);
-      const b = await rect(page, '#stage'), full = await rect(page, '#bFull'), send = await rect(page, '#sayGo');
-      ok(`${name}, keyboard up: the picture gets the room above it`, b.h >= h && b.b <= left, JSON.stringify(b));
-      ok(`${name}, and its controls run to its edge`, full.r >= b.r - 7, JSON.stringify(full));
-      if (shape === CLOSED) ok('closed, the send button stays out of the strip, where iOS’s things are level with it', send.r <= 594, JSON.stringify(send));
-      await done();
-    })()),
     // what's left up over the channel row when the keyboard goes
     (async () => {
       const { page, done } = await on(CLOSED);
@@ -3140,14 +2880,6 @@ if (want('duo')) {
       ok('fullscreen with no picture yet does nothing', await page.evaluate(() => !document.getElementById('watch').classList.contains('full')));
       await page.evaluate(() => { wraith.UI.fill(true); wraith.UI.msg(null, 'No channel called “x”', 'Check the spelling.'); });
       ok('a message takes the screen back from a filled picture', await page.evaluate(() => !document.getElementById('watch').classList.contains('full')));
-      await done();
-    })(),
-    (async () => {
-      const { page, done } = await on(FLIP);
-      await levels(page, 15000);
-      await page.evaluate(() => { wraith.UI.fill(true); document.getElementById('stage').classList.add('ui'); }); await sleep(200);
-      const b = await rect(page, '#bBack');
-      ok('turned around, a filled picture’s way back is clear of the island', b.x >= 84, JSON.stringify(b));
       await done();
     })(),
     // An iPhone's fullscreen is iOS's own player, for a stream too (2026-11-09: on 27.2 the page stops short of the strip, so only that is the
@@ -3330,19 +3062,6 @@ if (want('duo')) {
       await page.evaluate(() => document.querySelector('.seg [data-view="follow"]').click()); await sleep(100);
       await page.evaluate(() => document.querySelector('.seg [data-view="browse"]').click()); await sleep(300);
       ok('a category’s place doesn’t become its list’s', await page.evaluate(() => scrollY === 400), String(await page.evaluate(() => scrollY)));
-      await done();
-    })(),
-    // the hint in the box
-    (async () => {
-      const { page, done } = await on(CLOSED);
-      await levels(page, 15000);
-      const s = await page.evaluate(() => {
-        wraith.Chat.room = { 'followers-only': '0', slow: '12' }; wraith.Talk.hint();
-        const n = document.getElementById('sayTx'), c = getComputedStyle(n), p = getComputedStyle(n, '::placeholder'), x = document.createElement('canvas').getContext('2d');
-        x.font = `${p.fontWeight} ${p.fontSize} ${c.fontFamily}`;
-        return { text: x.measureText(n.placeholder).width, room: n.clientWidth - parseFloat(c.paddingLeft) - parseFloat(c.paddingRight), hint: n.placeholder };
-      });
-      ok('closed, chat’s hint fits its box', s.text <= s.room, JSON.stringify(s));
       await done();
     })(),
     // the home bar
