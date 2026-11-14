@@ -934,7 +934,7 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
   const out = [], prefetch = [];
   const shown = shownSegs.get(url) || new Map();
   shownSegs.set(url, shown);
-  let segDur = 2, tailAd = false, adEnd = 0, sn = 0, firstSn = -1, firstAt = 0;
+  let segDur = 2, tailAd = false, adEnd = 0, sn = 0, firstSn = -1;
   const seg = u => {
     const kept = shown.get(sn);
     if (!kept) shown.set(sn, u);
@@ -952,7 +952,6 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
       if (firstSn < shown.firstSn) shown.clear();   // the numbering started over: nothing kept still applies
       shown.firstSn = firstSn;
     }
-    if (!firstAt && line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) firstAt = Date.parse(line.slice(25));
     // Twitch declares 6 s for 2 s segments, and hls.js paces its playlist reloads on that number
     if (line.startsWith('#EXT-X-TARGETDURATION:')) { out.push('#EXT-X-TARGETDURATION:2'); continue; }
     if (line.startsWith('#EXT-X-DATERANGE') && /stitched-ad|X-TV-TWITCH-AD/.test(line)) {
@@ -970,12 +969,6 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
   if (!tailAd) for (const u of prefetch) out.push(`#EXTINF:${segDur.toFixed(3)},live`, seg(u));
   for (const k of shown.keys()) if (k < firstSn) shown.delete(k);
   if (!quiet) P.onAd(tailAd, adEnd);
-  // The sound's first list, as the app leaves: it starts at the moment the picture stopped, which hls.js takes from EXT-X-START.
-  if (quiet && BG.from) {
-    const off = (BG.from - firstAt) / 1000;
-    BG.from = 0;
-    if (firstAt && off >= 0 && off < (sn - firstSn) * segDur) out.splice(1, 0, `#EXT-X-START:TIME-OFFSET=${off.toFixed(3)},PRECISE=YES`);
-  }
   return out.join('\n') + '\n';
 }
 
@@ -2133,7 +2126,6 @@ const P = {
 // few minutes: a player starting over (the stream restarting, a start still under way as you left) brings it back, and its own retries keep
 // it going. A page iOS froze and woke up hours later, still thinking it was playing, stays quiet (2026-11-05).
 const KEEP = 5 * 60e3;
-const CUSHION = 5;   // seconds behind the stream the live sound keeps while away: room for iOS's slower timers there, and fewer calls on the relay
 const IDLE = 30 * 60e3;   // nobody has touched the screen or come back to the app for this long: likely nobody's there
 const LONG_IDLE = 4 * 3600e3, STRANDED = 2 * 3600e3;   // a picture with sound, untouched, pauses after this; a page with nothing going, untouched, closes after this (Pages.stranded)
 const BG = {
@@ -2144,7 +2136,6 @@ const BG = {
   wanted: false, // the sound should be playing. Off once you or iOS stop it, and then only you bring it back
   carry: false,  // you were hearing it as you left, and neither you nor iOS has stopped it since. It outlasts the player starting over
   heard: 0,      // when it was last heard going (or the picture, as you left)
-  from: 0,       // the moment the picture stopped, Twitch's stamp in ms: where the live sound starts (rewrite)
   may() { return document.hidden && this.carry && Date.now() - this.heard < KEEP; },
   going() { return this.on && this.wanted && this.carry && Date.now() - this.heard < KEEP; },
   // Quiet too long to come back by itself, as if iOS had stopped it: coming back to the app, or Control Center's play, brings it back.
@@ -2175,11 +2166,14 @@ const BG = {
     leaveNative(v);
     aBG.muted = false; aBG.playbackRate = 1;
     if (P.feed === 'live') {
-      // It picks up at the moment the picture stopped (rewrite gives hls.js the spot), so nothing's heard twice or missed. That's as close to
-      // the stream's edge as the picture was, too close for a page whose timers iOS slows and for asking the relay as seldom as it does: it
-      // eases back to its cushion (pace). Where the picture has no moment to give (a start still on its way), hls.js starts 6.5 s back.
-      this.from = P.hls?.playingDate?.getTime() || 0;
-      this.easing = true;
+      // It starts 6.5 s back from the end of its list, hls.js's own start: a couple of seconds of the stream heard twice, and from the first
+      // moment the room a page needs whose timers iOS slows and which asks the relay as seldom as this does. And it only ever plays at the
+      // stream's own speed. For four hours on 2026-11-13 it started at the very moment the picture stopped and fell back to that distance
+      // by playing at 0.95×, for up to a minute. That evening, Jerry: dictating in the Claude app no longer worked once this sound was going
+      // behind it ("no words come out, it fails, but the dictation animation just shows full like sound"), on the phone's speaker, from the
+      // first try with the sound still on, on through a force quit, until YouTube had played in the background. His mic takes the sound
+      // seconds after he leaves, so always at 0.95×, and nothing else about how the sound is played had changed that day; the page does
+      // nothing when iOS takes the sound but stop (the pause listeners below). Whether the speed is what did it isn't known.
       const h = this.hls = new window.Hls({ ...LOADING, pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12,
         backBufferLength: 10 });   // what's been heard isn't kept: hours away would fill memory iOS takes back by dropping the page
@@ -2263,17 +2257,6 @@ const BG = {
     const p = aBG.play(); if (p) p.catch(() => {});
     return true;
   },
-  // Away, a sound that picked up where the picture stopped eases back to its cushion, playing a little slower than the stream (unheard: the pitch
-  // is kept) until it's that far behind, and at speed from there.
-  easing: false,
-  pace() {
-    if (!this.easing) return;
-    const d = P.feed === 'live' ? this.hls?.playingDate : null;
-    if (!d) return;
-    if ((Date.now() - d) / 1000 >= CUSHION) this.easing = false;
-    const r = this.easing && document.hidden ? 0.95 : 1;
-    if (aBG.playbackRate !== r) aBG.playbackRate = r;
-  },
   lag() {   // how far behind the stream the sound is, or null
     if (P.feed === 'live') { const d = this.hls?.playingDate; return d ? (Date.now() - d) / 1000 : null; }
     return P.feed === 'cdn' && P.start > 0 ? Date.now() / 1000 - P.start - aBG.currentTime : null;
@@ -2289,7 +2272,6 @@ const BG = {
     if (live ? !(this.hls && P.hls?.levels.length) : !(P.feed === 'vod' || P.feed === 'cdn') || v.error || !aBG.currentTime) return false;
     const b = this.back = { since: Date.now(), v, h: P.hls, lead: live ? 1.2 : 1, aimed: 0, timer: 0 };
     v.muted = true;
-    aBG.playbackRate = 1;   // easing back is for while you're away
     this.aim(b);
     if (live) {
       P.quietUntil = Date.now() + 10e3;   // its loading isn't a bad connection
@@ -2362,7 +2344,6 @@ const BG = {
   },
   stop(silent) {
     if (this.back) { clearInterval(this.back.timer); this.back = null; }
-    this.easing = false; this.from = 0;
     if (!this.on) return;
     this.on = this.wanted = false;
     const at = aBG.currentTime;
@@ -2658,8 +2639,16 @@ if ('mediaSession' in navigator) {   // lock screen / Control Center buttons
       aBG.play().catch(e => Away.add(`the sound wouldn’t play (${e.name})`));
     } else if (P.active()?.paused) togglePlay();
   });
+  // Your button isn't all that calls this. From WebKit's source (MediaSession::suspendPlayback, 305995@main, January 2026): as iOS takes
+  // the sound for another app, WebKit pauses the page's players and then calls its pause handler too, "as if the user hit the pause key";
+  // the player last started is at the head of its list, so the sound is already paused by then. Taken as your button, that held the stream
+  // paused for when you came back from dictating a message, which only a pause of your own should. So a pause that finds the sound already
+  // stopped is iOS's: the sound's own pause listener has it from there, and nothing's held. Whether iOS 27 does call it is for the record
+  // to say: the line below goes to the relay with the rest.
   const pause = () => {
-    Away.add('button: pause');
+    const taken = BG.on && aBG.paused;
+    Away.add(taken ? 'iOS said pause, with the sound already stopped' : 'button: pause', BG.on);
+    if (taken) return;
     if (BG.on) hold();
     else if (P.active() && !P.active().paused) togglePlay();
   };
@@ -2862,7 +2851,6 @@ aBG.addEventListener('timeupdate', () => {
     if (BG.moved && now - BG.moved > 4000) Away.add(`sound stood still ${Math.round((now - BG.moved) / 1000)} s${audioSays()}`);
     BG.heard = BG.moved = now;
   }
-  BG.pace();
   if (P.feed === 'vod') { savePlace(aBG.currentTime); if (aBG.currentTime > 1) BG.at = aBG.currentTime; }
 });
 // On the Duo's inner screen held on its side, a picture watched for 2 minutes with nothing touched goes to fullscreen by itself (Jerry,

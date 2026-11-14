@@ -3996,13 +3996,16 @@ if (want('handover')) {
   await Promise.all([
     (async () => {
       const { page, go, heard, across, done } = await madeHere();
+      await page.evaluate(() => { window.__rates = []; document.getElementById('aBG').addEventListener('ratechange', e => window.__rates.push(e.target.playbackRate)); });
       const left = await go(true);
       await sleep(5000);
       let s = await bg(page);
-      ok('away, the sound eases back to its cushion a little slower than the stream', s.on && !s.aPaused && s.rate === 0.95, JSON.stringify(s));
+      const rates = await page.evaluate(() => window.__rates);
+      // (for four hours on 2026-11-13 it played at 0.95× for its first minute away, and dictating in another app stopped working: BG.start)
+      ok('away, the sound plays at the stream’s own speed, from the first', s.on && !s.aPaused && s.rate === 1 && rates.every(r => r === 1), `${JSON.stringify(s)} rates ${rates.join(' ')}`);
       let S = await heard();
       let x = across(S, left, 's');
-      ok('leaving, the sound picks up where the picture stopped', x.jump !== null && Math.abs(x.jump) < 0.25 && x.after < 2500, JSON.stringify(x));
+      ok('leaving, the sound is on within a couple of seconds, a few seconds of the stream back at most', x.jump !== null && x.jump <= 0.25 && x.jump > -6 && x.after < 2500, JSON.stringify(x));
       const back = await go(false);
       await sleep(200);
       s = await bg(page);
@@ -4296,11 +4299,9 @@ if (want('kick')) {
       let n = await asked(S, 12000);
       let others = Object.keys(n).filter(k => !/^kick (seg|list) 160p30$/.test(k));
       ok('away with the sound on, only Kick’s smallest rendition is asked for: no chat, no picture, no relay, nobody’s API', others.length === 0 && n['kick seg 160p30'] >= 4, JSON.stringify(n));
-      ok('a segment every 2 s, and its list no more often than that while it eases back from where the picture was', n['kick list 160p30'] <= 8 && n['kick seg 160p30'] <= 8, JSON.stringify(n));
-      // a minute on it has eased back to its cushion (here, moved back to it): the list is then asked for as the listed seconds run low
-      await page.evaluate(() => { const a = document.getElementById('aBG'); a.currentTime = Math.max(a.buffered.start(0), a.currentTime - 3.2); }); await sleep(2500);
-      n = await asked(S, 12000);
-      ok('and once it has, about every 4 s, as Twitch’s is', !(await page.evaluate(() => wraith.BG.easing)) && n['kick list 160p30'] <= 4 && n['kick seg 160p30'] >= 4, JSON.stringify(n));
+      // it starts far enough back that its list is only asked for as the listed seconds run low
+      ok('a segment every 2 s, and its list about every 4 s, as Twitch’s is', n['kick list 160p30'] <= 4 && n['kick seg 160p30'] <= 8, JSON.stringify(n));
+      ok('at the stream’s own speed', await page.evaluate(() => document.getElementById('aBG').playbackRate === 1));
       let t = Date.now();
       await page.evaluate(() => wraith.P.refresh()); await sleep(800);
       n = S.since(t); others = Object.keys(n).filter(k => !/^kick (seg|list) 160p30$/.test(k));
@@ -4784,6 +4785,37 @@ if (want('log')) {
       await cc(page, 'play'); await sleep(400);
       s = await page.evaluate(() => ({ wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
       ok('and with the sound going, it still stops it', !s.wanted && s.held && s.paused, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // iOS taking the sound for another app's mic, as WebKit has told a page since 2026: the sound's player paused, then the page's pause
+      // handler called. That isn't your pause, so back in the app the stream plays. Your own, with the sound going, holds as ever.
+      const { got, relay } = logged();
+      const { page, done } = await stage(relay, { init: phone });
+      await levels(page, 15000);
+      await page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused; }, null, { timeout: 15000 }).catch(never);
+      await vis(page, true); await sounding(page); await sleep(1200);
+      const n = got.length;
+      await page.evaluate(() => { document.getElementById('aBG').pause(); window.__ms.pause(); });   // in that order, in the one go
+      await sleep(1500);
+      let s = await page.evaluate(() => ({ on: wraith.BG.on, wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
+      ok('iOS taking the sound, and saying pause to the page as it does, stops the sound and holds nothing', s.on && !s.wanted && !s.held && s.paused, JSON.stringify(s));
+      ok('both are written, and sent at once', /iOS said pause, with the sound already stopped/.test(all(got.slice(n))) && /iOS paused the sound/.test(all(got.slice(n))), all(got.slice(n)).replace(/\n/g, ' | '));
+      await page.evaluate(() => window.__ms.pause()); await sleep(200);   // and said again with the sound long stopped (the next go at dictating)
+      s = await page.evaluate(() => ({ held: wraith.BG.held, paused: document.getElementById('aBG').paused }));
+      ok('said again with the sound already stopped, still nothing’s held', !s.held && s.paused, JSON.stringify(s));
+      await vis(page, false);
+      await page.waitForFunction(() => !wraith.BG.on && wraith.P.active() && !wraith.P.active().paused, null, { timeout: 8000 }).catch(never);
+      s = await page.evaluate(() => ({ on: wraith.BG.on, userPaused: wraith.P.userPaused, vPaused: wraith.P.active().paused }));
+      ok('so back in the app the stream plays', !s.on && !s.userPaused && !s.vPaused, JSON.stringify(s));
+      await sleep(1500);
+      await vis(page, true); await sounding(page); await sleep(1200);
+      await cc(page, 'pause'); await sleep(400);
+      s = await page.evaluate(() => ({ wanted: wraith.BG.wanted, held: wraith.BG.held, paused: document.getElementById('aBG').paused, away: JSON.parse(localStorage.getItem('wraith.away') || '[]').slice(-2) }));
+      ok('your own pause from the lock screen, with the sound going, holds', !s.wanted && s.held && s.paused && s.away.some(l => /button: pause$/.test(l)), JSON.stringify(s));
+      await vis(page, false); await sleep(1500);
+      s = await page.evaluate(() => ({ on: wraith.BG.on, userPaused: wraith.P.userPaused, vPaused: wraith.P.active().paused }));
+      ok('and stays paused for when you’re back', !s.on && s.userPaused && s.vPaused, JSON.stringify(s));
       await done();
     })(),
   ]);
