@@ -4,8 +4,9 @@
 // Lives in Apps Script as "Wraith relay 2", deployed as a web app run as the owner,
 // open to anyone. After editing: Deploy > Manage deployments > edit > New version, so the URL stays.
 // ("Wraith relay", the project before it, is the same code: Google stopped running a third or more of its calls on 2026-11-12.)
-// Twitch's playlist hosts, plus VOD playlists on Twitch's CloudFront CDN (<20 hex>_<name>/<rendition>/index-dvr.m3u8).
-var ALLOW = /^https:\/\/(([a-z0-9-]+\.)*ttvnw\.net\/|[a-z0-9]+\.cloudfront\.net\/[0-9a-f]{20}_[\w-]+\/[\w-]+\/index-dvr\.m3u8$)/i;
+// Twitch's playlist hosts, plus VOD playlists on Twitch's CloudFront CDN (<20 hex>_<name>/<rendition>/index-dvr.m3u8), plus the top playlist
+// of a stream on Kick (Amazon IVS: only Kick's own sites may read it from a page; its renditions' playlists answer anyone, so the page asks those itself).
+var ALLOW = /^https:\/\/(([a-z0-9-]+\.)*ttvnw\.net\/|[a-z0-9]+\.cloudfront\.net\/[0-9a-f]{20}_[\w-]+\/[\w-]+\/index-dvr\.m3u8$|[a-z0-9]+\.[a-z0-9-]+\.playback\.live-video\.net\/api\/video\/v1\/[\w.-]+\.m3u8\?)/i;
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
@@ -16,7 +17,7 @@ function doGet(e) {
   // Every page since 2026-11-05 names itself (who, or pg where it doesn't sit). One that doesn't is older than the seat, still running
   // somewhere iOS keeps it (2026-11-05: one polled all afternoon, out of anyone's sight, and nothing a page can send reached it).
   if (!p.who && !p.pg) return note_(p, reply_(410, 'this Wraith page is out of date: go to its home screen to update it'), 410);
-  if (!p.u || !ALLOW.test(p.u)) return reply_(400, 'only Twitch playlist URLs');
+  if (!p.u || !ALLOW.test(p.u)) return reply_(400, 'only Twitch and Kick playlist URLs');
   if (spent_()) return note_(p, reply_(599, 'Service invoked too many times for one day: urlfetch.'), 599);
   try {
     var r = UrlFetchApp.fetch(p.u, { muteHttpExceptions: true, followRedirects: true });
@@ -46,7 +47,7 @@ function note_(p, out, code, fetched) {
     if (p.take) s.takes = (s.takes || 0) + 1;
     if (code === 409) s.refused = (s.refused || 0) + 1;
     if (code && code !== 200 && code !== 409) s.last = code;
-    var kind = p.k || (p.ping ? 'ping' : /usher\./.test(p.u || '') ? 'master' : /cloudfront/.test(p.u || '') ? 'cdn' : 'media');
+    var kind = p.k || (p.ping ? 'ping' : /usher\.|live-video\.net/.test(p.u || '') ? 'master' : /cloudfront/.test(p.u || '') ? 'cdn' : 'media');
     s.kinds[kind] = (s.kinds[kind] || 0) + 1;
     if (p.b) s.b = String(p.b).slice(0, 12);
     if (p.n) s.ns = (s.ns || []).concat(+p.n).slice(-6);   // each page numbers its calls: two pages under one name show as two runs

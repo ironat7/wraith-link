@@ -53,20 +53,25 @@ export function makeClips() {
 export const SILENCE = Buffer.from(Array.from({ length: 87 }, () => [0xff, 0xf1, 0x50, 0x40, 0x01, 0xbf, 0xfc, 0x00, 0xc8, 0x00, 0x80, 0x23, 0x80]).flat());
 const ON_AIR = Date.now(), BEHIND = 6;   // it has been on for these many segments when this run starts
 const segmentAt = k => ON_AIR + (k - BEHIND) * 2000;
-const segmentUrl = (rendition, k) => `https://edge.hls.ttvnw.net/${rendition}/${k}.${rendition === 'audio_only' ? 'aac' : 'ts'}`;
+const segmentUrl = (rendition, k, kick) => `https://edge.hls.${kick ? 'live-video.net' : 'ttvnw.net'}/${rendition}/${k}.${rendition === 'audio_only' ? 'aac' : 'ts'}`;
 const RENDITIONS = [['chunked', '1920x1080', 6000000, 60], ['720p60', '1280x720', 3000000, 60], ['480p30', '852x480', 1400000, 30], ['160p30', '284x160', 230000, 30]];
 const masterPlaylist = () => '#EXTM3U\n' + RENDITIONS.map(([id, size, bitrate, fps]) => `#EXT-X-STREAM-INF:BANDWIDTH=${bitrate},RESOLUTION=${size},CODECS="avc1.4D401F,mp4a.40.2",VIDEO="${id}",FRAME-RATE=${fps}.000\nhttps://edge.playlist.ttvnw.net/${id}.m3u8\n`).join('')
   + '#EXT-X-STREAM-INF:BANDWIDTH=64000,CODECS="mp4a.40.2",VIDEO="audio_only"\nhttps://edge.playlist.ttvnw.net/audio_only.m3u8\n';
 // Twitch's shape: the finished segments, then the one being made and the next as prefetch lines.
-function mediaPlaylist(rendition) {
-  const now = BEHIND + Math.floor((Date.now() - ON_AIR) / 2000), first = Math.max(0, now - 6);
+// Kick's (Amazon IVS) prefetch tag is #EXT-X-PREFETCH, its segments on another host.
+function mediaPlaylist(rendition, kick) {
+  const now = BEHIND + Math.floor((Date.now() - ON_AIR) / 2000), first = Math.max(0, now - 6), tag = kick ? '#EXT-X-PREFETCH:' : '#EXT-X-TWITCH-PREFETCH:';
   const out = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-TARGETDURATION:6', `#EXT-X-MEDIA-SEQUENCE:${first}`];
-  for (let k = first; k < now; k++) out.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(segmentAt(k)).toISOString()}`, '#EXTINF:2.000,live', segmentUrl(rendition, k));
-  out.push(`#EXT-X-TWITCH-PREFETCH:${segmentUrl(rendition, now)}`, `#EXT-X-TWITCH-PREFETCH:${segmentUrl(rendition, now + 1)}`);
+  for (let k = first; k < now; k++) out.push(`#EXT-X-PROGRAM-DATE-TIME:${new Date(segmentAt(k)).toISOString()}`, '#EXTINF:2.000,live', segmentUrl(rendition, k, kick));
+  out.push(tag + segmentUrl(rendition, now, kick), tag + segmentUrl(rendition, now + 1, kick));
   return out.join('\n') + '\n';
 }
+// Kick's top playlist: the same renditions, with no sound-only one, the top playlist on a playback host and the renditions' on a playlist host.
+export const KICK_MASTER = 'https://abc123.us-west-2.playback.live-video.net/api/video/v1/us-west-2.1.channel.staged.m3u8?token=staged';
+const kickMaster = () => '#EXTM3U\n#EXT-X-SESSION-DATA:DATA-ID="BROADCAST-ID",VALUE="1"\n' + RENDITIONS.map(([id, size, bitrate, fps]) => `#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="${id}",NAME="${id}",AUTOSELECT=YES,DEFAULT=YES\n#EXT-X-STREAM-INF:BANDWIDTH=${bitrate},RESOLUTION=${size},CODECS="avc1.4D401F,mp4a.40.2",VIDEO="${id}",FRAME-RATE=${fps}.000\nhttps://abc123.use15.playlist.live-video.net/v1/playlist/${id}.m3u8\n`).join('');
 // As relay/Code.gs answers, less the seat. The CDN's copies are public, so those are looked at for real.
 export async function relayAnswer(url, first) {
+  if (url.includes('.playback.live-video.net/')) return `200\n${kickMaster()}`;
   if (url.includes('usher.ttvnw.net')) {
     const top = first && (RENDITIONS.find(([id]) => id === first) || RENDITIONS[0])[0];
     return `200\n${masterPlaylist()}` + (top ? `\n#WRAITH-MEDIA:200 https://edge.playlist.ttvnw.net/${top}.m3u8\n${mediaPlaylist(top)}` : '');
@@ -84,7 +89,12 @@ export async function makeStream(page, relay) {
     if (relay) return relay(route, u, body);
     return route.fulfill({ status: 200, headers, body }).catch(() => {});
   });
-  await page.route(/edge\.hls\.ttvnw\.net/, async route => {
+  // Kick's renditions' playlists, which the page asks for itself
+  await page.route(/playlist\.live-video\.net\/v1\/playlist\/\w+\.m3u8/, route => {
+    page.kickLists = (page.kickLists || 0) + 1;
+    return route.fulfill({ status: 200, headers: { ...headers, 'content-type': 'application/vnd.apple.mpegurl' }, body: mediaPlaylist(route.request().url().match(/(\w+)\.m3u8/)[1], true) }).catch(() => {});
+  });
+  await page.route(/edge\.hls\.(ttvnw|live-video)\.net/, async route => {
     const [, k, kind] = route.request().url().match(/\/(\d+)\.(ts|aac)$/), wait = segmentAt(+k) + 500 - Date.now();   // no sooner than it's being made
     if (wait > 0) await sleep(wait);
     const body = kind === 'aac' ? SILENCE : fs.readFileSync(`${CLIPS}${k}.ts`);

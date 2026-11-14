@@ -683,7 +683,7 @@ const uptime = iso => dur((Date.now() - Date.parse(iso)) / 1000);
 const day = iso => { const d = new Date(iso); return d.toLocaleDateString(undefined, Date.now() - d > 3e10 ? { month: 'short', year: 'numeric' } : { month: 'short', day: 'numeric' }); };   // nearly a year back, the year says more than the day
 const ago = iso => { const s = (Date.now() - Date.parse(iso)) / 1000; return s < 3600 ? `${Math.max(1, Math.floor(s / 60))}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : s < 604800 ? `${Math.floor(s / 86400)}d ago` : day(iso); };
 const when = iso => { const d = new Date(iso); return d.toLocaleString(undefined, d - Date.now() < 6048e5 ? { weekday: 'short', hour: 'numeric', minute: '2-digit' } : { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
-const emoteUrl = id => `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`;
+const emoteUrl = id => id.startsWith('kick') ? `https://files.kick.com/emotes/${id.slice(4)}/fullsize` : `https://static-cdn.jtvnw.net/emoticons/v2/${id}/default/dark/2.0`;
 // Never offered in the picker or completion, going by name: Twitch's Pride sets and the gay, trans and gachi ones on
 // 7TV, BTTV and FFZ. "gay" goes by case to spare KasugaYeah. They still show in chat when someone posts one.
 const unwanted = name => /[gG](ay|AY)/.test(name) || /pride|gachi|billy|femboy|queer|lesbian|lgbt|bisexual|nonbinary|trans(?!form|it|lat|port|fer|act|cend|par|mit|cri)|twitchunity|virtualhug|blacklivesmatter/i.test(name);
@@ -772,6 +772,90 @@ async function cdnBase(u) {
   return `https://${host}/${Array.from(sha, b => b.toString(16).padStart(2, '0')).join('').slice(0, 20)}_${raw}`;
 }
 
+// ── Kick ────────────────────────────────────────────
+// xQc streams on Kick too, mostly alongside Twitch and now and then there alone (Jerry, 2026-11-13: "is it possible to implement kick for xqc
+// only"). Twitch login → Kick name, for the channels watched there as well.
+const KICK = { xqc: 'xqc' };
+// Kick's channel API answers any site (it hands the asking page's own address back). Its stream is Amazon IVS, which Twitch's own video grew
+// out of: the same playlists, 2 s segments stamped with the time, and the next two listed ahead (as #EXT-X-PREFETCH). The top playlist answers
+// only Kick's own sites, so that one comes through the relay; the renditions' playlists and the segments answer anyone, so the picture asks for
+// them itself and polling costs the relay nothing. Kick's token opts its viewers out of ads.
+async function kickChannel(slug) {
+  const r = await fetch(`https://kick.com/api/v2/channels/${slug}`, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15e3) });
+  if (!r.ok) throw new Error(`Kick answered ${r.status}`);
+  const d = await r.json(), s = d.livestream?.is_live ? d.livestream : null;
+  return { slug, room: d.chatroom?.id || d.id, live: !!s, sid: s?.id || null, title: s?.session_title || '', viewers: s?.viewer_count || 0,
+    game: s?.categories?.[0]?.name || '', thumb: s?.thumbnail?.url || '', since: s?.start_time ? new Date(s.start_time.replace(' ', 'T') + 'Z').toISOString() : null,
+    url: d.playback_url || null, at: Date.now() };
+}
+const kickDirect = u => /^https:\/\/[\w.-]+\.playlist\.live-video\.net\//.test(u);   // a rendition's playlist on Kick, which anyone may ask for
+// Kick has no sound-only rendition: away, the sound comes from its smallest (160p, a few hundred kb/s), with the picture taken out (SoundOnly).
+const lowest = master => [...master.matchAll(/#EXT-X-STREAM-INF:([^\n]*)\n(\S+)/g)].map(m => [+attr(':' + m[1], 'BANDWIDTH') || 0, m[2]]).sort((a, b) => a[0] - b[0])[0]?.[1] || null;
+// Each segment of it passes through here as it comes in (MPEG-TS: 188-byte packets, each tagged with a PID; the PMT says which PID carries what):
+// the PMT goes on listing the sound alone, and the picture's packets are dropped. So the <audio> only ever holds sound, as with Twitch's
+// audio_only. A playing element with a picture and sound is VideoAudio to WebKit, which iOS pauses as the app leaves or the phone locks
+// (MediaSessionManageriOS's restrictions), and a picture nobody sees would be decoded for nothing. Anything that isn't TS goes through as it is.
+const PICTURE = new Set([0x01, 0x02, 0x10, 0x1b, 0x24]);   // stream types: MPEG-1/2, MPEG-4 part 2, H.264, HEVC
+const CRC = Array.from({ length: 256 }, (_, i) => { let c = i << 24; for (let k = 0; k < 8; k++) c = c & 0x80000000 ? (c << 1) ^ 0x04c11db7 : c << 1; return c >>> 0; });
+class SoundOnly {
+  constructor() { this.left = null; this.pmt = -1; this.drop = new Set(); this.off = false; }
+  push(chunk) {   // part of a segment: what's whole of it, less the picture
+    let b = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+    if (this.off) return b;
+    if (this.left) { const j = new Uint8Array(this.left.length + b.length); j.set(this.left); j.set(b, this.left.length); b = j; this.left = null; }
+    const whole = b.length - b.length % 188, out = new Uint8Array(whole);
+    let n = 0;
+    for (let i = 0; i < whole; i += 188) {
+      if (b[i] !== 0x47) { this.off = true; return b; }   // not TS after all, or out of step: left as it is
+      const pid = ((b[i + 1] & 0x1f) << 8) | b[i + 2];
+      if (this.drop.has(pid)) continue;
+      const p = out.subarray(n, n + 188);
+      p.set(b.subarray(i, i + 188)); n += 188;
+      if (pid === 0) this.pat(p); else if (pid === this.pmt) this.prune(p);
+    }
+    if (whole < b.length) this.left = b.slice(whole);
+    return out.subarray(0, n);
+  }
+  section(p) {   // where the table starting in this packet begins, or -1
+    let o = 4;
+    if (p[3] & 0x20) o += 1 + p[4];
+    if (!(p[1] & 0x40) || !(p[3] & 0x10) || o >= 188) return -1;
+    o += 1 + p[o];
+    return o + 3 + (((p[o + 1] & 0x0f) << 8) | p[o + 2]) <= 188 ? o : -1;
+  }
+  pat(p) {   // the PMT's PID: the first program's, past the network's (program 0)
+    const o = this.section(p);
+    if (o < 0) return;
+    for (let e = o + 8, end = o + 3 + (((p[o + 1] & 0x0f) << 8) | p[o + 2]) - 4; e + 4 <= end; e += 4)
+      if ((p[e] << 8 | p[e + 1]) !== 0) { this.pmt = ((p[e + 2] & 0x1f) << 8) | p[e + 3]; return; }
+  }
+  prune(p) {   // the PMT without the picture's streams, its length and CRC to match
+    const o = this.section(p);
+    if (o < 0 || p[o] !== 2) return;
+    const len = ((p[o + 1] & 0x0f) << 8) | p[o + 2], end = o + 3 + len - 4;
+    let e = o + 12 + (((p[o + 10] & 0x0f) << 8) | p[o + 11]), w = e;
+    while (e + 5 <= end) {
+      const type = p[e], pid = ((p[e + 1] & 0x1f) << 8) | p[e + 2], size = 5 + (((p[e + 3] & 0x0f) << 8) | p[e + 4]);
+      if (PICTURE.has(type)) this.drop.add(pid); else { p.copyWithin(w, e, e + size); w += size; }
+      e += size;
+    }
+    if (w === end) return;
+    const n = len - (end - w);
+    p[o + 1] = (p[o + 1] & 0xf0) | (n >> 8); p[o + 2] = n & 0xff;
+    let c = 0xffffffff;
+    for (let i = o; i < w; i++) c = ((c << 8) ^ CRC[((c >>> 24) ^ p[i]) & 0xff]) >>> 0;
+    p[w] = c >>> 24; p[w + 1] = (c >>> 16) & 0xff; p[w + 2] = (c >>> 8) & 0xff; p[w + 3] = c & 0xff;
+    p.fill(0xff, w + 4);
+  }
+}
+// hls.js's segment loader with that in its way
+const soundOnly = Base => class extends Base {
+  load(context, config, callbacks) {
+    const cut = new SoundOnly(), give = callbacks.onProgress;
+    super.load(context, config, { ...callbacks, onProgress: give && ((stats, ctx, data, details) => { const d = cut.push(data); if (d.length) give(stats, ctx, d, details); }) });
+  }
+};
+
 // ── relay + playlist rewriting ──────────────────────
 let relayN = 0, primed = null;   // primed: the first media playlist, delivered with the master
 // Every call says which page and build it's from, and for what (m: a stream's start, v: the picture, a: the sound away, x: anything else).
@@ -793,7 +877,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) Quota
 if (!document.hidden) fetch(RELAY + '?ping=1').catch(() => {});   // Apps Script wakes faster when warm; a page loaded out of sight has no hurry
 
 const attr = (line, k) => (line.match(new RegExp(`[:,]${k}="?([^",]*)`)) || [])[1] || '';
-const audioIn = master => master?.match(/VIDEO="audio_only"[^\n]*\n(\S+)/)?.[1] || null;
+const audioIn = master => master?.match(/VIDEO="audio_only"[^\n]*\n(\S+)/)?.[1] || (master?.includes('.live-video.net/') ? lowest(master) : null);
 
 function relayAnswer(t) {   // { code, body } of what the relay sent, with Pages and Quota told of it; code 0 if it didn't start with one
   const nl = t.indexOf('\n'), code = parseInt(t.slice(0, nl), 10) || 0, body = t.slice(nl + 1);
@@ -861,6 +945,7 @@ function rewrite(text, url, quiet) {   // quiet: the background-audio player, wh
     if (!line) continue;
     if (line[0] !== '#') { out.push(seg(line)); continue; }
     if (line.startsWith('#EXT-X-TWITCH-PREFETCH:')) { prefetch.push(line.slice(23)); continue; }
+    if (line.startsWith('#EXT-X-PREFETCH:')) { prefetch.push(line.slice(16)); continue; }   // Kick's
     if (line.startsWith('#EXT-X-MEDIA-SEQUENCE:')) {
       firstSn = sn = parseInt(line.slice(22), 10) || 0;
       if (firstSn < shown.firstSn) shown.clear();   // the numbering started over: nothing kept still applies
@@ -920,6 +1005,7 @@ class RelayLoader {
     this.context = context; this.callbacks = callbacks;
     const st = this.stats, real = context.url, kind = this.quiet ? 'a' : context.type === 'manifest' ? 'm' : 'v';   // as relayUrl's k
     st.loading.start = performance.now();
+    if (kickDirect(real)) return this.direct(real);
     if (kind === 'v' && primed?.url === real && Date.now() - primed.at < 5000) {
       const text = primed.text;
       primed = null;
@@ -971,6 +1057,16 @@ class RelayLoader {
     st.loading.first = st.loading.end = performance.now();
     st.loaded = st.total = data.length;
     this.callbacks.onSuccess({ url, data }, st, this.context, null);
+  }
+  // Kick's renditions answer any site: straight there, with nothing spent on the relay.
+  direct(real) {
+    const st = this.stats, context = this.context, ctrl = this.ctrl = new AbortController();
+    const finish = fn => { if (this.ctrl !== ctrl) return; this.stop(); if (this.callbacks) fn(); };
+    fetch(real, { signal: ctrl.signal, cache: 'no-store' }).then(async r => {
+      const t = await r.text();
+      finish(() => r.ok ? this.done(real, t.includes('#EXTINF') ? rewrite(t, real, this.quiet) : t) : this.callbacks.onError({ code: r.status, text: t.slice(0, 200) }, context, null, st));
+    }).catch(() => finish(() => this.callbacks.onError({ code: 0, text: 'Kick unreachable' }, context, null, st)));
+    this.timers.push(setTimeout(() => finish(() => this.callbacks.onTimeout(st, context, null)), 8000));
   }
   stop() { this.ctrl?.abort(); this.ctrl = null; this.timers.forEach(clearTimeout); this.timers = []; }
   twin() { return true; }
@@ -1102,6 +1198,7 @@ const nothingOpen = () => ({
   ranAt: 0, ranT: -1,                // when the picture last moved or started playing, and where it was then
   refreshDue: false,                 // a look at the channel skipped with nobody waiting on it (out of sight with no sound, nobody about), for later
   errs: {},                          // player errors this stream, for the stats panel
+  kick: null, src: 'twitch',         // the channel on Kick, for one that streams there too (KICK); where the live picture comes from
 });
 
 const P = {
@@ -1121,27 +1218,39 @@ const P = {
     UI.watch(login, cached);
     // a page iOS loaded out of sight asks nothing of anyone till it's looked at (Pages.seen), and then about the stream as it is by then
     if (!Pages.shown) { await Pages.seen(); if (gen !== this.gen) return; this.openedAt = Date.now(); }
-    Chat.open(login);
+    const kickP = KICK[login] ? kickChannel(KICK[login]).catch(() => null) : null;   // asked alongside Twitch
+    // A channel on Kick too gets its chat once it's known which the picture's from: Twitch's opened first would show for a moment and be gone
+    if (kickP) { Chat.clear(); Chat.note('Connecting to chat…').classList.add('wait'); } else Chat.open(login);
     this.tokenP = getToken(login).catch(e => e);
     try {
       const u = cached && Date.now() - cached.at < 60e3 ? cached : (await getUsers([login]))[0];
       if (gen !== this.gen) return;
       if (!u) return UI.msg(null, `No channel called “${login}”`, 'Check the spelling and try again.');
       this.user = u;
-      UI.info(u); Recent.add(u); Chat.channel(u.id);
-      if (!u.stream) {   // the seat's this page's from now, as for a stream: a page you opened later, or come back to, takes it from here
+      UI.info(u); Recent.add(u);
+      if (!kickP) Chat.channel(u.id);
+      this.kick = kickP && await kickP;
+      if (gen !== this.gen) return;
+      const kick = this.kick?.live && (!u.stream || store.get('src.' + login, 'twitch') === 'kick');   // live on Kick alone, or Kick's your pick
+      if (kickP) { if (kick) this.src = 'kick'; this.chat(); }
+      if (!u.stream && !kick) {   // the seat's this page's from now, as for a stream: a page you opened later, or come back to, takes it from here
         if (Pages.seated && Pages.taking()) Pages.ask();
         UI.offline(u);
         return this.awaitLive();
       }
-      this.start = Date.parse(u.stream.createdAt) / 1000;
-      this.base = await cdnBase(u);
-      if (gen !== this.gen) return;
+      if (u.stream) {
+        this.start = Date.parse(u.stream.createdAt) / 1000;
+        this.base = await cdnBase(u);
+        if (gen !== this.gen) return;
+      }
       if (!(await Pages.confirm()) || gen !== this.gen) return;
-      if (this.pref === 'cdn' && cdnLive) this.playCdn(); else this.playLive();
+      if (kick) this.kickOn();
+      else if (this.pref === 'cdn' && cdnLive) this.playCdn(); else this.playLive();
       this.timer = setInterval(() => this.refresh(), 60e3);
     } catch (e) {
-      if (gen === this.gen) UI.msg(null, 'Couldn’t reach Twitch', e.message, () => this.open(login));
+      if (gen !== this.gen) return;
+      if (kickP && !Chat.login) Chat.open(login);
+      UI.msg(null, 'Couldn’t reach Twitch', e.message, () => this.open(login));
     }
   },
 
@@ -1195,6 +1304,7 @@ const P = {
     $('msgbox').hidden = true;
     this.feed = 'live'; UI.feed(); UI.spin(true);
     this.moved = this.began = Date.now();
+    if (this.src === 'kick') return this.playKick(stale);
     let tok = await (this.tokenP || getToken(this.login).catch(e => e));
     this.tokenP = null;
     if (stale()) return;
@@ -1204,10 +1314,22 @@ const P = {
       if (stale()) return;
       if (noToken(tok)) { this.subOnly = true; return this.fallback('Sub-only stream'); }
     }
+    const Hls = await this.player(stale);
+    if (!Hls) return;
+    this.newHls(Hls).loadSource(usherUrl(this.login, tok));
+    this.hls.attachMedia(vL);
+    this.show('live');
+    this.play(vL);
+  },
+
+  async player(stale) {   // hls.js, once it's loaded, or null having said why not
     let Hls;
-    try { Hls = window.Hls || await hlsReady; } catch { hlsAgain(); if (!stale()) this.fallback('The player didn’t load'); return; }
-    if (stale()) return;
-    if (!Hls.isSupported()) return this.fallback('This browser can’t run the low-latency player');
+    try { Hls = window.Hls || await hlsReady; } catch { hlsAgain(); if (!stale()) this.fallback('The player didn’t load'); return null; }
+    if (stale()) return null;
+    if (!Hls.isSupported()) { this.fallback('This browser can’t run the low-latency player'); return null; }
+    return Hls;
+  },
+  newHls(Hls) {
     for (const k of shownSegs.keys()) if (k !== BG.hls?.url) shownSegs.delete(k);   // the last session's playlists won't be asked for again
     const hls = this.hls = new Hls({
       ...LOADING,
@@ -1224,10 +1346,72 @@ const P = {
     });
     hls.on(Hls.Events.MANIFEST_PARSED, () => this.onManifest());
     hls.on(Hls.Events.ERROR, (_, d) => this.onError(d));
-    hls.loadSource(usherUrl(this.login, tok));
-    hls.attachMedia(vL);
+    return hls;
+  },
+
+  // The picture from Kick, for a channel on both (KICK): when it's live on Kick alone, or you've picked Kick. Kick's chat comes with it, and
+  // Kick's title and count where Twitch has none. Everything else is the low-latency player as for Twitch: its speed, quality, the sound away.
+  kickOn() {
+    this.src = 'kick';
+    UI.info(this.user);
+    if (Chat.kick !== this.kick?.room) this.chat();   // opening, P.open has it up already
+    this.playLive();
+  },
+  chat() { Chat.open(this.login, this.src === 'kick' ? this.kick?.room : null); if (this.user) Chat.channel(this.user.id); },   // where the picture's from, with the channel's emotes
+  // Kick's address for a stream is good for about 10 minutes: an older one is asked for again.
+  async playKick(stale) {
+    let k = this.kick;
+    if (!k?.url || Date.now() - k.at > 4 * 60e3) {
+      k = await kickChannel(KICK[this.login]).catch(() => null);
+      if (stale()) return;
+      if (!k) return this.restart();
+      this.kick = k;
+    }
+    if (!k.live || !k.url) return this.kickOff();
+    const Hls = await this.player(stale);
+    if (!Hls) return;
+    this.newHls(Hls).loadSource(k.url);
+    this.hls.attachMedia(vL);
     this.show('live');
     this.play(vL);
+  },
+  // Kick's stream is over, or won't play (why): Twitch's, if they're live there, or offline, looking for either.
+  async kickOff(why) {
+    const gen = this.gen, [u] = await getUsers([this.login]).catch(() => [null]);
+    if (gen !== this.gen) return;
+    if (u?.stream) {
+      if (why) UI.toast(`${why} · on Twitch`);
+      this.user = u; this.src = 'twitch';
+      this.start = Date.parse(u.stream.createdAt) / 1000; this.base = await cdnBase(u);
+      if (gen !== this.gen) return;
+      BG.stop(true);   // the sound away was Kick's: Twitch's player brings its own once it's up (onManifest)
+      UI.info(u); this.chat();
+      return (this.pref === 'cdn' || this.relayGone) && cdnLive ? this.playCdn() : this.playLive();
+    }
+    if (why) return UI.msg(null, why, 'Kick’s stream wouldn’t play.', () => { $('msgbox').hidden = true; this.retries = 0; this.kick.at = 0; this.playLive(); });
+    this.src = 'twitch';
+    this.chat();   // an offline channel's chat is Twitch's, as for any other
+    this.ended(u || this.user);
+  },
+  // Twitch or Kick, for a channel on both: picked in the settings sheet, and kept for next time.
+  setSrc(s) {
+    store.set('src.' + this.login, s);
+    if (s === this.src || (s === 'kick' && !this.kick?.live) || (s === 'twitch' && !this.user?.stream)) return;
+    BG.stop(true); BG.carry = false;
+    this.retries = 0;
+    if (s === 'kick') { this.stopCdn(); return this.kickOn(); }
+    this.src = 'twitch';
+    UI.info(this.user); this.chat();
+    if (this.pref === 'cdn' && cdnLive) { this.destroyHls(); this.playCdn(); } else this.playLive();
+  },
+  // Twitch's stream is over: on Kick if they're still live there, offline otherwise.
+  async kickOrEnd(u) {
+    const gen = this.gen, k = KICK[this.login] ? await kickChannel(KICK[this.login]).catch(() => null) : null;
+    if (gen !== this.gen) return;
+    if (!k?.live) return this.ended(u);
+    this.user = u; this.kick = k;
+    BG.stop(true);
+    this.stopCdn(); this.kickOn();
   },
 
   onManifest() {
@@ -1294,6 +1478,12 @@ const P = {
       if (this.feed === 'live') this.play(vL);
       return;
     }
+    if (this.src === 'kick') {   // Kick's address gone stale, or the stream over: a fresh look at the channel says which
+      if (this.kick) this.kick.at = 0;
+      const gen = this.gen;
+      if (d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR && [403, 404].includes(d.response?.code)) return void this.checkEnded().then(ended => { if (!ended && gen === this.gen) this.restart(); });
+      return this.restart();
+    }
     if (d.response?.code === 403 && d.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
       // a token past its 20 minutes gets the same 403 as a sub-only stream: a fresh one says which it was
       if (!this.asked403) { this.asked403 = true; this.tokenP = null; return this.restart(); }
@@ -1319,14 +1509,15 @@ const P = {
       setTimeout(() => { if (gen === this.gen && this.liveUp() && !BG.on) this.playLive(); }, 1500 * this.retries);
       return;
     }
-    this.checkEnded().then(ended => { if (!ended && gen === this.gen) this.fallback('The low-latency feed keeps failing'); });
+    this.checkEnded().then(ended => { if (!ended && gen === this.gen) this.fallback(this.src === 'kick' ? 'Kick’s feed keeps failing' : 'The low-latency feed keeps failing'); });
   },
 
-  // Live isn't possible (sub-only, relay down, old browser): the CDN feed still is.
+  // Live isn't possible (sub-only, relay down, old browser): the CDN feed still is. On Kick there's no such copy: Twitch's stream, or a message.
   fallback(why) {
     this.destroyHls();
     this.noAd();
     this.relayGone = why === RELAY_OUT;   // out for the day: nothing's coming back soon
+    if (this.src === 'kick') return this.kickOff(why);
     if (cdnLive && this.base) {
       UI.toast(`${why} · playing from the CDN`);
       if (!this.subOnly && this.pref === 'live') this.retryLive();
@@ -1599,13 +1790,15 @@ const P = {
   },
 
   // Chat shows up as late as the picture: Twitch viewers sit ~2.5 s behind, so delay by the rest. A picture
-  // that's paused, or held through an ad break, has no pace to keep.
+  // that's paused, or held through an ad break, has no pace to keep. Kick's chat comes every 2 s (Chat.kickPoll):
+  // held 3 s, its lines go up one by one, as they were said, rather than in lumps.
   chatDelay() {
-    if (BG.back) { const l = BG.lag(); return l == null ? 0 : Math.max(0, l - 2.5) * 1000; }   // what you hear is still the sound's
+    const least = this.src === 'kick' ? 3000 : 0;
+    if (BG.back) { const l = BG.lag(); return Math.max(least, l == null ? 0 : Math.max(0, l - 2.5) * 1000); }   // what you hear is still the sound's
     const v = this.active();
-    if (!v || this.feed === 'vod' || v.paused || (this.ad && !this.cover)) return 0;
+    if (!v || this.feed === 'vod' || v.paused || (this.ad && !this.cover)) return least;
     const l = this.latency();
-    return l == null ? 0 : Math.max(0, l - 2.5) * 1000;
+    return Math.max(least, l == null ? 0 : Math.max(0, l - 2.5) * 1000);
   },
 
   // Speed up a little when behind, slow down when the buffer runs thin. Discrete steps with
@@ -1758,6 +1951,7 @@ const P = {
     // Out of sight with no sound, going or paused from the lock screen (whose play has to find the stream as it is now), or with nobody
     // about (Pages.idle), nobody's waiting on what Twitch would say: coming back asks
     if ((document.hidden && !BG.on && !BG.may()) || Pages.idle()) { this.refreshDue = true; return; }
+    if (this.src === 'kick') return this.refreshKick();
     const gen = this.gen;
     try {
       const [u] = await getUsers([this.login]);
@@ -1784,7 +1978,7 @@ const P = {
       // Twitch's directory blinks now and then, so a stream only counts as over once it's been asked twice
       if (!u.stream && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
       this.gone = 0;
-      if (!u.stream) return this.ended(u);
+      if (!u.stream) return this.kickOrEnd(u);
       this.user = u; UI.info(u);
       // Opened in a stream's first minute, as every one that starts by itself is, the CDN's copy was a path worked out, with the last
       // broadcast's host: Twitch lists the recording a little later, with the path itself.
@@ -1794,6 +1988,18 @@ const P = {
         if (this.feed === 'cdn' && vC.error && !BG.on) { $('msgbox').hidden = true; this.asks = 0; this.rend = null; this.playCdn({ reload: true }); }
       }
     } catch {}
+  },
+
+  // On Kick, the minute's look is at Kick's channel: its title and count, a new broadcast there, or its end (asked twice, as for Twitch).
+  async refreshKick() {
+    const gen = this.gen, k = await kickChannel(KICK[this.login]).catch(() => null);
+    if (gen !== this.gen || !k || this.src !== 'kick') return;
+    if (!k.live && ++this.gone < 2) { setTimeout(() => { if (gen === this.gen) this.refresh(); }, 20e3); return; }
+    this.gone = 0;
+    if (!k.live) return this.kickOff();
+    const fresh = this.kick?.sid && k.sid !== this.kick.sid;
+    this.kick = k; UI.info(this.user);
+    if (fresh && !BG.on) this.playLive();   // a new broadcast has a playlist of its own
   },
 
   // Offline: look every so often, and start by itself the moment the channel goes live, but only in front of you. A page out of sight, or
@@ -1811,8 +2017,8 @@ const P = {
   async lookLive(gen = this.gen) {
     if (gen !== this.gen || this.feed || !this.user || this.user.stream || !Pages.inFront() || Pages.idle()) return;
     try {
-      const [u] = await getUsers([this.login]);
-      if (gen !== this.gen || !u?.stream || !Pages.inFront()) return;
+      const [[u], k] = await Promise.all([getUsers([this.login]), KICK[this.login] ? kickChannel(KICK[this.login]).catch(() => null) : null]);
+      if (gen !== this.gen || !(u?.stream || k?.live) || !Pages.inFront()) return;   // live on Twitch, or on Kick
       const quiet = Date.now() - Pages.touchedAt > 2 * 60e3;
       this.open(this.login, false, u);
       this.quietStart = quiet;
@@ -1821,7 +2027,10 @@ const P = {
 
   async checkEnded() {
     const gen = this.gen;
-    try { const [u] = await getUsers([this.login]); if (gen === this.gen && u && !u.stream) { this.ended(u); return true; } } catch {}
+    try {
+      if (this.src === 'kick') { const k = await kickChannel(KICK[this.login]); if (gen === this.gen && !k.live) { this.kickOff(); return true; } return false; }
+      const [u] = await getUsers([this.login]); if (gen === this.gen && u && !u.stream) { this.kickOrEnd(u); return true; }
+    } catch {}
     return false;
   },
 
@@ -1921,6 +2130,7 @@ const BG = {
       const h = this.hls = new window.Hls({ ...LOADING, pLoader: QuietRelayLoader, progressive: true, liveSyncDuration: 6.5,
         liveMaxLatencyDuration: 25, maxLiveSyncPlaybackRate: 1, liveDurationInfinity: true, maxBufferLength: 12,
         backBufferLength: 10 });   // what's been heard isn't kept: hours away would fill memory iOS takes back by dropping the page
+      if (P.src === 'kick') h.config.fLoader = soundOnly(h.config.loader);   // Kick's smallest rendition, less its picture
       h.on(window.Hls.Events.ERROR, (_, d) => {   // nobody's looking at the page: keep retrying quietly, while it's been heard lately
         P.noteErr(d, 'background ');
         if (this.hls !== h) return;
@@ -1970,9 +2180,10 @@ const BG = {
   // An offline channel has no new session to give, and once it's been quiet a while it stops asking: a channel going live hours later
   // doesn't start a page's sound out of sight.
   async renew(h) {
-    const tok = await tokenFor(P.login);
+    const kick = P.src === 'kick', tok = kick ? await kickChannel(KICK[P.login]).catch(() => null) : await tokenFor(P.login);
     if (!this.still(h)) return;   // before spending a fetch on a sound that's not coming back
-    const url = tok && audioIn(await relayText(usherUrl(P.login, tok)));
+    const master = kick ? tok?.live && tok.url : tok && usherUrl(P.login, tok);   // Kick's address, from its channel
+    const url = master && audioIn(await relayText(master));
     if (!this.still(h)) return;
     if (!url) return void setTimeout(() => { if (this.hls === h && this.wanted) this.renew(h); }, 5000);
     P.audioUrl = url;
@@ -2156,7 +2367,7 @@ aBG.addEventListener('playing', () => {
 // starts a stream by itself, or one iOS keeps running out of sight, plays only while the seat is still its own (2026-11-05: a page nobody
 // could see started Asmongold the moment he went live, on a tap of its own from long before, and its sound took over from the Twitch app).
 // Whether a player of this page's is polling the relay right now, which says to it that this page is the one in use.
-function relayBusy() { return !!(P.hls?.loadingEnabled || BG.hls?.loadingEnabled); }
+function relayBusy() { return P.src !== 'kick' && !!(P.hls?.loadingEnabled || BG.hls?.loadingEnabled); }   // Kick's playlists come straight from Kick
 const Pages = {
   id: Math.random().toString(36).slice(2, 6),
   shown: !document.hidden, waiting: [],
@@ -2673,7 +2884,7 @@ setInterval(() => {
   // chat dozed then stayed dozed, as nothing woke it short of leaving and coming back. So it takes a while of it to doze, and waking is
   // looked at here too.
   idleFor = idle ? idleFor + 1 : 0;
-  if (idleFor >= Chat.dozeAfter && Chat.ws) Chat.doze(); else if (!idle && !Chat.timer) Chat.wake();
+  if (idleFor >= Chat.dozeAfter && (Chat.ws || Chat.kickT)) Chat.doze(); else if (!idle && !Chat.timer) Chat.wake();
 }, 1000);
 
 // ── chat ────────────────────────────────────────────
@@ -2703,6 +2914,24 @@ function parseIrc(line) {
   m.cmd = line.split(' ', 1)[0];
   return m;
 }
+// A line of Kick's chat in the shape of one of Twitch's, for Chat to draw. Kick writes its emotes into the text as [emote:id:name]: here they
+// become the name, with its place given as Twitch's tags give theirs, under an id emoteUrl sends to Kick. Its everyday badges (the levels) stay out.
+// Kick times a line to the second; frac (0–1) is where in that second it goes.
+function kickLine(k, frac = 0) {
+  const s = k.sender || {}, raw = k.content || '', at = {};
+  let text = '', n = 0, last = 0;
+  for (const e of raw.matchAll(/\[emote:(\d+):([^\]]*)\]/g)) {
+    const before = raw.slice(last, e.index), name = e[2] || 'emote', len = Array.from(name).length;
+    text += before; n += Array.from(before).length;
+    (at['kick' + e[1]] ||= []).push(`${n}-${n + len - 1}`);
+    text += name; n += len; last = e.index + e[0].length;
+  }
+  text += raw.slice(last);
+  return { cmd: 'PRIVMSG', prefix: s.slug || '', text,
+    kbadges: (s.identity?.badges_v2 || []).filter(b => b.image_url && b.name !== 'level').map(b => b.image_url),
+    tags: { id: 'k' + k.id, 'tmi-sent-ts': String((Date.parse(k.created_at) || Date.now()) + Math.round(frac * 1000)), 'display-name': s.username || s.slug || '', login: s.slug || '',
+      color: s.identity?.color || '', 'user-id': 'kick' + (s.id || ''), emotes: Object.entries(at).map(([id, r]) => `${id}:${r.join(',')}`).join('/') } };
+}
 const loginOf = m => m.tags.login || m.prefix.split('!')[0];   // a subscription or announcement comes from tmi.twitch.tv, with who it's about in a tag
 const plain = s => /^[\x20-\x7e]+$/.test(s);   // a name in plain letters
 
@@ -2721,14 +2950,14 @@ const Chat = {
   dozeAfter: 15,                          // or with nobody about for this many seconds running (see the tick)
   held: false,                            // a finger on it
 
-  open(login) {
+  open(login, kick) {   // kick: the chatroom on Kick, for the picture from Kick
     this.close();
     if (login !== Talk.draftFor) { Talk.draftFor = login; Talk.tx.value = ''; }   // what you were typing was for somewhere else
-    this.login = login; this.clear();
+    this.login = login; this.kick = kick || null; this.kickFirst = true; this.clear();
+    if (kick) this.note('Kick’s chat, to read here');
     this.note('Connecting to chat…').classList.add('wait');
     this.connect();
-    this.history(60);
-    this.sampleT = setTimeout(() => this.sample(), 4e3);
+    if (!kick) { this.history(60); this.sampleT = setTimeout(() => this.sample(), 4e3); }
     this.clocks(true);
     this.nap();
     this.loadGlobal();
@@ -2736,7 +2965,50 @@ const Chat = {
   },
 
   clear() { this.box.textContent = ''; this.stick = true; this.top = 0; $('more').hidden = true; clearTimeout(this.idle); },
-  hangUp() { if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); } },
+  hangUp() {
+    if (this.ws) { const w = this.ws; this.ws = null; w.onclose = null; w.close(); }
+    this.kickRun++; clearTimeout(this.kickT); this.kickT = 0;   // and Kick's asking, with any answer still on its way
+  },
+  kickRun: 0, kickT: 0, kickFrom: 0,
+  // Kick's chat, for the picture from Kick (P.kickOn). Kick's live socket only lets Kick's own sites in, and the one it had before is gone. Its list
+  // of the latest 25 lines fills chat on opening, but Cloudflare keeps that list 10 s, which would bring chat in lumps 10 s apart and short of lines
+  // in a busy one. Asked for the lines from a time on (start_time, as Kick's own past broadcasts ask for theirs), it answers fresh with the 5 s from
+  // then (2026-11-13). So after the list, this asks every 2 s from a second before the last ask, and the lines both answers have count once.
+  // Read only: saying anything there would take a Kick sign-in.
+  async kickPoll() {
+    const run = ++this.kickRun, room = this.kick, now = Date.now();
+    clearTimeout(this.kickT);
+    this.kickT = -1;   // asking
+    const from = this.kickFrom, latest = !from || now - from > 20e3;   // opening, or back after a while: the list rather than catching up
+    const sec = t => Math.floor(t / 1000) * 1000;
+    let wait = 2000;
+    try {
+      const r = await fetch(`https://kick.com/api/v2/channels/${room}/messages` + (latest ? '' : '?start_time=' + new Date(from).toISOString()),
+        { headers: { Accept: 'application/json' }, cache: 'no-store', signal: AbortSignal.timeout(10e3) });
+      const list = r.ok ? (await r.json()).data?.messages || [] : null;
+      if (run !== this.kickRun) return;
+      if (!list) wait = r.status === 403 || r.status === 429 ? 30e3 : 10e3;   // Cloudflare saying slow down: it's let be a while
+      else {
+        this.rx = Date.now();
+        const lines = latest ? list.slice().reverse() : list;   // the list comes newest first, the 5 s oldest first
+        // the lines of one second go up spread across it, rather than together
+        const per = {}, nth = {};
+        for (const k of lines) per[k.created_at] = (per[k.created_at] || 0) + 1;
+        for (const k of lines) {
+          const i = nth[k.created_at] = (nth[k.created_at] || 0) + 1, m = kickLine(k, (i - 1) / per[k.created_at]);
+          m.old = this.kickFirst; this.add(m);
+        }
+        if (this.kickFirst) { this.kickFirst = false; this.box.querySelectorAll('.wait').forEach(n => n.remove()); }
+        if (latest) { this.kickFrom = sec(Math.max(Date.parse(lines.at(-1)?.created_at) || 0, now - 10e3)); wait = 300; }   // the list is at most 10 s old
+        else {
+          const upTo = Math.min(from + 5000, now);   // what this answer had all of
+          this.kickFrom = sec(upTo - 1000);
+          if (upTo < now - 500) wait = 300;   // behind (just opened, or a slow answer): the next 5 s straight away
+        }
+      }
+    } catch { if (run !== this.kickRun) return; wait = 10e3; }
+    this.kickT = setTimeout(() => this.kickPoll(), wait);
+  },
   toEnd() { this.box.scrollTop = this.box.scrollHeight; this.top = this.box.scrollTop; },   // to the newest line, with where that is kept for the scroll listener
   follow() { this.stick = true; this.box.scrollTop = this.box.scrollHeight; $('more').hidden = true; clearTimeout(this.idle); },
   rest() {   // not with a finger on it or someone's card open
@@ -2752,6 +3024,7 @@ const Chat = {
   },
 
   connect() {
+    if (this.kick) return void this.kickPoll();
     const ws = this.ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
     this.rx = Date.now();
     ws.onopen = () => {
@@ -2797,7 +3070,7 @@ const Chat = {
   wake() {   // back from the background or from nobody being about, or the network changed
     if (!this.login || document.hidden || Pages.idle()) return;
     if (!this.timer) this.clocks(true);
-    if (!this.ws || Date.now() - this.rx > 15e3) this.reconnect();
+    if (this.kick ? !this.kickT : !this.ws || Date.now() - this.rx > 15e3) this.reconnect();
   },
   // Drawing what's due, five times a second, and asking a quiet socket whether it's alive.
   clocks(on) {
@@ -2873,10 +3146,11 @@ const Chat = {
     return ((await r.json()).messages || []).map(parseIrc).filter(m => m.cmd === 'PRIVMSG' || m.cmd === 'USERNOTICE');
   },
   async history(limit) {
+    if (this.kick) return;   // Kick's asking brings its own latest lines
     const login = this.login;
     try {
       const lines = await this.recent(login, limit);
-      if (login !== this.login) return;
+      if (login !== this.login || this.kick) return;   // or Kick's chat took over meanwhile
       const old = [];
       for (const m of lines) {
         if (!this.fresh(m)) continue;
@@ -2892,7 +3166,7 @@ const Chat = {
   // As far back as recent-messages goes, only to see which emotes people use, and only with something to send them from.
   // A few seconds in, to stay out of the picture's way. None of it gets drawn, so none of it counts as seen.
   async sample() {
-    if (this.sampled || !Me.acct || !this.login) return;
+    if (this.sampled || !Me.acct || !this.login || this.kick) return;
     this.sampled = true;
     const login = this.login;
     try {
@@ -2998,6 +3272,7 @@ const Chat = {
       const src = b && (this.badges.get(b) || this.gbadges?.get(b));
       if (src) d.append(pic(src, 'bd'));
     }
+    for (const src of m.kbadges || []) d.append(pic(src, 'bd'));   // Kick's come as pictures
     const action = text.startsWith('\x01ACTION ') && text.endsWith('\x01');
     if (action) { text = text.slice(8, -1); d.classList.add('me'); }
     const name = t['display-name'] || login;
@@ -3148,7 +3423,7 @@ const Chat = {
   close() {
     this.clocks(false); clearTimeout(this.sampleT); clearTimeout(this.napT); clearTimeout(this.againT);
     this.hangUp();
-    this.login = null; this.uid = null; this.queue = []; this.mine = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
+    this.login = null; this.kick = null; this.kickFrom = 0; this.uid = null; this.queue = []; this.mine = []; this.retry = 0; this.behind = false; this.room = {}; this.chanEmotes = []; this.newest = 0;
     this.seen = new Set(); this.names = new Map(); this.said = []; this.sampled = false;
     this.badges = new Map(); this.emotes = new Map(this.global);
     Picker.show(false);
@@ -3542,10 +3817,10 @@ const Talk = {
   irc: null, ircOk: false, ircRx: 0, ircQ: [], ircWait: null, useIrc: false,
 
   show() {
-    const me = !!Me.acct;
-    $('paneChat').classList.toggle('talk', !!Chat.login);
-    this.tx.hidden = this.go.hidden = $('bEmote').hidden = !me;
-    $('signin').hidden = me;
+    const me = !!Me.acct, kick = !!Chat.kick;   // Kick's chat is to read only
+    $('paneChat').classList.toggle('talk', !!Chat.login && !kick);
+    this.tx.hidden = this.go.hidden = $('bEmote').hidden = !me || kick;
+    $('signin').hidden = me || kick;
     this.go.disabled = this.busy || !this.tx.value.trim();
     if (!me || !Chat.login) { this.setReply(null); $('ac').hidden = true; }
     this.hint();
@@ -3729,7 +4004,7 @@ $('epl').addEventListener('click', e => { const b = e.target.closest('button'); 
 const Card = {
   async open(line) {
     const login = line?.dataset.l, uid = line?.dataset.u, msg = line?.dataset.id;
-    if (!login) return;
+    if (!login || uid?.startsWith('kick')) return;   // someone on Kick's chat has no Twitch card
     const name = line.querySelector('.n')?.textContent || login;
     let u = null;
     Sheet.show(body => {
@@ -3914,12 +4189,14 @@ const UI = {
     Remote.show({ title, artist, artwork: avatar ? [{ src: avatar, sizes: '150x150' }] : [] });
   },
   info(u) {
-    const s = u.stream, name = u.displayName || u.login, title = u.broadcastSettings?.title || '';
+    const k = P.src === 'kick' && P.user === u && P.kick?.live ? P.kick : null;   // on Kick: Kick's title and count
+    const s = u.stream, name = u.displayName || u.login, title = k ? k.title : u.broadcastSettings?.title || '';
     this.row({ avatar: u.profileImageURL, name, title, page: name,
-      sub: s ? [s.game?.displayName, count(s.viewersCount), uptime(s.createdAt)].filter(Boolean).join(' · ') : 'Offline',
-      hudSub: s ? `· ${count(s.viewersCount)}` : '' });
+      sub: k ? ['Kick', k.game, count(k.viewers), k.since && uptime(k.since)].filter(Boolean).join(' · ')
+        : s ? [s.game?.displayName, count(s.viewersCount), uptime(s.createdAt)].filter(Boolean).join(' · ') : 'Offline',
+      hudSub: k ? `· ${count(k.viewers)} on Kick` : s ? `· ${count(s.viewersCount)}` : '' });
     this.owner(u);
-    if (s) this.nowPlaying(title || 'Live', name, u.profileImageURL);
+    if (s || k) this.nowPlaying(title || 'Live', name, u.profileImageURL);
   },
   vodInfo(v) {
     const o = v.owner;
@@ -4001,7 +4278,7 @@ const UI = {
     this.playIcon();
   },
   lat() {
-    const l = P.latency(), feed = P.cover ? 'Ad-free' : P.feed === 'cdn' ? 'CDN' : null;
+    const l = P.latency(), feed = P.cover ? 'Ad-free' : P.feed === 'cdn' ? 'CDN' : P.feed === 'live' && P.src === 'kick' ? 'Kick' : null;
     $('bLat').classList.toggle('ad', P.ad);
     const say = (n, text) => { if (n.textContent !== text) n.textContent = text; };
     say($('latTxt'), feed || (l != null ? `${l.toFixed(1)} s` : 'Live'));
@@ -4151,8 +4428,13 @@ const Sheet = {
     body.append(box);
   },
   playback(body) {
-    const live = P.user?.stream, past = P.feed === 'vod';
-    if (!past) this.group(body, 'Feed', [
+    const kick = P.src === 'kick', live = P.user?.stream || kick, past = P.feed === 'vod';
+    if (KICK[P.login] && !past) this.group(body, 'Watch on', [
+      { label: 'Twitch', desc: P.user?.stream ? 'Live there now.' : 'Not live on Twitch right now.', on: !kick, disabled: !P.user?.stream, pick: () => P.setSrc('twitch') },
+      { label: 'Kick', desc: P.kick?.live ? `Live there now, about ${TARGET.live} s behind, no ads. Kick’s chat comes with it, to read only.` : 'Not live on Kick right now.',
+        on: kick, disabled: !P.kick?.live, pick: () => P.setSrc('kick') },
+    ]);
+    if (!past && !kick) this.group(body, 'Feed', [
       { label: 'Low latency', desc: `About ${TARGET.live} s behind. Ads are cut out${cdnLive ? '; during a break you watch the ad-free feed' : ''}.`,
         on: P.pref === 'live', disabled: P.subOnly, pick: () => P.setPref('live') },
       { label: 'Ad-free CDN', desc: `About ${TARGET.cdn} s behind, more if it has to wait for the CDN. Never has ads and plays sub-only streams${cdnLive ? '' : ' (Safari only)'}.`,
@@ -4310,9 +4592,11 @@ const Home = {
     try {
       const roster = this.roster(), recent = Recent.list().map(r => r.l);
       const all = (await getUsers([...new Set([...roster, ...recent])])).filter(Boolean);
+      // a channel on Kick too (KICK), offline on Twitch, is live if it's live there
+      await Promise.all(all.filter(u => KICK[u.login] && !u.stream).map(async u => { const k = await kickChannel(KICK[u.login]).catch(() => null); u.kick = k?.live ? k : null; }));
       const mine = new Set(roster);
       this.users = all.filter(u => mine.has(u.login));
-      this.live = new Set(all.filter(u => u.stream).map(u => u.login));
+      this.live = new Set(all.filter(u => u.stream || u.kick).map(u => u.login));
       this.at = Date.now();
       this.render();
       this.renderRecent();
@@ -4338,17 +4622,20 @@ const Home = {
     }
   },
   render() {
-    const live = this.users.filter(u => u.stream).sort((a, b) => b.stream.viewersCount - a.stream.viewersCount);
+    const viewers = u => u.stream ? u.stream.viewersCount : u.kick.viewers;
+    const live = this.users.filter(u => u.stream || u.kick).sort((a, b) => viewers(b) - viewers(a));
     const last = u => Date.parse(u.lastBroadcast?.startedAt || 0) || 0;
-    const off = this.users.filter(u => !u.stream).sort((a, b) => last(b) - last(a));
+    const off = this.users.filter(u => !u.stream && !u.kick).sort((a, b) => last(b) - last(a));
     const box = $('live'), bust = Math.floor(Date.now() / 300e3);
     box.textContent = '';
     $('liveN').textContent = live.length || '';
     if (!live.length) box.append(el('p', 'note', 'Nobody you follow is live right now.'));
     for (const u of live) {
-      const s = u.stream;
-      box.append(streamRow({ login: u.login, name: u.displayName, avatar: u.profileImageURL, title: u.broadcastSettings?.title, game: s.game?.displayName,
-        viewers: s.viewersCount, since: s.createdAt, thumb: s.previewImageURL ? `${s.previewImageURL}?t=${bust}` : '', type: s.type }));
+      const s = u.stream, k = u.kick;
+      box.append(s ? streamRow({ login: u.login, name: u.displayName, avatar: u.profileImageURL, title: u.broadcastSettings?.title, game: s.game?.displayName,
+        viewers: s.viewersCount, since: s.createdAt, thumb: s.previewImageURL ? `${s.previewImageURL}?t=${bust}` : '', type: s.type })
+        : streamRow({ login: u.login, name: u.displayName, avatar: u.profileImageURL, title: k.title, game: k.game, viewers: k.viewers, since: k.since,
+          thumb: k.thumb ? `${k.thumb}?t=${bust}` : '', type: 'kick' }));
     }
     const offBox = $('off'); offBox.textContent = '';
     $('secOff').hidden = !off.length;

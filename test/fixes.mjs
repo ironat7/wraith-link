@@ -1,14 +1,14 @@
-// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery handover.
+// Usually run through run.mjs, side by side. usage: node fixes.mjs [section|all] [channel] [other channel]. Sections on real channels, watching a stream made here but with Twitch's own lists, chat and CDN copies: pause cover misc browse chat replay irc account keyboard emotes fullscreen scroll sound pages layout recover. All staged, needing no channel: relay vod cdn away screen lists duo unseen update chatq return player budget pill lists2 battery handover kick.
 // Checks for the bugs code reviews have found, with the failures staged.
 // An iPhone user agent turns on the Safari paths (the CDN cover, background sound) in Chrome, whose native HLS can run them.
-import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE } from './lib.mjs';
+import { serve, launch, sleep, checks, IPHONE, makeStream, SILENCE, KICK_MASTER } from './lib.mjs';
 const srv = await serve(), { base } = srv;
 const browser = await launch();
 const which = process.argv[2] || 'all', want = s => which === 'all' || which === s;
 const CID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const gqlNode = async q => (await (await fetch('https://gql.twitch.tv/gql', { method: 'POST', headers: { 'Client-ID': CID, 'Content-Type': 'application/json', 'X-Device-Id': 'wraithtests0000000000000000000000' }, body: JSON.stringify({ query: q }) })).json()).data;
 let A = process.argv[3], B = process.argv[4];
-if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery', 'handover'].includes(which) && (!A || !B)) {
+if (!['relay', 'vod', 'cdn', 'away', 'screen', 'lists', 'duo', 'unseen', 'update', 'chatq', 'return', 'player', 'budget', 'pill', 'lists2', 'battery', 'handover', 'kick'].includes(which) && (!A || !B)) {
   // one that keeps its past broadcasts, which the channel page's checks look through (the top channel on 2026-11-05 kept none)
   const top = (await gqlNode('query { streams(first: 12) { edges { node { broadcaster { login videos(first: 1, type: ARCHIVE) { edges { node { id } } } } } } } }')).streams.edges.map(e => e.node.broadcaster);
   A ||= (top.find(b => b.videos?.edges?.length) || top[0]).login; B ||= top.map(b => b.login).find(x => x !== A);
@@ -4021,6 +4021,139 @@ if (want('handover')) {
       s = await bg(page);
       ok('and after 8 s it gives the picture its own start, as before', !s.on && !s.back && s.aPaused && s.away.some(l => /took too long/.test(l)), JSON.stringify(s));
       await page.unroute(/edge\.hls\.ttvnw\.net\/.*\.ts$/, never).catch(never);
+      await done();
+    })(),
+  ]);
+}
+
+if (want('kick')) {
+  // xQc on Kick (Jerry, 2026-11-13: "is it possible to implement kick for xqc only"). Kick's API, its playlists and its chat staged here.
+  const kickHere = async ({ twitch = false, kick = true, path = '?c=xqc' } = {}) => {
+    const c = await browser.newContext({ viewport: { width: 390, height: 844 }, userAgent: IPHONE, hasTouch: true, isMobile: true });
+    const page = await c.newPage();
+    page.errors = []; page.on('pageerror', e => page.errors.push(e.message));
+    const S = { twitch, kick, relay: 0, chatAsks: 0 };
+    await page.addInitScript(() => {
+      window.sockets = []; window.WebSocket = class { constructor(u) { window.sockets.push(u); } close() {} send() {} };
+      window.buffers = [];   // each SourceBuffer's type, as the players make them
+      for (const MS of [window.MediaSource, window.ManagedMediaSource].filter(Boolean)) { const add = MS.prototype.addSourceBuffer; MS.prototype.addSourceBuffer = function (t) { window.buffers.push(t); return add.call(this, t); }; }
+    });
+    page.on('request', r => { if (r.url().includes('recent-messages.robotty.de')) S.twitchHistory = (S.twitchHistory || 0) + 1; });
+    const user = () => ({ id: '71092938', login: 'xqc', displayName: 'xQc', profileImageURL: null, broadcastSettings: { title: 'On Twitch' }, stream: S.twitch ? { id: '9', createdAt: ago(3600), viewersCount: 30000, type: 'live', game: null, previewImageURL: '' } : null, videos: { edges: [] }, lastBroadcast: null });
+    const channel = () => ({ id: 668, chatroom: { id: 668 }, playback_url: KICK_MASTER, livestream: S.kick ? { id: 5, is_live: true, session_title: 'On Kick', viewer_count: 8000, start_time: new Date(Date.now() - 3600e3).toISOString().slice(0, 19).replace('T', ' '), categories: [{ name: 'Just Chatting' }], thumbnail: { url: '' } } : null });
+    // Kick's chat as Kick keeps it: times to the second, the latest 25 newest first as Cloudflare holds them (10 s), and the 5 s from a time, oldest first and fresh
+    const said = (n, text, at = Date.now() - (30 - n) * 1000) => ({ id: `m${n}`, content: text, created_at: new Date(at).toISOString().replace(/\.\d+Z$/, 'Z'), sender: { id: 100 + n, slug: `kicker${n}`, username: `Kicker${n}`, identity: { color: '#FF55B3', badges_v2: [{ name: 'level', image_url: 'https://ext.cdn.kick.com/level.png' }, { name: 'og', image_url: 'https://ext.cdn.kick.com/og.png' }] } } });
+    S.log = [said(1, 'first line'), said(2, 'second [emote:37226:KEKW] line')];
+    S.saidAt = {};
+    S.talk = (count, every) => { let i = 0; const t = setInterval(() => { i++; S.log.push(said(100 + i, `live line ${i}`, Date.now())); S.saidAt[`live line ${i}`] = Date.now(); if (i >= count) clearInterval(t); }, every); };
+    await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
+      const u = route.request().url(), b = route.request().postData() || '';
+      const json = data => route.fulfill({ status: 200, headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(data) }).catch(never);
+      if (u.includes('cdn.jsdelivr.net')) return route.continue().catch(never);
+      if (u.includes('gql.twitch.tv')) return json({ data: b.includes('users(logins') ? { users: [user()] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } } : {} });
+      const chat = u.match(/kick\.com\/api\/v2\/channels\/668\/messages(?:\?start_time=([^&]+))?$/);
+      if (chat) {
+        S.chatAsks++;
+        if (!chat[1]) {
+          if (!S.cached || Date.now() - S.cached.at > 10e3) S.cached = { at: Date.now(), list: S.log.slice(-25).reverse() };
+          return json({ data: { messages: S.cached.list } });
+        }
+        S.froms = (S.froms || 0) + 1;
+        const t = Date.parse(decodeURIComponent(chat[1]));
+        return json({ data: { messages: S.log.filter(k => Date.parse(k.created_at) >= t && Date.parse(k.created_at) < t + 5000) } });
+      }
+      if (/kick\.com\/api\/v2\/channels\/xqc$/.test(u)) return json(channel());
+      return route.abort().catch(never);
+    });
+    await makeStream(page, async (route, u, body) => { if (u) { S.relay++; (S.urls ||= []).push(u.replace(/\?.*/, '').slice(-40)); } await sleep(300); return route.fulfill({ status: 200, headers, body }).catch(never); });
+    await page.goto(base + path, { waitUntil: 'domcontentloaded' });
+    return { page, S, done: async () => { ok('no page errors', page.errors.length === 0, page.errors.join(' | ')); await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close(); } };
+  };
+  const picture = page => page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 1 && v.readyState >= 3 && !wraith.BG.on; }, null, { timeout: 25000 }).catch(never);
+  const where = page => page.evaluate(() => ({ src: wraith.P.src, feed: wraith.P.feed, label: document.getElementById('latTxt').textContent, sub: document.getElementById('iSub').textContent, chat: wraith.Chat.kick, msg: document.getElementById('msgbox').hidden ? '' : document.getElementById('msgbox').textContent }));
+  const go = (page, h) => page.evaluate(async h => {
+    if (h) { document.getElementById('vLL').pause(); await new Promise(r => setTimeout(r, 30)); }   // as iOS does as the app leaves
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => h ? 'hidden' : 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+  }, h);
+  await Promise.all([
+    (async () => {
+      const { page, S, done } = await kickHere();
+      await picture(page);
+      let s = await where(page);
+      ok('live on Kick alone, xQc plays from Kick, and says so', s.src === 'kick' && s.feed === 'live' && s.label === 'Kick' && /Kick/.test(s.sub), JSON.stringify(s));
+      ok('only Kick’s top playlist goes through the relay; its renditions’ come straight from Kick', S.relay === 1 && page.kickLists > 0, `${S.relay} relay calls (${S.urls}), ${page.kickLists} straight ${JSON.stringify(await page.evaluate(() => wraith.P.errs))}`);
+      await page.waitForFunction(() => document.querySelector('#chat .m img[src*="files.kick.com/emotes/37226"]'), null, { timeout: 10000 }).catch(never);
+      const chat = await page.evaluate(() => ({ lines: [...document.querySelectorAll('#chat .m')].map(n => n.textContent), emote: !!document.querySelector('#chat .m img[src*="files.kick.com/emotes/37226"]'),
+        og: document.querySelectorAll('#chat .m img[src*="og.png"]').length, level: document.querySelectorAll('#chat .m img[src*="level.png"]').length, say: !document.getElementById('sayTx').hidden, signin: !document.getElementById('signin').hidden }));
+      ok('Kick’s chat shows, in order, with its emotes and badges, less the level ones', chat.emote && chat.og === 2 && chat.level === 0 && chat.lines.findIndex(l => /first line/.test(l)) < chat.lines.findIndex(l => /second/.test(l)), JSON.stringify(chat));
+      ok('and it’s to read only', !chat.say && !chat.signin, JSON.stringify(chat));
+      const sockets = await page.evaluate(() => window.sockets);
+      ok('Twitch’s chat isn’t opened on the way (it showed for a moment, and its history could land in Kick’s)', !sockets.length && !S.twitchHistory, `${JSON.stringify(sockets)} ${S.twitchHistory || 0} history asks`);
+      const asks = S.chatAsks; await sleep(3500);
+      ok('Kick’s chat is asked again every few seconds', S.chatAsks > asks, `${S.chatAsks - asks} asks`);
+      // a chat going on, four lines a second: each shows once, within a few seconds of being said, and one by one rather than in lumps
+      await page.evaluate(() => {
+        window.drawnAt = {};
+        new MutationObserver(ms => { for (const r of ms) for (const n of r.addedNodes) { const t = n.textContent?.match(/live line \d+/)?.[0]; if (t) (window.drawnAt[t] ||= []).push(Date.now()); } }).observe(document.getElementById('chat'), { childList: true });
+      });
+      const asked = S.chatAsks;
+      S.talk(24, 250);
+      await sleep(11000);
+      const drawn = await page.evaluate(() => window.drawnAt), late = Object.entries(S.saidAt).map(([t, at]) => drawn[t] ? drawn[t][0] - at : Infinity);
+      const times = Object.values(drawn).map(a => a[0]).sort((a, b) => a - b), gaps = times.slice(1).map((t, i) => t - times[i]);
+      ok('a busy Kick chat: every line shows, once, within 4.5 s of being said', late.length === 24 && Math.max(...late) < 4500 && Object.values(drawn).every(a => a.length === 1),
+        `${Object.keys(drawn).length}/24 drawn, the latest ${Math.max(...late)} ms after, ${S.froms} asks from a time, ${(S.chatAsks - asked) / 11} asks a second`);
+      ok('and one by one rather than in lumps', gaps.filter(g => g >= 120).length >= 16, `gaps ${gaps.join(' ')}`);
+      // away and back
+      const relay = S.relay, made = await page.evaluate(() => window.buffers.length);
+      await go(page, true);
+      await page.waitForFunction(() => { const a = document.getElementById('aBG'); return wraith.BG.on && !a.paused && a.readyState >= 3 && a.currentTime > 0; }, null, { timeout: 15000 }).catch(never);
+      s = await page.evaluate(m => ({ on: wraith.BG.on, url: wraith.BG.hls?.url || '', buffers: window.buffers.slice(m) }), made);
+      ok('leaving, the sound goes on from Kick’s smallest rendition, with nothing through the relay', s.on && /160p30/.test(s.url) && S.relay === relay, `${JSON.stringify(s)} ${S.relay - relay} relay calls`);
+      ok('and with its picture left out: the <audio> holds sound alone (iOS pauses one with a picture as the app leaves)', s.buffers.length > 0 && s.buffers.every(t => /^audio\//.test(t)), JSON.stringify(s.buffers));
+      await sleep(1500);
+      await go(page, false);
+      await picture(page);
+      s = await page.evaluate(() => ({ on: wraith.BG.on, away: JSON.parse(localStorage.getItem('wraith.away') || '[]').slice(-2) }));
+      ok('and coming back the picture takes over in step', !s.on && s.away.some(l => /back in step/.test(l)), JSON.stringify(s));
+      // Kick ends, with Twitch offline
+      S.kick = false;
+      await page.evaluate(async () => { await wraith.P.refreshKick(); await wraith.P.refreshKick(); });
+      await page.waitForFunction(() => !document.getElementById('msgbox').hidden, null, { timeout: 8000 }).catch(never);
+      s = await where(page);
+      ok('Kick’s stream ending, with Twitch offline: offline, and the chat with it', !s.feed && /stream ended|offline/i.test(s.msg), JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      const { page, S, done } = await kickHere({ twitch: true });
+      await picture(page);
+      let s = await where(page);
+      const sockets = await page.evaluate(() => window.sockets);
+      ok('live on both, Twitch by default, with Twitch’s chat once', s.src === 'twitch' && !s.chat && sockets.length === 1 && /irc-ws/.test(sockets[0]), JSON.stringify(s) + ' ' + JSON.stringify(sockets));
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(400);
+      const pick = await page.evaluate(() => [...document.querySelectorAll('#sheetBody .opt')].filter(b => /^(Twitch|Kick)/.test(b.textContent)).map(b => ({ t: b.textContent.slice(0, 6), on: b.classList.contains('on'), off: b.disabled })));
+      ok('the settings sheet offers Kick', pick.length === 2 && pick.some(p => p.t.startsWith('Kick') && !p.off && !p.on), JSON.stringify(pick));
+      await page.evaluate(() => [...document.querySelectorAll('#sheetBody .opt')].find(b => b.textContent.startsWith('Kick')).click());
+      await page.evaluate(() => document.getElementById('scrim').click());
+      await picture(page);
+      s = await where(page);
+      ok('picking Kick plays from Kick, with Kick’s chat, and is kept', s.src === 'kick' && s.label === 'Kick' && s.chat === 668 && await page.evaluate(() => localStorage.getItem('wraith.src.xqc') === '"kick"'), JSON.stringify(s));
+      // Kick ends while Twitch is still live: back to Twitch
+      S.kick = false;
+      await page.evaluate(async () => { await wraith.P.refreshKick(); await wraith.P.refreshKick(); });
+      await picture(page);
+      s = await where(page);
+      ok('Kick’s stream ending with Twitch still live goes back to Twitch', s.src === 'twitch' && s.feed === 'live' && !s.chat, JSON.stringify(s));
+      await done();
+    })(),
+    (async () => {
+      // the home screen: xQc on Kick alone is live
+      const { page, done } = await kickHere({ path: '' });
+      await page.waitForFunction(() => [...document.querySelectorAll('#live .row')].some(r => /KICK/.test(r.textContent)), null, { timeout: 15000 }).catch(never);
+      const row = await page.evaluate(() => [...document.querySelectorAll('#live .row')].map(r => r.textContent).join(' | '));
+      ok('the home screen lists xQc as live on Kick', /KICK/.test(row) && /On Kick/.test(row), row);
       await done();
     })(),
   ]);
