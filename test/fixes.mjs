@@ -4053,7 +4053,7 @@ if (want('kick')) {
     const said = (n, text, at = Date.now() - (30 - n) * 1000) => ({ id: `m${n}`, content: text, created_at: new Date(at).toISOString().replace(/\.\d+Z$/, 'Z'), sender: { id: 100 + n, slug: `kicker${n}`, username: `Kicker${n}`, identity: { color: '#FF55B3', badges_v2: [{ name: 'level', image_url: 'https://ext.cdn.kick.com/level.png' }, { name: 'og', image_url: 'https://ext.cdn.kick.com/og.png' }] } } });
     S.log = [said(1, 'first line'), said(2, 'second [emote:37226:KEKW] line')];
     S.saidAt = {};
-    S.talk = (count, every) => { let i = 0; const t = setInterval(() => { i++; S.log.push(said(100 + i, `live line ${i}`, Date.now())); S.saidAt[`live line ${i}`] = Date.now(); if (i >= count) clearInterval(t); }, every); };
+    S.talk = (count, every) => { let i = 0; clearInterval(S.talking); const t = S.talking = setInterval(() => { i++; S.log.push(said(100 + i, `live line ${i}`, Date.now())); S.saidAt[`live line ${i}`] = Date.now(); if (i >= count) clearInterval(t); }, every); };
     await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
       const u = route.request().url(), b = route.request().postData() || '';
       const json = data => route.fulfill({ status: 200, headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(data) }).catch(never);
@@ -4078,7 +4078,7 @@ if (want('kick')) {
       await sleep(300); return route.fulfill({ status: 200, headers, body }).catch(never);
     });
     await page.goto(base + path, { waitUntil: 'domcontentloaded' });
-    return { page, S, done: async () => { ok('no page errors', page.errors.length === 0, page.errors.join(' | ')); await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close(); } };
+    return { page, S, done: async () => { clearInterval(S.talking); ok('no page errors', page.errors.length === 0, page.errors.join(' | ')); await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close(); } };
   };
   const picture = page => page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 1 && v.readyState >= 3 && !wraith.BG.on; }, null, { timeout: 25000 }).catch(never);
   const where = page => page.evaluate(() => ({ src: wraith.P.src, feed: wraith.P.feed, label: document.getElementById('latTxt').textContent, sub: document.getElementById('iSub').textContent, chat: wraith.Chat.kick, msg: document.getElementById('msgbox').hidden ? '' : document.getElementById('msgbox').textContent }));
