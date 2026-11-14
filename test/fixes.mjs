@@ -4169,6 +4169,26 @@ if (want('kick')) {
       ok('the home screen lists xQc as live on Kick', /KICK/.test(row) && /On Kick/.test(row), row);
       await done();
     })(),
+    (async () => {
+      // he starts on Kick after the channel was opened on Twitch: the settings sheet asks Kick as it opens, and offers it
+      const { page, S, done } = await kickHere({ twitch: true, kick: false });
+      await picture(page);
+      const offer = () => page.evaluate(() => [...document.querySelectorAll('#sheetBody .opt')].filter(b => b.textContent.startsWith('Kick')).map(b => ({ off: b.disabled, says: b.textContent.slice(4, 34) }))[0]);
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(600);
+      const before = await offer();
+      await page.evaluate(() => document.getElementById('scrim').click());
+      S.kick = true;
+      const t = Date.now();
+      await page.evaluate(() => { wraith.P.kick.at -= 31e3; document.getElementById('bSet').click(); });   // half a minute on
+      await page.waitForFunction(() => [...document.querySelectorAll('#sheetBody .opt')].some(b => b.textContent.startsWith('Kick') && !b.disabled), null, { timeout: 5000 }).catch(never);
+      const after = await offer();
+      ok('a stream that starts on Kick after the channel was opened is offered when the settings sheet is next opened', before?.off === true && after?.off === false && S.since(t)['kick channel'] === 1, `${JSON.stringify(before)} → ${JSON.stringify(after)}, ${S.since(t)['kick channel']} asks of Kick`);
+      await page.evaluate(() => document.getElementById('scrim').click()); await sleep(300);
+      const t2 = Date.now();
+      await page.evaluate(() => document.getElementById('bSet').click()); await sleep(800);
+      ok('and opening it again straight away doesn’t ask Kick again', !S.since(t2)['kick channel'], JSON.stringify(S.since(t2)));
+      await done();
+    })(),
   ]);
   // Nothing of Kick's runs the battery down unseen (Jerry, 2026-11-13: "no new battery drainers?"). Everything a page on Kick asks of the
   // network, by kind (S.since), in each state where nobody's watching or reading.

@@ -4413,7 +4413,18 @@ const Sheet = {
     clearInterval(this.timer);
     this.timer = setInterval(() => this.stats(), 1000);
   },
-  open() { this.show(body => this.playback(body)); },
+  open() {
+    const fn = body => this.playback(body);
+    this.show(fn);
+    // What's known of Kick is from when the channel was opened, unless the picture is Kick's (P.refreshKick). So it's asked as the sheet
+    // opens, and "Watch on" offers a stream that started there since. Only then: asking each minute would be for nobody most of the time.
+    const login = P.login, slug = KICK[login];
+    if (slug && P.src !== 'kick' && P.feed !== 'vod' && Date.now() - (P.kick?.at || 0) > 30e3) kickChannel(slug).then(k => {
+      if (P.login !== login || P.src === 'kick') return;
+      P.kick = k;
+      if (!$('sheet').hidden && this.fn === fn) this.render();
+    }).catch(() => {});
+  },
   account() { this.show(body => this.accountItems(body)); },
   close() { $('sheet').hidden = true; clearInterval(this.timer); SignIn.cancel(); if (!$('watch').hidden && stage.classList.contains('ui')) hud(true); },   // the controls it was opened from stay a while; a chatter's card doesn't bring them up
   render() {
