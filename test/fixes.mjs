@@ -3514,6 +3514,63 @@ if (want('player')) {
       await done();
     })(),
     (async () => {
+      // A device that can't decode the rendition as fast as it plays (the treadmill's console, 2026-11-13): stalls with seconds loaded and frames
+      // being dropped. On the stream made here, with the frame counts and the stalls staged.
+      const c = await browser.newContext({ viewport: { width: 1536, height: 864 } });
+      const page = await c.newPage();
+      page.errors = []; page.on('pageerror', e => page.errors.push(e.message));
+      await page.addInitScript(() => { window.WebSocket = class { close() {} send() {} }; });
+      const user = { id: '1', login: 'staged', displayName: 'Staged', profileImageURL: null, broadcastSettings: { title: '' }, stream: { id: '1', createdAt: ago(3600), viewersCount: 1, type: 'live', game: null, previewImageURL: '' }, videos: { edges: [] }, lastBroadcast: null };
+      await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, route => {
+        const u = route.request().url(), b = route.request().postData() || '';
+        if (u.includes('cdn.jsdelivr.net')) return route.continue().catch(never);
+        if (u.includes('gql.twitch.tv')) return route.fulfill({ status: 200, headers, body: JSON.stringify({ data: b.includes('users(logins') ? { users: [user] } : b.includes('streamPlaybackAccessToken') ? { streamPlaybackAccessToken: { value: '{}', signature: 'x', authorization: { isForbidden: false } } } : {} }) }).catch(never);
+        return route.abort().catch(never);
+      });
+      await makeStream(page);
+      await page.goto(base + '?c=staged', { waitUntil: 'domcontentloaded' });
+      const up = () => page.waitForFunction(() => { const v = wraith.P.active(); return v && !v.paused && v.currentTime > 1 && v.readyState >= 3 && wraith.P.hls?.currentLevel >= 0; }, null, { timeout: 30000 }).catch(never);
+      const see = () => page.evaluate(() => { const P = wraith.P, v = document.getElementById('vLL'), id = i => P.groups.find(x => x.i === i)?.id; let ahead = 0; for (let i = 0; i < v.buffered.length; i++) if (v.buffered.start(i) <= v.currentTime + .25 && v.buffered.end(i) > v.currentTime) ahead = v.buffered.end(i) - v.currentTime;
+        return { load: id(P.hls?.loadLevel), T: P.liveT, cap: P.cap, heavy: P.heavy?.name, rate: v.playbackRate, lat: +(P.latency() || 0).toFixed(1), ahead: +ahead.toFixed(1), toast: document.getElementById('toast').textContent || '' }; });
+      // frames counted at 60 a second with this share of them dropped, from now
+      const dropping = share => page.evaluate(s => { const v = document.getElementById('vLL'), t0 = performance.now(); v.getVideoPlaybackQuality = () => { const n = Math.round((performance.now() - t0) * 0.06); return { totalVideoFrames: n, droppedVideoFrames: Math.round(n * s) }; }; wraith.P.fq = []; }, share);
+      // four seconds back, so there's that much loaded ahead, and the picture said to be waiting
+      const back = () => page.evaluate(() => new Promise(done => { const v = document.getElementById('vLL'); v.addEventListener('seeked', () => setTimeout(done, 400), { once: true }); v.currentTime -= 4; }));
+      const stall = () => page.evaluate(() => { document.getElementById('vLL').dispatchEvent(new Event('waiting')); });
+      await up(); await sleep(7000);   // past the start's own quiet, with some seconds behind it to go back into
+      const s0 = await see();
+      await dropping(0.11); await sleep(3500);
+      await back(); await sleep(700);
+      const s1 = await see();
+      await stall(); await sleep(900);
+      const s2 = await see();
+      ok('one stall with seconds loaded and frames dropping: no more cushion, and no playing fast to catch up', s0.load === 'chunked' && s1.ahead >= 2 && s1.rate === 1.1 && s2.T === s1.T && s2.rate === 1 && s2.load === 'chunked' && !s2.heavy, JSON.stringify({ s0, s1, s2 }));
+      await stall(); await sleep(300);
+      const s3 = await see();
+      ok('a second within the minute rules that rendition out, at once, and says so', s3.load === '720p60' && s3.heavy === '1080p60' && s3.cap === 0 && s3.T === s1.T && /can’t keep up with 1080p60/.test(s3.toast), JSON.stringify(s3));
+      await sleep(11000);
+      const s4 = await see();
+      ok('what it was behind by is taken in one step, never at 1.1×', s4.lat < s4.T + 2 && s4.rate !== 1.1 && s4.load === '720p60', JSON.stringify(s4));
+      await page.evaluate(() => wraith.P.open('staged')); await sleep(500); await up();
+      const s5 = await see();
+      ok('the next stream starts below it too', s5.load === '720p60' && s5.heavy === '1080p60', JSON.stringify(s5));
+      await page.evaluate(() => { wraith.P.q = 'auto'; wraith.P.applyQuality(); });
+      const top = await page.evaluate(() => wraith.P.groups.find(x => x.i === wraith.P.hls.autoLevelCapping)?.id);
+      ok('and Auto goes no higher than what’s lighter', top === '720p60', String(top));
+      await page.evaluate(() => wraith.P.setQuality('source')); await sleep(300);
+      const s6 = await see();
+      ok('picking a quality tries it as picked', s6.load === 'chunked' && !s6.heavy, JSON.stringify(s6));
+      // with seconds loaded and no frames dropped it's what it always was: more cushion, the rendition kept
+      await sleep(6500); await dropping(0); await sleep(3500);
+      await back(); await sleep(700);
+      const s6b = await see();
+      await stall(); await sleep(300);
+      const s7 = await see();
+      ok('a stall with seconds loaded and no frames dropped is taken as before', s6b.ahead >= 2 && s7.T === s6b.T + 0.5 && !s7.heavy && s7.load === 'chunked', JSON.stringify({ s6b, s7 }));
+      ok('no page errors', page.errors.length === 0, page.errors.join(' | '));
+      await page.unrouteAll({ behavior: 'ignoreErrors' }); await c.close();
+    })(),
+    (async () => {
       // the stats count what the relay fetched: two for a start that brings its first playlist along, none for a refusal
       let reply = '200\n#EXTM3U\n#EXT-X-STREAM-INF:X\nhttps://x.playlist.ttvnw.net/a.m3u8\n#WRAITH-MEDIA:200 https://x.playlist.ttvnw.net/a.m3u8\n#EXTM3U';
       const { page, done } = await stage(route => said(route, reply), { offline: true });
